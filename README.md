@@ -120,7 +120,7 @@ mgcp-dashboard
 | Command | Description |
 |---------|-------------|
 | `mgcp-init` | Configure MGCP for your LLM client (auto-detects installed clients) |
-| `mgcp-init --client X` | Configure specific client (claude-code, cursor, windsurf, continue, cline) |
+| `mgcp-init --client X` | Configure specific client (use `--list` to see all 8 supported clients) |
 | `mgcp-init --verify` | Verify MGCP setup is working correctly |
 | `mgcp-init --doctor` | Diagnose Claude Code MCP configuration issues |
 | `mgcp-init --project-config` | Also configure project-specific MCP server in ~/.claude.json |
@@ -194,9 +194,8 @@ MGCP uses a hybrid storage approach optimized for different access patterns:
 | **NetworkX** | In-memory graph for relationship traversal |
 
 Data is stored in `~/.mgcp/` by default:
-- `lessons.db` - Lesson content and metadata
-- `telemetry.db` - Usage analytics
-- `chroma/` - Vector embeddings
+- `lessons.db` - Lessons, project contexts, and usage telemetry
+- `chroma/` - Vector embeddings for semantic search
 
 See [docs/architecture.html](docs/architecture.html) for the full architecture diagram.
 

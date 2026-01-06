@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memory Telemetry Design</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 100%);
+            min-height: 100vh;
+            color: #e0e0e0;
+            padding: 2rem;
+            line-height: 1.6;
+        }
+        .container { max-width: 1000px; margin: 0 auto; }
+        h1 { text-align: center; color: #fff; margin-bottom: 2rem; }
+        h2 { color: #4fc3f7; margin: 2rem 0 1rem; border-bottom: 2px solid #4fc3f7; padding-bottom: 0.5rem; }
+        h3 { color: #81c784; margin: 1.5rem 0 0.75rem; }
+        .section {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        pre {
+            background: rgba(0, 0, 0, 0.4);
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 1rem 0;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.9rem;
+        }
+        code {
+            background: rgba(0,0,0,0.3);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-family: 'Fira Code', monospace;
+        }
+        .mermaid { display: flex; justify-content: center; margin: 1.5rem 0; }
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        th { background: rgba(79, 195, 247, 0.2); color: #4fc3f7; }
+        ul { margin: 1rem 0 1rem 1.5rem; }
+        li { margin: 0.5rem 0; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; }
+        .card {
+            background: rgba(255,255,255,0.03);
+            border-radius: 8px;
+            padding: 1.5rem;
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        .card h4 { color: #ffb74d; margin-bottom: 0.75rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Memory Telemetry Design</h1>
+
+        <section class="section">
+            <h2>Architecture Overview</h2>
+            <div class="mermaid">
+flowchart LR
+    subgraph MCP["MCP Server"]
+        Tool["Tool Handlers"]
+        Logger["Telemetry Logger"]
+    end
+
+    subgraph Storage["Storage Layer"]
+        SQLite["SQLite DB"]
+        Stream["Event Stream"]
+    end
+
+    subgraph Viz["Visualization"]
+        API["REST API"]
+        WS["WebSocket"]
+        Dashboard["Dashboard UI"]
+    end
+
+    Tool -->|"log events"| Logger
+    Logger --> SQLite
+    Logger --> Stream
+    SQLite --> API
+    Stream --> WS
+    API --> Dashboard
+    WS --> Dashboard
+
+    style Logger fill:#4fc3f7,stroke:#0288d1,color:#000
+    style Dashboard fill:#81c784,stroke:#388e3c,color:#000
+            </div>
+        </section>
+
+        <section class="section">
+            <h2>Data Model</h2>
+
+            <h3>Event Types</h3>
+            <pre><code class="language-python">from dataclasses import dataclass
+from datetime import datetime
+from typing import Literal
+from enum import Enum
+
+class EventType(Enum):
+    QUERY = "query"              # Lesson query executed
+    RETRIEVE = "retrieve"        # Lessons retrieved
+    SPIDER = "spider"            # Graph traversal
+    ADD = "add"                  # New lesson added
+    REFINE = "refine"            # Lesson refined
+    BOOTSTRAP = "bootstrap"      # Bootstrap lessons loaded
+
+@dataclass
+class TelemetryEvent:
+    id: str                      # Unique event ID
+    timestamp: datetime          # When it happened
+    session_id: str              # Session identifier
+    event_type: EventType        # Type of event
+    payload: dict                # Event-specific data
+
+@dataclass
+class QueryEvent:
+    """Payload for QUERY events"""
+    query_text: str              # What was searched
+    query_embedding: list[float] # Vector (optional, for debugging)
+    source: Literal["tool", "bootstrap", "manual"]
+
+@dataclass
+class RetrieveEvent:
+    """Payload for RETRIEVE events"""
+    query_id: str                # Links to QueryEvent
+    lesson_ids: list[str]        # Lessons retrieved
+    scores: list[float]          # Similarity scores
+    latency_ms: float            # How long it took
+
+@dataclass
+class SpiderEvent:
+    """Payload for SPIDER events"""
+    start_lesson_id: str         # Starting node
+    depth: int                   # Traversal depth
+    visited_ids: list[str]       # All nodes visited
+    path: list[list[str]]        # Traversal paths</code></pre>
+
+            <h3>SQLite Schema</h3>
+            <pre><code class="language-sql">-- Core events table
+CREATE TABLE events (
+    id TEXT PRIMARY KEY,
+    timestamp DATETIME NOT NULL,
+    session_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload JSON NOT NULL
+);
+
+CREATE INDEX idx_events_session ON events(session_id);
+CREATE INDEX idx_events_type ON events(event_type);
+CREATE INDEX idx_events_timestamp ON events(timestamp);
+
+-- Aggregated lesson usage (materialized for performance)
+CREATE TABLE lesson_usage (
+    lesson_id TEXT PRIMARY KEY,
+    total_retrievals INTEGER DEFAULT 0,
+    last_retrieved DATETIME,
+    avg_score REAL,
+    sessions_count INTEGER DEFAULT 0
+);
+
+-- Session summaries
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY,
+    started_at DATETIME NOT NULL,
+    ended_at DATETIME,
+    query_count INTEGER DEFAULT 0,
+    lessons_retrieved INTEGER DEFAULT 0,
+    unique_lessons INTEGER DEFAULT 0
+);</code></pre>
+        </section>
+
+        <section class="section">
+            <h2>Telemetry Logger Implementation</h2>
+
+            <pre><code class="language-python">import sqlite3
+import json
+import asyncio
+from datetime import datetime
+from uuid import uuid4
+from typing import Optional
+from dataclasses import asdict
+
+class TelemetryLogger:
+    def __init__(self, db_path: str = "~/.llm-lessons/telemetry.db"):
+        self.db_path = os.path.expanduser(db_path)
+        self._init_db()
+        self._event_queue: asyncio.Queue = asyncio.Queue()
+        self._subscribers: list[asyncio.Queue] = []
+
+    def _init_db(self):
+        """Initialize database schema"""
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(SCHEMA_SQL)
+        conn.close()
+
+    async def log_query(
+        self,
+        session_id: str,
+        query_text: str,
+        source: str = "tool"
+    ) -> str:
+        """Log a query event, return event ID"""
+        event_id = str(uuid4())
+        event = TelemetryEvent(
+            id=event_id,
+            timestamp=datetime.utcnow(),
+            session_id=session_id,
+            event_type=EventType.QUERY,
+            payload={
+                "query_text": query_text,
+                "source": source
+            }
+        )
+        await self._emit(event)
+        return event_id
+
+    async def log_retrieve(
+        self,
+        session_id: str,
+        query_id: str,
+        lesson_ids: list[str],
+        scores: list[float],
+        latency_ms: float
+    ):
+        """Log retrieved lessons"""
+        event = TelemetryEvent(
+            id=str(uuid4()),
+            timestamp=datetime.utcnow(),
+            session_id=session_id,
+            event_type=EventType.RETRIEVE,
+            payload={
+                "query_id": query_id,
+                "lesson_ids": lesson_ids,
+                "scores": scores,
+                "latency_ms": latency_ms
+            }
+        )
+        await self._emit(event)
+
+        # Update aggregates
+        await self._update_lesson_usage(lesson_ids, scores, session_id)
+
+    async def log_spider(
+        self,
+        session_id: str,
+        start_id: str,
+        depth: int,
+        visited: list[str],
+        paths: list[list[str]]
+    ):
+        """Log graph traversal"""
+        event = TelemetryEvent(
+            id=str(uuid4()),
+            timestamp=datetime.utcnow(),
+            session_id=session_id,
+            event_type=EventType.SPIDER,
+            payload={
+                "start_lesson_id": start_id,
+                "depth": depth,
+                "visited_ids": visited,
+                "paths": paths
+            }
+        )
+        await self._emit(event)
+
+    async def _emit(self, event: TelemetryEvent):
+        """Persist event and notify subscribers"""
+        # Persist to SQLite
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO events (id, timestamp, session_id, event_type, payload) VALUES (?, ?, ?, ?, ?)",
+            (event.id, event.timestamp.isoformat(), event.session_id,
+             event.event_type.value, json.dumps(event.payload))
+        )
+        conn.commit()
+        conn.close()
+
+        # Notify real-time subscribers
+        for queue in self._subscribers:
+            await queue.put(event)
+
+    def subscribe(self) -> asyncio.Queue:
+        """Subscribe to real-time events"""
+        queue = asyncio.Queue()
+        self._subscribers.append(queue)
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue):
+        """Unsubscribe from events"""
+        self._subscribers.remove(queue)</code></pre>
+        </section>
+
+        <section class="section">
+            <h2>Integration with MCP Tools</h2>
+
+            <pre><code class="language-python">from mcp import Server
+from telemetry import TelemetryLogger
+
+server = Server("lesson-memory")
+telemetry = TelemetryLogger()
+
+@server.tool("query_lessons")
+async def query_lessons(task_description: str, limit: int = 5) -> list[Lesson]:
+    """Query lessons with telemetry"""
+    session_id = get_current_session_id()
+
+    # Log the query
+    query_id = await telemetry.log_query(
+        session_id=session_id,
+        query_text=task_description,
+        source="tool"
+    )
+
+    # Execute search
+    start = time.time()
+    results = await vector_store.search(task_description, limit=limit)
+    latency = (time.time() - start) * 1000
+
+    # Log retrieval
+    await telemetry.log_retrieve(
+        session_id=session_id,
+        query_id=query_id,
+        lesson_ids=[r.id for r in results],
+        scores=[r.score for r in results],
+        latency_ms=latency
+    )
+
+    return results
+
+@server.tool("spider_lessons")
+async def spider_lessons(lesson_id: str, depth: int = 2) -> list[Lesson]:
+    """Spider with telemetry"""
+    session_id = get_current_session_id()
+
+    # Execute traversal
+    visited, paths = await graph.traverse(lesson_id, depth)
+    lessons = await graph.get_lessons(visited)
+
+    # Log spider event
+    await telemetry.log_spider(
+        session_id=session_id,
+        start_id=lesson_id,
+        depth=depth,
+        visited=visited,
+        paths=paths
+    )
+
+    return lessons</code></pre>
+        </section>
+
+        <section class="section">
+            <h2>Visualization API</h2>
+
+            <h3>REST Endpoints</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Endpoint</th>
+                        <th>Method</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>/api/sessions</code></td>
+                        <td>GET</td>
+                        <td>List all sessions with stats</td>
+                    </tr>
+                    <tr>
+                        <td><code>/api/sessions/{id}/events</code></td>
+                        <td>GET</td>
+                        <td>Get events for a session</td>
+                    </tr>
+                    <tr>
+                        <td><code>/api/lessons/usage</code></td>
+                        <td>GET</td>
+                        <td>Get lesson usage stats (for heatmap)</td>
+                    </tr>
+                    <tr>
+                        <td><code>/api/graph</code></td>
+                        <td>GET</td>
+                        <td>Get full graph structure</td>
+                    </tr>
+                    <tr>
+                        <td><code>/api/timeline</code></td>
+                        <td>GET</td>
+                        <td>Get query timeline data</td>
+                    </tr>
+                    <tr>
+                        <td><code>/ws/events</code></td>
+                        <td>WebSocket</td>
+                        <td>Real-time event stream</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>FastAPI Implementation</h3>
+            <pre><code class="language-python">from fastapi import FastAPI, WebSocket
+from fastapi.staticfiles import StaticFiles
+
+app = FastAPI()
+telemetry = TelemetryLogger()
+
+@app.get("/api/lessons/usage")
+async def get_lesson_usage():
+    """Get usage stats for heatmap visualization"""
+    conn = sqlite3.connect(telemetry.db_path)
+    cursor = conn.execute("""
+        SELECT lesson_id, total_retrievals, last_retrieved, avg_score
+        FROM lesson_usage
+        ORDER BY total_retrievals DESC
+    """)
+    results = [
+        {
+            "id": row[0],
+            "retrievals": row[1],
+            "lastUsed": row[2],
+            "avgScore": row[3]
+        }
+        for row in cursor.fetchall()
+    ]
+    conn.close()
+    return results
+
+@app.get("/api/sessions/{session_id}/events")
+async def get_session_events(session_id: str):
+    """Get all events for a session"""
+    conn = sqlite3.connect(telemetry.db_path)
+    cursor = conn.execute("""
+        SELECT id, timestamp, event_type, payload
+        FROM events
+        WHERE session_id = ?
+        ORDER BY timestamp
+    """, (session_id,))
+    events = [
+        {
+            "id": row[0],
+            "timestamp": row[1],
+            "type": row[2],
+            "payload": json.loads(row[3])
+        }
+        for row in cursor.fetchall()
+    ]
+    conn.close()
+    return events
+
+@app.websocket("/ws/events")
+async def websocket_events(websocket: WebSocket):
+    """Real-time event stream"""
+    await websocket.accept()
+    queue = telemetry.subscribe()
+
+    try:
+        while True:
+            event = await queue.get()
+            await websocket.send_json({
+                "id": event.id,
+                "timestamp": event.timestamp.isoformat(),
+                "type": event.event_type.value,
+                "payload": event.payload
+            })
+    finally:
+        telemetry.unsubscribe(queue)
+
+# Serve visualization dashboard
+app.mount("/", StaticFiles(directory="docs", html=True))</code></pre>
+        </section>
+
+        <section class="section">
+            <h2>Analytics Queries</h2>
+
+            <h3>Useful Insights</h3>
+            <div class="grid">
+                <div class="card">
+                    <h4>Most Used Lessons</h4>
+                    <pre><code>SELECT lesson_id, total_retrievals
+FROM lesson_usage
+ORDER BY total_retrievals DESC
+LIMIT 10;</code></pre>
+                </div>
+                <div class="card">
+                    <h4>Unused Lessons (Candidates for Removal)</h4>
+                    <pre><code>SELECT l.id, l.action
+FROM lessons l
+LEFT JOIN lesson_usage u ON l.id = u.lesson_id
+WHERE u.lesson_id IS NULL
+   OR u.last_retrieved < date('now', '-30 days');</code></pre>
+                </div>
+                <div class="card">
+                    <h4>Query-to-Retrieval Ratio</h4>
+                    <pre><code>SELECT
+    COUNT(CASE WHEN event_type = 'query' THEN 1 END) as queries,
+    COUNT(CASE WHEN event_type = 'retrieve' THEN 1 END) as retrievals,
+    AVG(json_extract(payload, '$.latency_ms')) as avg_latency
+FROM events
+WHERE timestamp > date('now', '-7 days');</code></pre>
+                </div>
+                <div class="card">
+                    <h4>Common Query Patterns</h4>
+                    <pre><code>SELECT
+    json_extract(payload, '$.query_text') as query,
+    COUNT(*) as frequency
+FROM events
+WHERE event_type = 'query'
+GROUP BY query
+ORDER BY frequency DESC
+LIMIT 20;</code></pre>
+                </div>
+            </div>
+        </section>
+
+        <section class="section">
+            <h2>Dashboard Features</h2>
+
+            <div class="mermaid">
+flowchart TB
+    subgraph RealTime["Real-Time View"]
+        Graph["Interactive Graph<br/>• Node highlighting on query<br/>• Usage heatmap<br/>• Relationship visualization"]
+        Timeline["Query Timeline<br/>• Bar chart over time<br/>• Click to inspect"]
+        Feed["Event Feed<br/>• Live updates<br/>• Filterable"]
+    end
+
+    subgraph Analytics["Analytics View"]
+        Usage["Usage Stats<br/>• Most/least used<br/>• Decay candidates"]
+        Patterns["Query Patterns<br/>• Common searches<br/>• Failed queries"]
+        Sessions["Session History<br/>• Browse past sessions<br/>• Replay queries"]
+    end
+
+    subgraph Debug["Debug View"]
+        Embeddings["Embedding Inspector<br/>• Query vectors<br/>• Similarity scores"]
+        Paths["Path Visualizer<br/>• Spider traversals<br/>• Relationship chains"]
+    end
+            </div>
+
+            <ul>
+                <li><strong>Real-time graph updates</strong>: See nodes light up as they're retrieved</li>
+                <li><strong>Heatmap mode</strong>: Color nodes by usage frequency</li>
+                <li><strong>Query replay</strong>: Click on a past query to see what lessons were retrieved</li>
+                <li><strong>Path visualization</strong>: Show the graph traversal path for spider operations</li>
+                <li><strong>Session comparison</strong>: Compare lesson usage across different sessions</li>
+            </ul>
+        </section>
+    </div>
+
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'dark',
+            flowchart: { useMaxWidth: true, htmlLabels: true }
+        });
+    </script>
+</body>
+</html>

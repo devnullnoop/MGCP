@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Contexts - Lesson Memory</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'brand-cyan': '#4fc3f7',
+                        'brand-dark': '#0a0a1a',
+                        'brand-panel': '#1a1a2e',
+                        'brand-surface': '#0f0f23',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-brand-dark text-gray-200 font-sans min-h-screen">
+    <!-- Header -->
+    <header class="bg-gradient-to-br from-brand-panel to-brand-surface px-6 py-4 flex justify-between items-center border-b border-brand-cyan">
+        <div class="flex items-center gap-6">
+            <h1 class="text-xl font-semibold text-white">Project Contexts</h1>
+            <nav class="flex gap-4 text-sm">
+                <a href="/" class="text-gray-400 hover:text-brand-cyan transition-colors">Dashboard</a>
+                <a href="/session" class="text-gray-400 hover:text-brand-cyan transition-colors">Sessions</a>
+                <a href="/lessons" class="text-gray-400 hover:text-brand-cyan transition-colors">Lessons</a>
+                <a href="/projects" class="text-brand-cyan">Projects</a>
+            </nav>
+        </div>
+        <button onclick="showNewProjectModal()" class="bg-brand-cyan/20 border border-brand-cyan text-brand-cyan px-4 py-2 rounded text-sm font-medium hover:bg-brand-cyan/40 transition-all">
+            + New Project
+        </button>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container mx-auto px-6 py-8 max-w-6xl">
+        <!-- Project List -->
+        <div id="project-list" class="space-y-4">
+            <div class="text-gray-500 text-center py-12">Loading projects...</div>
+        </div>
+    </main>
+
+    <!-- Project Detail Modal -->
+    <div id="project-modal" class="fixed inset-0 bg-black/70 hidden items-center justify-center z-50">
+        <div class="bg-brand-panel rounded-lg border border-gray-700 w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+            <!-- Modal Header -->
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h2 id="modal-title" class="text-lg font-semibold text-white">Project Details</h2>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-white text-2xl">&times;</button>
+            </div>
+
+            <!-- Modal Body -->
+            <div class="p-6 overflow-y-auto flex-1">
+                <!-- Tab Navigation -->
+                <div class="flex gap-4 border-b border-gray-700 mb-6">
+                    <button type="button" onclick="showTab('overview')" class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-brand-cyan text-brand-cyan" data-tab="overview">Overview</button>
+                    <button type="button" onclick="showTab('catalogue')" class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-400 hover:text-gray-200" data-tab="catalogue">Catalogue</button>
+                </div>
+
+                <!-- Overview Tab -->
+                <div id="tab-overview" class="tab-content">
+                <form id="project-form" class="space-y-6">
+                    <input type="hidden" id="form-project-id">
+
+                    <!-- Project Info -->
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-1">Project Name</label>
+                            <input type="text" id="form-name" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-white focus:border-brand-cyan focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-1">Project Path</label>
+                            <input type="text" id="form-path" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-white focus:border-brand-cyan focus:outline-none" readonly>
+                        </div>
+                    </div>
+
+                    <!-- Notes -->
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Notes</label>
+                        <textarea id="form-notes" rows="3" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-white focus:border-brand-cyan focus:outline-none" placeholder="Current state, blockers, what to do next..."></textarea>
+                    </div>
+
+                    <!-- Active Files -->
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Active Files (comma-separated)</label>
+                        <input type="text" id="form-files" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-white focus:border-brand-cyan focus:outline-none" placeholder="main.py, utils.py, config.json">
+                    </div>
+
+                    <!-- Recent Decisions -->
+                    <div>
+                        <div class="flex justify-between items-center mb-2">
+                            <label class="text-sm text-gray-400">Recent Decisions</label>
+                            <button type="button" onclick="addDecision()" class="text-xs text-brand-cyan hover:text-white">+ Add Decision</button>
+                        </div>
+                        <div id="decisions-list" class="space-y-2">
+                            <!-- Decisions will be added here -->
+                        </div>
+                    </div>
+
+                    <!-- Todos -->
+                    <div>
+                        <div class="flex justify-between items-center mb-2">
+                            <label class="text-sm text-gray-400">Todos</label>
+                            <button type="button" onclick="addTodo()" class="text-xs text-brand-cyan hover:text-white">+ Add Todo</button>
+                        </div>
+                        <div id="todos-list" class="space-y-2">
+                            <!-- Todos will be added here -->
+                        </div>
+                    </div>
+                </form>
+                </div>
+
+                <!-- Catalogue Tab -->
+                <div id="tab-catalogue" class="tab-content hidden">
+                    <div class="space-y-6">
+                        <!-- Stack -->
+                        <div>
+                            <h3 class="text-sm font-medium text-brand-cyan uppercase tracking-wide mb-3">Technology Stack</h3>
+                            <div id="catalogue-stack" class="space-y-2">
+                                <!-- Languages, frameworks, libraries -->
+                            </div>
+                        </div>
+
+                        <!-- Entry Points -->
+                        <div>
+                            <h3 class="text-sm font-medium text-brand-cyan uppercase tracking-wide mb-3">Entry Points</h3>
+                            <div id="catalogue-entry-points" class="bg-brand-dark/50 rounded p-3 font-mono text-sm">
+                                <!-- Entry points -->
+                            </div>
+                        </div>
+
+                        <!-- Architecture Notes -->
+                        <div>
+                            <h3 class="text-sm font-medium text-brand-cyan uppercase tracking-wide mb-3">Architecture Notes</h3>
+                            <div id="catalogue-notes" class="space-y-2">
+                                <!-- Architecture notes -->
+                            </div>
+                        </div>
+
+                        <!-- Key Concepts -->
+                        <div>
+                            <h3 class="text-sm font-medium text-brand-cyan uppercase tracking-wide mb-3">Key Concepts</h3>
+                            <div id="catalogue-concepts" class="space-y-2">
+                                <!-- Key concepts -->
+                            </div>
+                        </div>
+
+                        <!-- Commands -->
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <h3 class="text-sm font-medium text-brand-cyan uppercase tracking-wide mb-3">Test Commands</h3>
+                                <div id="catalogue-test-cmds" class="bg-brand-dark/50 rounded p-3 font-mono text-sm">
+                                    <!-- Test commands -->
+                                </div>
+                            </div>
+                            <div>
+                                <h3 class="text-sm font-medium text-brand-cyan uppercase tracking-wide mb-3">Build Commands</h3>
+                                <div id="catalogue-build-cmds" class="bg-brand-dark/50 rounded p-3 font-mono text-sm">
+                                    <!-- Build commands -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-between">
+                <button onclick="deleteProject()" id="delete-btn" class="bg-red-500/20 border border-red-500 text-red-400 px-4 py-2 rounded text-sm hover:bg-red-500/40 transition-all hidden">
+                    Delete Project
+                </button>
+                <div class="flex gap-3">
+                    <button onclick="closeModal()" class="bg-gray-700 text-gray-300 px-4 py-2 rounded text-sm hover:bg-gray-600 transition-all">
+                        Cancel
+                    </button>
+                    <button onclick="saveProject()" class="bg-brand-cyan text-brand-dark px-6 py-2 rounded text-sm font-medium hover:bg-brand-cyan/80 transition-all">
+                        Save
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Project Modal -->
+    <div id="new-project-modal" class="fixed inset-0 bg-black/70 hidden items-center justify-center z-50">
+        <div class="bg-brand-panel rounded-lg border border-gray-700 w-full max-w-md">
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h2 class="text-lg font-semibold text-white">New Project</h2>
+                <button onclick="closeNewProjectModal()" class="text-gray-400 hover:text-white text-2xl">&times;</button>
+            </div>
+            <div class="p-6 space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Project Path *</label>
+                    <input type="text" id="new-project-path" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-white focus:border-brand-cyan focus:outline-none" placeholder="/path/to/your/project">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Project Name (optional)</label>
+                    <input type="text" id="new-project-name" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-white focus:border-brand-cyan focus:outline-none" placeholder="My Project">
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-end gap-3">
+                <button onclick="closeNewProjectModal()" class="bg-gray-700 text-gray-300 px-4 py-2 rounded text-sm hover:bg-gray-600 transition-all">
+                    Cancel
+                </button>
+                <button onclick="createProject()" class="bg-brand-cyan text-brand-dark px-6 py-2 rounded text-sm font-medium hover:bg-brand-cyan/80 transition-all">
+                    Create
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        let projects = [];
+        let currentProject = null;
+
+        // ================================================================
+        // API Functions
+        // ================================================================
+
+        async function fetchAPI(endpoint, options = {}) {
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}`, {
+                    headers: { 'Content-Type': 'application/json' },
+                    ...options
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return await response.json();
+            } catch (err) {
+                console.error(`API error (${endpoint}):`, err);
+                return null;
+            }
+        }
+
+        async function loadProjects() {
+            const data = await fetchAPI('/api/projects');
+            if (data) {
+                projects = data;
+                renderProjects();
+            }
+        }
+
+        // ================================================================
+        // Render Functions
+        // ================================================================
+
+        function renderProjects() {
+            const container = document.getElementById('project-list');
+
+            if (!projects || projects.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-12">
+                        <div class="text-gray-500 mb-4">No projects yet</div>
+                        <button onclick="showNewProjectModal()" class="text-brand-cyan hover:text-white transition-colors">
+                            Create your first project context
+                        </button>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = projects.map(project => {
+                const pendingTodos = (project.todos || []).filter(t => t.status === 'pending' || t.status === 'in_progress');
+                const lastAccessed = new Date(project.last_accessed).toLocaleDateString();
+                const cat = project.catalogue || {};
+                const gotchas = (cat.architecture_notes || []).filter(n => n.category === 'gotcha');
+
+                return `
+                    <div class="bg-brand-panel rounded-lg border border-gray-700 p-5 hover:border-brand-cyan/50 transition-all cursor-pointer" onclick="openProject('${project.project_id}')">
+                        <div class="flex justify-between items-start mb-3">
+                            <div>
+                                <h3 class="text-lg font-semibold text-white">${escapeHtml(project.project_name)}</h3>
+                                <p class="text-sm text-gray-500 font-mono">${escapeHtml(project.project_path)}</p>
+                            </div>
+                            <div class="text-right text-sm">
+                                <div class="text-gray-400">${project.session_count} sessions</div>
+                                <div class="text-gray-500">Last: ${lastAccessed}</div>
+                            </div>
+                        </div>
+
+                        <!-- Catalogue Summary -->
+                        ${(cat.languages || []).length > 0 || (cat.frameworks || []).length > 0 ? `
+                            <div class="flex flex-wrap gap-2 mb-3">
+                                ${(cat.languages || []).map(l => `<span class="px-2 py-0.5 bg-blue-500/20 text-blue-300 rounded text-xs">${escapeHtml(l)}</span>`).join('')}
+                                ${(cat.frameworks || []).map(f => `<span class="px-2 py-0.5 bg-purple-500/20 text-purple-300 rounded text-xs">${escapeHtml(f.name)}</span>`).join('')}
+                                ${(cat.patterns_used || []).slice(0, 3).map(p => `<span class="px-2 py-0.5 bg-gray-600/50 text-gray-300 rounded text-xs">${escapeHtml(p)}</span>`).join('')}
+                            </div>
+                        ` : ''}
+
+                        <!-- Gotchas Warning -->
+                        ${gotchas.length > 0 ? `
+                            <div class="bg-yellow-500/10 border border-yellow-500/30 rounded p-2 mb-3">
+                                <div class="text-xs text-yellow-400 font-medium mb-1">⚠️ Gotchas</div>
+                                ${gotchas.slice(0, 2).map(g => `
+                                    <div class="text-xs text-yellow-200">${escapeHtml(g.title)}</div>
+                                `).join('')}
+                                ${gotchas.length > 2 ? `<div class="text-xs text-yellow-500/70">+${gotchas.length - 2} more</div>` : ''}
+                            </div>
+                        ` : ''}
+
+                        ${project.notes ? `<p class="text-sm text-gray-300 mb-3">${escapeHtml(project.notes)}</p>` : ''}
+
+                        <div class="flex gap-4 text-sm">
+                            ${pendingTodos.length > 0 ? `
+                                <span class="text-orange-400">
+                                    <span class="font-medium">${pendingTodos.length}</span> pending todos
+                                </span>
+                            ` : '<span class="text-green-400">No pending todos</span>'}
+
+                            ${(project.active_files || []).length > 0 ? `
+                                <span class="text-gray-400">
+                                    Working on: ${project.active_files.slice(0, 3).join(', ')}${project.active_files.length > 3 ? '...' : ''}
+                                </span>
+                            ` : ''}
+                        </div>
+
+                        ${pendingTodos.length > 0 ? `
+                            <div class="mt-3 pt-3 border-t border-gray-700">
+                                <div class="space-y-1">
+                                    ${pendingTodos.slice(0, 3).map(todo => `
+                                        <div class="flex items-center gap-2 text-sm">
+                                            <span class="${todo.status === 'in_progress' ? 'text-blue-400' : 'text-gray-400'}">${todo.status === 'in_progress' ? '▶' : '○'}</span>
+                                            <span class="text-gray-300">${escapeHtml(todo.content)}</span>
+                                        </div>
+                                    `).join('')}
+                                    ${pendingTodos.length > 3 ? `<div class="text-xs text-gray-500">+${pendingTodos.length - 3} more</div>` : ''}
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // ================================================================
+        // Modal Functions
+        // ================================================================
+
+        function openProject(projectId) {
+            currentProject = projects.find(p => p.project_id === projectId);
+            if (!currentProject) return;
+
+            document.getElementById('modal-title').textContent = currentProject.project_name;
+            document.getElementById('form-project-id').value = currentProject.project_id;
+            document.getElementById('form-name').value = currentProject.project_name;
+            document.getElementById('form-path').value = currentProject.project_path;
+            document.getElementById('form-notes').value = currentProject.notes || '';
+            document.getElementById('form-files').value = (currentProject.active_files || []).join(', ');
+
+            // Render decisions
+            const decisionsList = document.getElementById('decisions-list');
+            decisionsList.innerHTML = (currentProject.recent_decisions || []).map((d, i) => `
+                <div class="flex gap-2">
+                    <input type="text" value="${escapeHtml(d)}" class="flex-1 bg-brand-dark border border-gray-600 rounded px-3 py-2 text-white text-sm focus:border-brand-cyan focus:outline-none" data-decision="${i}">
+                    <button type="button" onclick="removeDecision(${i})" class="text-red-400 hover:text-red-300 px-2">&times;</button>
+                </div>
+            `).join('');
+
+            // Render todos
+            const todosList = document.getElementById('todos-list');
+            todosList.innerHTML = (currentProject.todos || []).map((t, i) => `
+                <div class="flex gap-2 items-start bg-brand-dark/50 rounded p-2">
+                    <select class="bg-brand-dark border border-gray-600 rounded px-2 py-1 text-sm focus:border-brand-cyan focus:outline-none" data-todo-status="${i}">
+                        <option value="pending" ${t.status === 'pending' ? 'selected' : ''}>Pending</option>
+                        <option value="in_progress" ${t.status === 'in_progress' ? 'selected' : ''}>In Progress</option>
+                        <option value="completed" ${t.status === 'completed' ? 'selected' : ''}>Completed</option>
+                        <option value="blocked" ${t.status === 'blocked' ? 'selected' : ''}>Blocked</option>
+                    </select>
+                    <input type="text" value="${escapeHtml(t.content)}" class="flex-1 bg-brand-dark border border-gray-600 rounded px-3 py-1 text-white text-sm focus:border-brand-cyan focus:outline-none" data-todo-content="${i}">
+                    <button type="button" onclick="removeTodo(${i})" class="text-red-400 hover:text-red-300 px-2">&times;</button>
+                </div>
+            `).join('');
+
+            // Render catalogue
+            renderCatalogue();
+            showTab('overview');  // Default to overview tab
+
+            document.getElementById('delete-btn').classList.remove('hidden');
+            document.getElementById('project-modal').classList.remove('hidden');
+            document.getElementById('project-modal').classList.add('flex');
+        }
+
+        function closeModal() {
+            document.getElementById('project-modal').classList.add('hidden');
+            document.getElementById('project-modal').classList.remove('flex');
+            currentProject = null;
+        }
+
+        function showNewProjectModal() {
+            document.getElementById('new-project-path').value = '';
+            document.getElementById('new-project-name').value = '';
+            document.getElementById('new-project-modal').classList.remove('hidden');
+            document.getElementById('new-project-modal').classList.add('flex');
+        }
+
+        function closeNewProjectModal() {
+            document.getElementById('new-project-modal').classList.add('hidden');
+            document.getElementById('new-project-modal').classList.remove('flex');
+        }
+
+        // ================================================================
+        // CRUD Functions
+        // ================================================================
+
+        async function createProject() {
+            const path = document.getElementById('new-project-path').value.trim();
+            const name = document.getElementById('new-project-name').value.trim();
+
+            if (!path) {
+                alert('Project path is required');
+                return;
+            }
+
+            const result = await fetchAPI('/api/projects', {
+                method: 'POST',
+                body: JSON.stringify({ project_path: path, project_name: name })
+            });
+
+            if (result) {
+                closeNewProjectModal();
+                await loadProjects();
+            }
+        }
+
+        async function saveProject() {
+            if (!currentProject) return;
+
+            // Gather form data
+            const name = document.getElementById('form-name').value;
+            const notes = document.getElementById('form-notes').value;
+            const files = document.getElementById('form-files').value
+                .split(',').map(f => f.trim()).filter(f => f);
+
+            // Gather decisions
+            const decisions = [];
+            document.querySelectorAll('[data-decision]').forEach(input => {
+                if (input.value.trim()) decisions.push(input.value.trim());
+            });
+
+            // Gather todos
+            const todos = [];
+            document.querySelectorAll('[data-todo-content]').forEach(input => {
+                const idx = input.dataset.todoContent;
+                const statusSelect = document.querySelector(`[data-todo-status="${idx}"]`);
+                if (input.value.trim()) {
+                    todos.push({
+                        content: input.value.trim(),
+                        status: statusSelect ? statusSelect.value : 'pending',
+                        priority: currentProject.todos[idx]?.priority || 0
+                    });
+                }
+            });
+
+            const result = await fetchAPI(`/api/projects/${currentProject.project_id}`, {
+                method: 'PUT',
+                body: JSON.stringify({
+                    project_name: name,
+                    notes: notes,
+                    active_files: files,
+                    recent_decisions: decisions,
+                    todos: todos
+                })
+            });
+
+            if (result) {
+                closeModal();
+                await loadProjects();
+            }
+        }
+
+        async function deleteProject() {
+            if (!currentProject) return;
+
+            if (!confirm(`Delete project "${currentProject.project_name}"? This cannot be undone.`)) {
+                return;
+            }
+
+            const result = await fetchAPI(`/api/projects/${currentProject.project_id}`, {
+                method: 'DELETE'
+            });
+
+            if (result !== null) {
+                closeModal();
+                await loadProjects();
+            }
+        }
+
+        function addDecision() {
+            const list = document.getElementById('decisions-list');
+            const idx = list.children.length;
+            const div = document.createElement('div');
+            div.className = 'flex gap-2';
+            div.innerHTML = `
+                <input type="text" placeholder="New decision..." class="flex-1 bg-brand-dark border border-gray-600 rounded px-3 py-2 text-white text-sm focus:border-brand-cyan focus:outline-none" data-decision="${idx}">
+                <button type="button" onclick="this.parentElement.remove()" class="text-red-400 hover:text-red-300 px-2">&times;</button>
+            `;
+            list.appendChild(div);
+            div.querySelector('input').focus();
+        }
+
+        function removeDecision(idx) {
+            document.querySelector(`[data-decision="${idx}"]`).parentElement.remove();
+        }
+
+        function addTodo() {
+            const list = document.getElementById('todos-list');
+            const idx = list.children.length;
+            const div = document.createElement('div');
+            div.className = 'flex gap-2 items-start bg-brand-dark/50 rounded p-2';
+            div.innerHTML = `
+                <select class="bg-brand-dark border border-gray-600 rounded px-2 py-1 text-sm focus:border-brand-cyan focus:outline-none" data-todo-status="${idx}">
+                    <option value="pending" selected>Pending</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="completed">Completed</option>
+                    <option value="blocked">Blocked</option>
+                </select>
+                <input type="text" placeholder="New todo..." class="flex-1 bg-brand-dark border border-gray-600 rounded px-3 py-1 text-white text-sm focus:border-brand-cyan focus:outline-none" data-todo-content="${idx}">
+                <button type="button" onclick="this.parentElement.remove()" class="text-red-400 hover:text-red-300 px-2">&times;</button>
+            `;
+            list.appendChild(div);
+            div.querySelector('input').focus();
+        }
+
+        function removeTodo(idx) {
+            document.querySelector(`[data-todo-content="${idx}"]`).parentElement.remove();
+        }
+
+        // ================================================================
+        // Tab Functions
+        // ================================================================
+
+        function showTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                if (btn.dataset.tab === tabName) {
+                    btn.classList.add('border-brand-cyan', 'text-brand-cyan');
+                    btn.classList.remove('border-transparent', 'text-gray-400');
+                } else {
+                    btn.classList.remove('border-brand-cyan', 'text-brand-cyan');
+                    btn.classList.add('border-transparent', 'text-gray-400');
+                }
+            });
+
+            // Show/hide content
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.add('hidden');
+            });
+            document.getElementById(`tab-${tabName}`).classList.remove('hidden');
+        }
+
+        function renderCatalogue() {
+            if (!currentProject || !currentProject.catalogue) return;
+            const cat = currentProject.catalogue;
+
+            // Stack
+            const stackHtml = [];
+            if (cat.languages && cat.languages.length > 0) {
+                stackHtml.push(`<div class="flex items-center gap-2"><span class="text-gray-500 w-24">Languages:</span><div class="flex flex-wrap gap-2">${cat.languages.map(l => `<span class="px-2 py-0.5 bg-blue-500/20 text-blue-300 rounded text-xs">${escapeHtml(l)}</span>`).join('')}</div></div>`);
+            }
+            if (cat.frameworks && cat.frameworks.length > 0) {
+                stackHtml.push(`<div class="flex items-start gap-2"><span class="text-gray-500 w-24">Frameworks:</span><div class="flex-1 space-y-1">${cat.frameworks.map(f => `<div class="flex items-center gap-2"><span class="px-2 py-0.5 bg-purple-500/20 text-purple-300 rounded text-xs">${escapeHtml(f.name)}</span><span class="text-gray-400 text-xs">${escapeHtml(f.purpose || '')}</span></div>`).join('')}</div></div>`);
+            }
+            if (cat.libraries && cat.libraries.length > 0) {
+                stackHtml.push(`<div class="flex items-start gap-2"><span class="text-gray-500 w-24">Libraries:</span><div class="flex-1 space-y-1">${cat.libraries.map(l => `<div class="flex items-center gap-2"><span class="text-green-300 text-sm">${escapeHtml(l.name)}</span><span class="text-gray-500 text-xs">- ${escapeHtml(l.purpose || '')}</span></div>`).join('')}</div></div>`);
+            }
+            if (cat.patterns_used && cat.patterns_used.length > 0) {
+                stackHtml.push(`<div class="flex items-center gap-2"><span class="text-gray-500 w-24">Patterns:</span><div class="flex flex-wrap gap-2">${cat.patterns_used.map(p => `<span class="px-2 py-0.5 bg-gray-600/50 text-gray-300 rounded text-xs">${escapeHtml(p)}</span>`).join('')}</div></div>`);
+            }
+            document.getElementById('catalogue-stack').innerHTML = stackHtml.join('') || '<span class="text-gray-500">No stack defined</span>';
+
+            // Entry Points
+            const entryPoints = cat.entry_points || {};
+            const entryHtml = Object.entries(entryPoints).map(([name, cmd]) =>
+                `<div class="flex gap-2"><span class="text-brand-cyan">${escapeHtml(name)}:</span><span class="text-gray-300">${escapeHtml(cmd)}</span></div>`
+            ).join('');
+            document.getElementById('catalogue-entry-points').innerHTML = entryHtml || '<span class="text-gray-500">No entry points defined</span>';
+
+            // Architecture Notes
+            const notes = cat.architecture_notes || [];
+            const notesHtml = notes.map(n => {
+                const categoryColors = {
+                    'gotcha': 'border-yellow-500 bg-yellow-500/10',
+                    'security': 'border-red-500 bg-red-500/10',
+                    'architecture': 'border-blue-500 bg-blue-500/10',
+                    'convention': 'border-green-500 bg-green-500/10',
+                    'performance': 'border-purple-500 bg-purple-500/10'
+                };
+                const color = categoryColors[n.category] || 'border-gray-500 bg-gray-500/10';
+                return `<div class="border-l-2 ${color} pl-3 py-2 rounded-r"><div class="text-sm font-medium text-white">${escapeHtml(n.title)}</div><div class="text-xs text-gray-400">${escapeHtml(n.description)}</div>${n.related_files && n.related_files.length > 0 ? `<div class="text-xs text-gray-500 mt-1">Files: ${n.related_files.join(', ')}</div>` : ''}</div>`;
+            }).join('');
+            document.getElementById('catalogue-notes').innerHTML = notesHtml || '<span class="text-gray-500">No architecture notes</span>';
+
+            // Key Concepts
+            const concepts = cat.key_concepts || {};
+            const conceptsHtml = Object.entries(concepts).map(([term, def]) =>
+                `<div class="bg-brand-dark/50 rounded p-3"><span class="text-brand-cyan font-medium">${escapeHtml(term)}</span><span class="text-gray-400">: ${escapeHtml(def)}</span></div>`
+            ).join('');
+            document.getElementById('catalogue-concepts').innerHTML = conceptsHtml || '<span class="text-gray-500">No concepts defined</span>';
+
+            // Commands
+            const testCmds = (cat.test_commands || []).map(c => `<div class="text-gray-300">$ ${escapeHtml(c)}</div>`).join('');
+            document.getElementById('catalogue-test-cmds').innerHTML = testCmds || '<span class="text-gray-500">None</span>';
+
+            const buildCmds = (cat.build_commands || []).map(c => `<div class="text-gray-300">$ ${escapeHtml(c)}</div>`).join('');
+            document.getElementById('catalogue-build-cmds').innerHTML = buildCmds || '<span class="text-gray-500">None</span>';
+        }
+
+        // ================================================================
+        // Utilities
+        // ================================================================
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initialize
+        loadProjects();
+    </script>
+</body>
+</html>

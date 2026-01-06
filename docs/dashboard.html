@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson Memory Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        /**
+         * Tailwind CSS Configuration
+         * Extends the default theme with custom brand colors matching the dark theme.
+         */
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'brand-cyan': '#4fc3f7',
+                        'brand-dark': '#0a0a1a',
+                        'brand-panel': '#1a1a2e',
+                        'brand-surface': '#0f0f23',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Minimal CSS for animations that cannot be done in Tailwind */
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .animate-pulse-slow {
+            animation: pulse 2s infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin {
+            animation: spin 1s linear infinite;
+        }
+    </style>
+</head>
+<body class="bg-brand-dark text-gray-200 font-sans">
+    <!-- Main Grid Container -->
+    <div class="grid grid-cols-[1fr_350px] grid-rows-[auto_1fr_150px] min-h-screen h-screen gap-px bg-gray-700">
+
+        <!-- Header -->
+        <header class="col-span-2 bg-gradient-to-br from-brand-panel to-brand-surface px-6 py-4 flex justify-between items-center border-b border-brand-cyan">
+            <div class="flex items-center gap-6">
+                <h1 class="text-xl font-semibold text-white">Lesson Memory Dashboard</h1>
+                <nav class="flex gap-4 text-sm">
+                    <a href="/" class="text-brand-cyan">Dashboard</a>
+                    <a href="/session" class="text-gray-400 hover:text-brand-cyan transition-colors">Sessions</a>
+                    <a href="/lessons" class="text-gray-400 hover:text-brand-cyan transition-colors">Lessons</a>
+                    <a href="/projects" class="text-gray-400 hover:text-brand-cyan transition-colors">Projects</a>
+                </nav>
+            </div>
+            <div class="flex items-center gap-4">
+                <div class="flex gap-2">
+                    <button onclick="refreshData()" class="bg-brand-cyan/20 border border-brand-cyan text-brand-cyan px-4 py-2 rounded text-sm font-medium hover:bg-brand-cyan/40 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-brand-cyan focus:ring-offset-2 focus:ring-offset-brand-dark disabled:opacity-50 disabled:cursor-not-allowed">
+                        Refresh
+                    </button>
+                    <button onclick="resetView()" class="bg-brand-cyan/20 border border-brand-cyan text-brand-cyan px-4 py-2 rounded text-sm font-medium hover:bg-brand-cyan/40 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-brand-cyan focus:ring-offset-2 focus:ring-offset-brand-dark">
+                        Reset View
+                    </button>
+                    <button onclick="toggleHeatmap()" class="bg-brand-cyan/20 border border-brand-cyan text-brand-cyan px-4 py-2 rounded text-sm font-medium hover:bg-brand-cyan/40 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-brand-cyan focus:ring-offset-2 focus:ring-offset-brand-dark">
+                        Toggle Heatmap
+                    </button>
+                </div>
+                <div id="status-dot" class="w-3 h-3 rounded-full bg-gray-500 transition-colors duration-300"></div>
+                <span id="status-text" class="text-sm text-gray-300">Connecting...</span>
+            </div>
+        </header>
+
+        <!-- Graph Container -->
+        <div class="bg-brand-surface relative overflow-hidden">
+            <svg id="graph" class="w-full h-full"></svg>
+
+            <!-- Tooltip -->
+            <div id="tooltip" class="absolute bg-brand-panel/95 border border-brand-cyan rounded-lg p-4 max-w-xs pointer-events-none opacity-0 transition-opacity duration-200 z-50 shadow-xl">
+                <h4 id="tooltip-title" class="text-brand-cyan font-semibold mb-2">Lesson Title</h4>
+                <p id="tooltip-action" class="text-sm text-gray-300 mb-2">Action text here</p>
+                <div class="text-xs text-gray-400">
+                    <span id="tooltip-meta">Version 1 - Used 5 times</span>
+                </div>
+            </div>
+
+            <!-- Loading Overlay -->
+            <div id="loading" class="absolute inset-0 bg-brand-dark/90 flex items-center justify-center z-[1000]">
+                <div class="w-12 h-12 border-4 border-gray-700 border-t-brand-cyan rounded-full animate-spin"></div>
+            </div>
+
+            <!-- Event Indicator -->
+            <div id="event-indicator" class="absolute top-3 left-3 px-4 py-2 bg-green-500/90 rounded text-sm text-white opacity-0 transition-opacity duration-300">
+                New event received
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="bg-brand-panel flex flex-col overflow-hidden shadow-xl">
+
+            <!-- Statistics Section -->
+            <div class="p-4 border-b border-gray-700">
+                <h3 class="text-brand-cyan text-sm font-semibold uppercase tracking-wide mb-3">Session Statistics</h3>
+                <div class="grid grid-cols-2 gap-2">
+                    <div class="bg-white/5 p-3 rounded-lg text-center">
+                        <div id="stat-queries" class="text-2xl font-bold text-brand-cyan">0</div>
+                        <div class="text-xs text-gray-400 uppercase tracking-wide">Queries</div>
+                    </div>
+                    <div class="bg-white/5 p-3 rounded-lg text-center">
+                        <div id="stat-lessons" class="text-2xl font-bold text-brand-cyan">0</div>
+                        <div class="text-xs text-gray-400 uppercase tracking-wide">Lessons</div>
+                    </div>
+                    <div class="bg-white/5 p-3 rounded-lg text-center">
+                        <div id="stat-sessions" class="text-2xl font-bold text-brand-cyan">0</div>
+                        <div class="text-xs text-gray-400 uppercase tracking-wide">Sessions</div>
+                    </div>
+                    <div class="bg-white/5 p-3 rounded-lg text-center">
+                        <div id="stat-retrievals" class="text-2xl font-bold text-brand-cyan">0</div>
+                        <div class="text-xs text-gray-400 uppercase tracking-wide">Retrievals</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Legend Section -->
+            <div class="p-4 border-b border-gray-700">
+                <h3 class="text-brand-cyan text-sm font-semibold uppercase tracking-wide mb-3">Node Legend</h3>
+                <div class="flex flex-wrap gap-3 mb-3">
+                    <div class="flex items-center gap-2 text-sm">
+                        <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                        <span class="text-gray-300">Root</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-sm">
+                        <div class="w-3 h-3 rounded-full bg-purple-600"></div>
+                        <span class="text-gray-300">Category</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-sm">
+                        <div class="w-3 h-3 rounded-full bg-brand-cyan"></div>
+                        <span class="text-gray-300">Lesson</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-sm">
+                        <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                        <span class="text-gray-300">Active</span>
+                    </div>
+                </div>
+
+                <!-- Relationship Types -->
+                <h4 class="text-gray-400 text-xs font-semibold uppercase tracking-wide mt-4 mb-2">Relationships</h4>
+                <div class="grid grid-cols-2 gap-1 text-xs">
+                    <div class="flex items-center gap-2">
+                        <svg width="16" height="8"><line x1="0" y1="4" x2="16" y2="4" stroke="#6b7280" stroke-width="2"/></svg>
+                        <span class="text-gray-400">Parent</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <svg width="16" height="8"><line x1="0" y1="4" x2="16" y2="4" stroke="#22c55e" stroke-width="2"/></svg>
+                        <span class="text-gray-400">Related</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <svg width="16" height="8"><line x1="0" y1="4" x2="16" y2="4" stroke="#f97316" stroke-width="2"/></svg>
+                        <span class="text-gray-400">Prerequisite</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <svg width="16" height="8"><line x1="0" y1="4" x2="16" y2="4" stroke="#3b82f6" stroke-width="2"/></svg>
+                        <span class="text-gray-400">Sequence</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <svg width="16" height="8"><line x1="0" y1="4" x2="16" y2="4" stroke="#ec4899" stroke-width="2" stroke-dasharray="4,2"/></svg>
+                        <span class="text-gray-400">Alternative</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <svg width="16" height="8"><line x1="0" y1="4" x2="16" y2="4" stroke="#8b5cf6" stroke-width="2"/></svg>
+                        <span class="text-gray-400">Complements</span>
+                    </div>
+                </div>
+
+                <!-- Heat Scale -->
+                <div class="flex items-center gap-2 mt-4">
+                    <span class="text-xs text-gray-400">Usage:</span>
+                    <div class="flex-1 h-2 rounded-full bg-gradient-to-r from-brand-panel via-brand-cyan via-green-400 via-orange-400 to-red-500"></div>
+                </div>
+                <div class="flex justify-between text-xs text-gray-400 mt-1">
+                    <span>Cold</span>
+                    <span>Hot</span>
+                </div>
+            </div>
+
+            <!-- Recent Events Section -->
+            <div class="p-4 flex-1 flex flex-col overflow-hidden">
+                <h3 class="text-brand-cyan text-sm font-semibold uppercase tracking-wide mb-3">Recent Events</h3>
+                <div id="event-list" class="flex-1 overflow-y-auto space-y-2">
+                    <div class="text-gray-500 text-center py-8">
+                        Waiting for events...
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Timeline -->
+        <div class="col-span-2 bg-brand-panel p-4 border-t border-brand-cyan">
+            <div class="flex justify-between items-center mb-2">
+                <h3 class="text-brand-cyan text-sm font-semibold uppercase tracking-wide">Query Timeline</h3>
+                <span class="text-xs text-gray-400">Recent activity</span>
+            </div>
+            <canvas id="timeline" class="h-24"></canvas>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * Lesson Memory Dashboard - Live API Integration
+         *
+         * This dashboard connects to the lesson memory MCP server to display
+         * real-time graph visualizations and event streams. It uses WebSocket
+         * for live updates and REST API for initial data loading.
+         */
+
+        // API Configuration - uses current origin for deployment flexibility
+        const API_BASE = window.location.origin;
+        const WS_URL = `ws://${window.location.host}/ws/events`;
+
+        // Application State
+        let graphData = { nodes: [], links: [] };
+        let events = [];
+        let activeNodes = new Set();
+        let showHeatmap = true;
+        let ws = null;
+        let simulation = null;
+
+        // DOM Element References
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const loading = document.getElementById('loading');
+        const eventIndicator = document.getElementById('event-indicator');
+
+        // ====================================================================
+        // WebSocket Connection Management
+        // ====================================================================
+
+        /**
+         * Establishes WebSocket connection for real-time event streaming.
+         * Automatically reconnects on disconnection with 3 second delay.
+         */
+        function connectWebSocket() {
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                statusDot.classList.remove('bg-gray-500', 'bg-red-500');
+                statusDot.classList.add('bg-green-500', 'animate-pulse-slow');
+                statusText.textContent = 'Connected';
+                console.log('WebSocket connected');
+            };
+
+            ws.onclose = () => {
+                statusDot.classList.remove('bg-green-500', 'animate-pulse-slow');
+                statusDot.classList.add('bg-red-500');
+                statusText.textContent = 'Disconnected';
+                console.log('WebSocket disconnected. Reconnecting in 3s...');
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'heartbeat') return;
+                handleEvent(data);
+            };
+        }
+
+        /**
+         * Processes incoming WebSocket events and updates the UI accordingly.
+         * @param {Object} event - The event object from the WebSocket
+         */
+        function handleEvent(event) {
+            // Show visual indicator for new events
+            eventIndicator.textContent = `${event.type}: ${event.payload?.query_text || event.payload?.lesson_ids?.join(', ') || ''}`;
+            eventIndicator.classList.remove('opacity-0');
+            eventIndicator.classList.add('opacity-100');
+            setTimeout(() => {
+                eventIndicator.classList.remove('opacity-100');
+                eventIndicator.classList.add('opacity-0');
+            }, 2000);
+
+            // Add event to history (keep last 50)
+            events.unshift(event);
+            if (events.length > 50) events.pop();
+            updateEventList();
+
+            // Highlight nodes for retrieve events
+            if (event.type === 'retrieve' && event.payload?.lesson_ids) {
+                highlightNodes(event.payload.lesson_ids);
+            }
+
+            // Update statistics
+            updateStats();
+
+            // Update timeline for query/retrieve events
+            if (event.type === 'query' || event.type === 'retrieve') {
+                updateTimelineFromEvent(event);
+            }
+        }
+
+        // ====================================================================
+        // REST API Functions
+        // ====================================================================
+
+        /**
+         * Fetches data from the API with error handling.
+         * @param {string} endpoint - The API endpoint to fetch
+         * @returns {Object|null} - The JSON response or null on error
+         */
+        async function fetchAPI(endpoint) {
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return await response.json();
+            } catch (err) {
+                console.error(`API error (${endpoint}):`, err);
+                return null;
+            }
+        }
+
+        /**
+         * Loads all initial data from the API endpoints.
+         * Called on page load and when refresh button is clicked.
+         */
+        async function loadInitialData() {
+            loading.classList.remove('hidden');
+
+            try {
+                // Load graph structure
+                const graph = await fetchAPI('/api/graph');
+                if (graph) {
+                    graphData = graph;
+                    initGraph();
+                }
+
+                // Load session count
+                const sessions = await fetchAPI('/api/sessions');
+                if (sessions) {
+                    document.getElementById('stat-sessions').textContent = sessions.length;
+                }
+
+                // Load lesson count
+                const lessons = await fetchAPI('/api/lessons');
+                if (lessons) {
+                    document.getElementById('stat-lessons').textContent = lessons.length;
+                }
+
+                // Load usage statistics
+                const usage = await fetchAPI('/api/lessons/usage');
+                if (usage) {
+                    const totalRetrievals = usage.reduce((sum, u) => sum + (u.total_retrievals || 0), 0);
+                    document.getElementById('stat-retrievals').textContent = totalRetrievals;
+                }
+
+                // Load timeline data and populate events
+                const timeline = await fetchAPI('/api/timeline');
+                if (timeline) {
+                    initTimeline(timeline);
+                    // Populate events array from timeline data
+                    events = timeline.map(e => ({
+                        timestamp: e.timestamp,
+                        type: e.type,
+                        session_id: e.session_id,
+                        payload: e.payload
+                    })).reverse(); // Most recent first
+                    updateEventList();
+                    updateStats();
+                }
+
+                // Update query and retrieval counts from timeline
+                if (timeline) {
+                    const queryCount = timeline.filter(e => e.type === 'query').length;
+                    const retrieveCount = timeline.filter(e => e.type === 'retrieve').length;
+                    document.getElementById('stat-queries').textContent = queryCount;
+                    document.getElementById('stat-retrievals').textContent = retrieveCount;
+                }
+
+            } catch (err) {
+                console.error('Failed to load initial data:', err);
+            } finally {
+                loading.classList.add('hidden');
+            }
+        }
+
+        /**
+         * Refreshes all data from the API.
+         */
+        async function refreshData() {
+            await loadInitialData();
+        }
+
+        // ====================================================================
+        // D3.js Graph Visualization
+        // ====================================================================
+
+        /**
+         * Initializes the D3.js force-directed graph visualization.
+         * Creates nodes, links, and sets up force simulation.
+         */
+        function initGraph() {
+            const svg = d3.select("#graph");
+            const container = document.querySelector(".bg-brand-surface");
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+
+            // Clear previous graph
+            svg.selectAll("*").remove();
+            svg.attr("width", width).attr("height", height);
+
+            // Arrow marker for directed links
+            svg.append("defs").append("marker")
+                .attr("id", "arrowhead")
+                .attr("viewBox", "-0 -5 10 10")
+                .attr("refX", 20)
+                .attr("refY", 0)
+                .attr("orient", "auto")
+                .attr("markerWidth", 6)
+                .attr("markerHeight", 6)
+                .append("path")
+                .attr("d", "M 0,-5 L 10,0 L 0,5")
+                .attr("fill", "#555");
+
+            const g = svg.append("g");
+
+            // Enable zoom and pan
+            const zoom = d3.zoom()
+                .scaleExtent([0.3, 3])
+                .on("zoom", (event) => g.attr("transform", event.transform));
+            svg.call(zoom);
+
+            // Initialize force simulation
+            simulation = d3.forceSimulation(graphData.nodes)
+                .force("link", d3.forceLink(graphData.links).id(d => d.id).distance(100))
+                .force("charge", d3.forceManyBody().strength(-300))
+                .force("center", d3.forceCenter(width / 2, height / 2))
+                .force("collision", d3.forceCollide().radius(40));
+
+            // Draw links with typed relationship colors
+            const link = g.append("g")
+                .selectAll("line")
+                .data(graphData.links)
+                .join("line")
+                .attr("stroke", d => getLinkColor(d.relation))
+                .attr("stroke-width", d => 1 + (d.weight || 0.5) * 2)
+                .attr("stroke-dasharray", d => getLinkDashArray(d.relation))
+                .attr("stroke-opacity", d => 0.4 + (d.weight || 0.5) * 0.4)
+                .attr("marker-end", "url(#arrowhead)");
+
+            // Draw nodes
+            const node = g.append("g")
+                .selectAll("g")
+                .data(graphData.nodes)
+                .join("g")
+                .attr("class", "node")
+                .call(d3.drag()
+                    .on("start", dragstarted)
+                    .on("drag", dragged)
+                    .on("end", dragended));
+
+            // Node circles
+            node.append("circle")
+                .attr("r", d => d.type === "root" ? 25 : d.type === "category" ? 20 : 15)
+                .attr("fill", d => getNodeColor(d))
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 2)
+                .style("cursor", "pointer");
+
+            // Node labels
+            node.append("text")
+                .text(d => d.label)
+                .attr("dy", d => d.type === "root" ? 40 : 30)
+                .attr("text-anchor", "middle")
+                .attr("fill", "#9ca3af")
+                .attr("font-size", "12px");
+
+            // Tooltip handling
+            const tooltip = document.getElementById("tooltip");
+            node.on("mouseover", (event, d) => {
+                if (d.action) {
+                    document.getElementById("tooltip-title").textContent = d.label;
+                    document.getElementById("tooltip-action").textContent = d.action;
+                    document.getElementById("tooltip-meta").textContent = `Usage: ${d.usage}% | Tags: ${(d.tags || []).join(', ') || 'none'}`;
+                    tooltip.style.left = (event.pageX + 15) + "px";
+                    tooltip.style.top = (event.pageY - 10) + "px";
+                    tooltip.classList.remove("opacity-0");
+                    tooltip.classList.add("opacity-100");
+                }
+            }).on("mouseout", () => {
+                tooltip.classList.remove("opacity-100");
+                tooltip.classList.add("opacity-0");
+            });
+
+            // Update positions on simulation tick
+            simulation.on("tick", () => {
+                link
+                    .attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+                node.attr("transform", d => `translate(${d.x},${d.y})`);
+            });
+
+            // Store references for global access
+            window.graphNode = node;
+            window.graphSvg = svg;
+            window.graphZoom = zoom;
+        }
+
+        /**
+         * Determines link stroke color based on relationship type.
+         * @param {string} relationType - The relationship type
+         * @returns {string} - The hex color code
+         */
+        function getLinkColor(relationType) {
+            const colors = {
+                'parent': '#6b7280',      // Gray
+                'related': '#22c55e',     // Green
+                'prerequisite': '#f97316', // Orange
+                'sequence_next': '#3b82f6', // Blue
+                'alternative': '#ec4899',  // Pink
+                'complements': '#8b5cf6',  // Purple
+                'specializes': '#06b6d4',  // Cyan
+                'generalizes': '#14b8a6',  // Teal
+                'contradicts': '#ef4444',  // Red
+            };
+            return colors[relationType] || '#6b7280';
+        }
+
+        /**
+         * Determines link dash array based on relationship type.
+         * @param {string} relationType - The relationship type
+         * @returns {string} - SVG dash-array value
+         */
+        function getLinkDashArray(relationType) {
+            if (relationType === 'alternative') return '8,4';
+            if (relationType === 'contradicts') return '4,4';
+            if (relationType === 'related') return '4,2';
+            return 'none';
+        }
+
+        /**
+         * Determines node fill color based on type, active state, and heatmap mode.
+         * @param {Object} d - The node data object
+         * @returns {string} - The hex color code
+         */
+        function getNodeColor(d) {
+            if (activeNodes.has(d.id)) return "#4caf50";
+            if (!showHeatmap) {
+                if (d.type === "root") return "#f44336";
+                if (d.type === "category") return "#9c27b0";
+                return "#4fc3f7";
+            }
+            // Heatmap based on usage percentage
+            const usage = (d.usage || 0) / 100;
+            if (usage > 0.8) return "#f44336";
+            if (usage > 0.6) return "#ffb74d";
+            if (usage > 0.4) return "#81c784";
+            if (usage > 0.2) return "#4fc3f7";
+            return "#1a1a3e";
+        }
+
+        /**
+         * Updates all node colors based on current state.
+         */
+        function updateNodeColors() {
+            if (window.graphNode) {
+                window.graphNode.select("circle").attr("fill", d => getNodeColor(d));
+            }
+        }
+
+        /**
+         * Highlights specified nodes with pulse animation.
+         * @param {Array} nodeIds - Array of node IDs to highlight
+         */
+        function highlightNodes(nodeIds) {
+            activeNodes = new Set(nodeIds);
+            updateNodeColors();
+
+            // Pulse animation on highlighted nodes
+            if (window.graphNode) {
+                window.graphNode.filter(d => activeNodes.has(d.id))
+                    .select("circle")
+                    .transition()
+                    .duration(200)
+                    .attr("r", d => (d.type === "root" ? 25 : d.type === "category" ? 20 : 15) + 10)
+                    .transition()
+                    .duration(200)
+                    .attr("r", d => d.type === "root" ? 25 : d.type === "category" ? 20 : 15);
+            }
+
+            // Clear highlights after 3 seconds
+            setTimeout(() => {
+                activeNodes.clear();
+                updateNodeColors();
+            }, 3000);
+        }
+
+        // Drag event handlers
+        function dragstarted(event) {
+            if (!event.active && simulation) simulation.alphaTarget(0.3).restart();
+            event.subject.fx = event.subject.x;
+            event.subject.fy = event.subject.y;
+        }
+
+        function dragged(event) {
+            event.subject.fx = event.x;
+            event.subject.fy = event.y;
+        }
+
+        function dragended(event) {
+            if (!event.active && simulation) simulation.alphaTarget(0);
+            event.subject.fx = null;
+            event.subject.fy = null;
+        }
+
+        /**
+         * Resets the graph view to initial zoom/pan state.
+         */
+        function resetView() {
+            if (window.graphSvg && window.graphZoom) {
+                window.graphSvg.transition().duration(500).call(window.graphZoom.transform, d3.zoomIdentity);
+            }
+            activeNodes.clear();
+            updateNodeColors();
+        }
+
+        /**
+         * Toggles between heatmap and type-based node coloring.
+         */
+        function toggleHeatmap() {
+            showHeatmap = !showHeatmap;
+            updateNodeColors();
+        }
+
+        // ====================================================================
+        // Chart.js Timeline Visualization
+        // ====================================================================
+
+        let timelineChart = null;
+
+        /**
+         * Initializes the timeline bar chart with historical data.
+         * @param {Array} data - Array of event objects with timestamps
+         */
+        function initTimeline(data) {
+            const ctx = document.getElementById("timeline").getContext("2d");
+
+            // Group events into 5-minute buckets
+            const buckets = {};
+            data.forEach(event => {
+                const date = new Date(event.timestamp);
+                const bucket = new Date(Math.floor(date.getTime() / 300000) * 300000);
+                const key = bucket.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                buckets[key] = (buckets[key] || 0) + 1;
+            });
+
+            const labels = Object.keys(buckets).slice(-15);
+            const values = labels.map(k => buckets[k]);
+
+            if (timelineChart) {
+                timelineChart.destroy();
+            }
+
+            timelineChart = new Chart(ctx, {
+                type: "bar",
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: "Events",
+                        data: values,
+                        backgroundColor: "rgba(79, 195, 247, 0.6)",
+                        borderColor: "#4fc3f7",
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: { color: "rgba(255,255,255,0.1)" },
+                            ticks: { color: "#9ca3af" }
+                        },
+                        x: {
+                            grid: { color: "rgba(255,255,255,0.1)" },
+                            ticks: { color: "#9ca3af", maxRotation: 0 }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+        }
+
+        /**
+         * Updates the timeline chart with a new event.
+         * @param {Object} event - The event to add to the timeline
+         */
+        function updateTimelineFromEvent(event) {
+            if (!timelineChart) return;
+
+            const date = new Date(event.timestamp);
+            const label = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            const lastLabel = timelineChart.data.labels[timelineChart.data.labels.length - 1];
+            if (lastLabel === label) {
+                // Increment existing bucket
+                timelineChart.data.datasets[0].data[timelineChart.data.datasets[0].data.length - 1]++;
+            } else {
+                // Add new bucket
+                timelineChart.data.labels.push(label);
+                timelineChart.data.datasets[0].data.push(1);
+                if (timelineChart.data.labels.length > 15) {
+                    timelineChart.data.labels.shift();
+                    timelineChart.data.datasets[0].data.shift();
+                }
+            }
+            timelineChart.update();
+        }
+
+        // ====================================================================
+        // Event List UI
+        // ====================================================================
+
+        /**
+         * Updates the event list in the sidebar with recent events.
+         */
+        function updateEventList() {
+            const list = document.getElementById("event-list");
+            if (events.length === 0) {
+                list.innerHTML = '<div class="text-gray-500 text-center py-8">Waiting for events...</div>';
+                return;
+            }
+
+            list.innerHTML = events.slice(0, 15).map((e, i) => {
+                const time = new Date(e.timestamp).toLocaleTimeString();
+                let text = e.type;
+                if (e.payload?.query_text) text = e.payload.query_text;
+                else if (e.payload?.lesson_ids) text = `${e.payload.lesson_ids.length} lessons`;
+
+                return `
+                    <div class="bg-white/5 rounded-lg p-3 border-l-4 ${i === 0 ? 'border-green-500 bg-green-500/10' : 'border-brand-cyan'} cursor-pointer hover:bg-white/10 transition-all duration-200" onclick="highlightFromEvent(${i})">
+                        <div class="text-xs text-gray-400">${time}</div>
+                        <div class="text-sm text-gray-200 my-1">${text}</div>
+                        <div class="text-xs text-green-400">${e.type}</div>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        /**
+         * Highlights nodes associated with a specific event from the list.
+         * @param {number} index - The index of the event in the events array
+         */
+        function highlightFromEvent(index) {
+            const event = events[index];
+            if (event.payload?.lesson_ids) {
+                highlightNodes(event.payload.lesson_ids);
+            }
+        }
+
+        /**
+         * Updates the query count statistic based on events.
+         */
+        function updateStats() {
+            const queryCount = events.filter(e => e.type === 'query').length;
+            document.getElementById('stat-queries').textContent = queryCount;
+        }
+
+        // ====================================================================
+        // Initialization
+        // ====================================================================
+
+        /**
+         * Main initialization function.
+         * Loads initial data and establishes WebSocket connection.
+         */
+        async function init() {
+            await loadInitialData();
+            connectWebSocket();
+        }
+
+        init();
+    </script>
+</body>
+</html>

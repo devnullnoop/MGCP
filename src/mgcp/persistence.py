@@ -1,0 +1,429 @@
+"""SQLite persistence layer for MGCP lessons and telemetry."""
+
+import json
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+
+import aiosqlite
+
+from .models import (
+    ArchitecturalNote,
+    Dependency,
+    Example,
+    Lesson,
+    LessonSummary,
+    ProjectCatalogue,
+    ProjectContext,
+    ProjectTodo,
+    Relationship,
+    SecurityNote,
+)
+
+DEFAULT_DB_PATH = "~/.mgcp/lessons.db"
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS lessons (
+    id TEXT PRIMARY KEY,
+    trigger TEXT NOT NULL,
+    action TEXT NOT NULL,
+    rationale TEXT,
+    examples JSON NOT NULL DEFAULT '[]',
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    last_refined TEXT NOT NULL,
+    last_used TEXT,
+    usage_count INTEGER NOT NULL DEFAULT 0,
+    tags JSON NOT NULL DEFAULT '[]',
+    parent_id TEXT,
+    related_ids JSON NOT NULL DEFAULT '[]',
+    relationships JSON NOT NULL DEFAULT '[]',
+    FOREIGN KEY (parent_id) REFERENCES lessons(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_lessons_parent ON lessons(parent_id);
+CREATE INDEX IF NOT EXISTS idx_lessons_usage ON lessons(usage_count DESC);
+
+CREATE TABLE IF NOT EXISTS telemetry_events (
+    id TEXT PRIMARY KEY,
+    timestamp TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload JSON NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_telemetry_session ON telemetry_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_telemetry_type ON telemetry_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_telemetry_time ON telemetry_events(timestamp);
+
+CREATE TABLE IF NOT EXISTS lesson_usage (
+    lesson_id TEXT PRIMARY KEY,
+    total_retrievals INTEGER DEFAULT 0,
+    last_retrieved TEXT,
+    avg_score REAL DEFAULT 0.0,
+    sessions_count INTEGER DEFAULT 0,
+    FOREIGN KEY (lesson_id) REFERENCES lessons(id)
+);
+
+CREATE TABLE IF NOT EXISTS project_contexts (
+    project_id TEXT PRIMARY KEY,
+    project_name TEXT NOT NULL,
+    project_path TEXT NOT NULL,
+    catalogue JSON NOT NULL DEFAULT '{}',
+    todos JSON NOT NULL DEFAULT '[]',
+    active_files JSON NOT NULL DEFAULT '[]',
+    recent_decisions JSON NOT NULL DEFAULT '[]',
+    last_session_id TEXT,
+    last_accessed TEXT NOT NULL,
+    session_count INTEGER DEFAULT 0,
+    notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_path ON project_contexts(project_path);
+"""
+
+
+class LessonStore:
+    """Async SQLite storage for lessons."""
+
+    def __init__(self, db_path: str = DEFAULT_DB_PATH):
+        self.db_path = Path(os.path.expanduser(db_path))
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._initialized = False
+
+    async def _get_conn(self) -> aiosqlite.Connection:
+        """Get database connection, initializing if needed."""
+        conn = await aiosqlite.connect(self.db_path)
+        conn.row_factory = aiosqlite.Row
+        if not self._initialized:
+            await conn.executescript(SCHEMA)
+            # Run migrations for existing databases
+            await self._run_migrations(conn)
+            await conn.commit()
+            self._initialized = True
+        return conn
+
+    async def _run_migrations(self, conn: aiosqlite.Connection) -> None:
+        """Run database migrations for schema updates."""
+        # Migration: Add relationships column to lessons
+        cursor = await conn.execute("PRAGMA table_info(lessons)")
+        columns = [row[1] for row in await cursor.fetchall()]
+        if "relationships" not in columns:
+            await conn.execute(
+                "ALTER TABLE lessons ADD COLUMN relationships JSON NOT NULL DEFAULT '[]'"
+            )
+
+        # Migration: Add catalogue column to project_contexts
+        cursor = await conn.execute("PRAGMA table_info(project_contexts)")
+        project_columns = [row[1] for row in await cursor.fetchall()]
+        if project_columns and "catalogue" not in project_columns:
+            await conn.execute(
+                "ALTER TABLE project_contexts ADD COLUMN catalogue JSON NOT NULL DEFAULT '{}'"
+            )
+
+    async def add_lesson(self, lesson: Lesson) -> str:
+        """Add a new lesson, return its ID."""
+        conn = await self._get_conn()
+        try:
+            await conn.execute(
+                """
+                INSERT INTO lessons (
+                    id, trigger, action, rationale, examples, version,
+                    created_at, last_refined, last_used, usage_count,
+                    tags, parent_id, related_ids, relationships
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    lesson.id,
+                    lesson.trigger,
+                    lesson.action,
+                    lesson.rationale,
+                    json.dumps([ex.model_dump() for ex in lesson.examples]),
+                    lesson.version,
+                    lesson.created_at.isoformat(),
+                    lesson.last_refined.isoformat(),
+                    lesson.last_used.isoformat() if lesson.last_used else None,
+                    lesson.usage_count,
+                    json.dumps(lesson.tags),
+                    lesson.parent_id,
+                    json.dumps(lesson.related_ids),
+                    json.dumps([rel.model_dump() for rel in lesson.relationships]),
+                ),
+            )
+            await conn.commit()
+            return lesson.id
+        finally:
+            await conn.close()
+
+    async def get_lesson(self, lesson_id: str) -> Lesson | None:
+        """Get a lesson by ID."""
+        conn = await self._get_conn()
+        try:
+            cursor = await conn.execute(
+                "SELECT * FROM lessons WHERE id = ?", (lesson_id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_lesson(row)
+        finally:
+            await conn.close()
+
+    async def get_all_lessons(self) -> list[Lesson]:
+        """Get all lessons."""
+        conn = await self._get_conn()
+        try:
+            cursor = await conn.execute("SELECT * FROM lessons ORDER BY usage_count DESC")
+            rows = await cursor.fetchall()
+            return [self._row_to_lesson(row) for row in rows]
+        finally:
+            await conn.close()
+
+    async def get_lessons_by_parent(self, parent_id: str | None) -> list[Lesson]:
+        """Get lessons with a specific parent (None for root lessons)."""
+        conn = await self._get_conn()
+        try:
+            if parent_id is None:
+                cursor = await conn.execute(
+                    "SELECT * FROM lessons WHERE parent_id IS NULL"
+                )
+            else:
+                cursor = await conn.execute(
+                    "SELECT * FROM lessons WHERE parent_id = ?", (parent_id,)
+                )
+            rows = await cursor.fetchall()
+            return [self._row_to_lesson(row) for row in rows]
+        finally:
+            await conn.close()
+
+    async def get_lessons_by_tags(self, tags: list[str]) -> list[Lesson]:
+        """Get lessons matching any of the given tags."""
+        conn = await self._get_conn()
+        try:
+            # SQLite JSON query for tag matching
+            placeholders = " OR ".join(
+                [f"EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)" for _ in tags]
+            )
+            cursor = await conn.execute(
+                f"SELECT * FROM lessons WHERE {placeholders}", tags
+            )
+            rows = await cursor.fetchall()
+            return [self._row_to_lesson(row) for row in rows]
+        finally:
+            await conn.close()
+
+    async def update_lesson(self, lesson: Lesson) -> None:
+        """Update an existing lesson."""
+        conn = await self._get_conn()
+        try:
+            await conn.execute(
+                """
+                UPDATE lessons SET
+                    trigger = ?, action = ?, rationale = ?, examples = ?,
+                    version = ?, last_refined = ?, last_used = ?, usage_count = ?,
+                    tags = ?, parent_id = ?, related_ids = ?, relationships = ?
+                WHERE id = ?
+                """,
+                (
+                    lesson.trigger,
+                    lesson.action,
+                    lesson.rationale,
+                    json.dumps([ex.model_dump() for ex in lesson.examples]),
+                    lesson.version,
+                    lesson.last_refined.isoformat(),
+                    lesson.last_used.isoformat() if lesson.last_used else None,
+                    lesson.usage_count,
+                    json.dumps(lesson.tags),
+                    lesson.parent_id,
+                    json.dumps(lesson.related_ids),
+                    json.dumps([rel.model_dump() for rel in lesson.relationships]),
+                    lesson.id,
+                ),
+            )
+            await conn.commit()
+        finally:
+            await conn.close()
+
+    async def record_usage(self, lesson_id: str) -> None:
+        """Record that a lesson was retrieved."""
+        conn = await self._get_conn()
+        try:
+            now = datetime.now(UTC).isoformat()
+            await conn.execute(
+                """
+                UPDATE lessons SET
+                    usage_count = usage_count + 1,
+                    last_used = ?
+                WHERE id = ?
+                """,
+                (now, lesson_id),
+            )
+            await conn.commit()
+        finally:
+            await conn.close()
+
+    async def delete_lesson(self, lesson_id: str) -> bool:
+        """Delete a lesson. Returns True if deleted."""
+        conn = await self._get_conn()
+        try:
+            cursor = await conn.execute(
+                "DELETE FROM lessons WHERE id = ?", (lesson_id,)
+            )
+            await conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            await conn.close()
+
+    async def get_categories(self) -> list[str]:
+        """Get unique top-level categories (root lesson IDs)."""
+        conn = await self._get_conn()
+        try:
+            cursor = await conn.execute(
+                "SELECT id FROM lessons WHERE parent_id IS NULL ORDER BY usage_count DESC"
+            )
+            rows = await cursor.fetchall()
+            return [row["id"] for row in rows]
+        finally:
+            await conn.close()
+
+    def _row_to_lesson(self, row: aiosqlite.Row) -> Lesson:
+        """Convert database row to Lesson model."""
+        examples_data = json.loads(row["examples"])
+        examples = [Example(**ex) for ex in examples_data]
+
+        # Parse relationships (handle missing column for backwards compatibility)
+        relationships = []
+        try:
+            relationships_data = json.loads(row["relationships"]) if row["relationships"] else []
+            relationships = [Relationship(**rel) for rel in relationships_data]
+        except (KeyError, TypeError):
+            # Column doesn't exist yet (pre-migration)
+            pass
+
+        return Lesson(
+            id=row["id"],
+            trigger=row["trigger"],
+            action=row["action"],
+            rationale=row["rationale"],
+            examples=examples,
+            version=row["version"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            last_refined=datetime.fromisoformat(row["last_refined"]),
+            last_used=datetime.fromisoformat(row["last_used"]) if row["last_used"] else None,
+            usage_count=row["usage_count"],
+            tags=json.loads(row["tags"]),
+            parent_id=row["parent_id"],
+            related_ids=json.loads(row["related_ids"]),
+            relationships=relationships,
+        )
+
+    # =========================================================================
+    # Project Context Methods
+    # =========================================================================
+
+    async def get_project_context(self, project_id: str) -> ProjectContext | None:
+        """Get project context by ID."""
+        conn = await self._get_conn()
+        try:
+            cursor = await conn.execute(
+                "SELECT * FROM project_contexts WHERE project_id = ?", (project_id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_project_context(row)
+        finally:
+            await conn.close()
+
+    async def get_project_context_by_path(self, project_path: str) -> ProjectContext | None:
+        """Get project context by path."""
+        conn = await self._get_conn()
+        try:
+            cursor = await conn.execute(
+                "SELECT * FROM project_contexts WHERE project_path = ?", (project_path,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_project_context(row)
+        finally:
+            await conn.close()
+
+    async def save_project_context(self, context: ProjectContext) -> None:
+        """Save or update project context."""
+        conn = await self._get_conn()
+        try:
+            await conn.execute(
+                """
+                INSERT INTO project_contexts (
+                    project_id, project_name, project_path, catalogue, todos, active_files,
+                    recent_decisions, last_session_id, last_accessed, session_count, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(project_id) DO UPDATE SET
+                    project_name = excluded.project_name,
+                    catalogue = excluded.catalogue,
+                    todos = excluded.todos,
+                    active_files = excluded.active_files,
+                    recent_decisions = excluded.recent_decisions,
+                    last_session_id = excluded.last_session_id,
+                    last_accessed = excluded.last_accessed,
+                    session_count = excluded.session_count,
+                    notes = excluded.notes
+                """,
+                (
+                    context.project_id,
+                    context.project_name,
+                    context.project_path,
+                    json.dumps(context.catalogue.model_dump(mode="json")),
+                    json.dumps([t.model_dump(mode="json") for t in context.todos]),
+                    json.dumps(context.active_files),
+                    json.dumps(context.recent_decisions),
+                    context.last_session_id,
+                    context.last_accessed.isoformat(),
+                    context.session_count,
+                    context.notes,
+                ),
+            )
+            await conn.commit()
+        finally:
+            await conn.close()
+
+    async def get_all_project_contexts(self) -> list[ProjectContext]:
+        """Get all project contexts ordered by last accessed."""
+        conn = await self._get_conn()
+        try:
+            cursor = await conn.execute(
+                "SELECT * FROM project_contexts ORDER BY last_accessed DESC"
+            )
+            rows = await cursor.fetchall()
+            return [self._row_to_project_context(row) for row in rows]
+        finally:
+            await conn.close()
+
+    def _row_to_project_context(self, row: aiosqlite.Row) -> ProjectContext:
+        """Convert database row to ProjectContext model."""
+        todos_data = json.loads(row["todos"]) if row["todos"] else []
+        todos = [ProjectTodo(**t) for t in todos_data]
+
+        # Parse catalogue (handle missing column for backwards compatibility)
+        catalogue = ProjectCatalogue()
+        try:
+            catalogue_data = json.loads(row["catalogue"]) if row["catalogue"] else {}
+            if catalogue_data:
+                catalogue = ProjectCatalogue(**catalogue_data)
+        except (KeyError, TypeError):
+            pass  # Column doesn't exist yet
+
+        return ProjectContext(
+            project_id=row["project_id"],
+            project_name=row["project_name"],
+            project_path=row["project_path"],
+            catalogue=catalogue,
+            todos=todos,
+            active_files=json.loads(row["active_files"]) if row["active_files"] else [],
+            recent_decisions=json.loads(row["recent_decisions"]) if row["recent_decisions"] else [],
+            last_session_id=row["last_session_id"],
+            last_accessed=datetime.fromisoformat(row["last_accessed"]),
+            session_count=row["session_count"],
+            notes=row["notes"],
+        )

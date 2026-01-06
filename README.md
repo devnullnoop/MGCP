@@ -46,7 +46,7 @@ MGCP provides **23 MCP tools** that let your LLM:
 
 ## Quick Start
 
-### 1. Install MGCP
+### 1. Install MGCP (one time)
 
 ```bash
 git clone https://github.com/devnullnoop/MGCP.git
@@ -58,49 +58,39 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install MGCP
 pip3 install -e ".[dev]"
-```
 
-> **Note**: Using a virtual environment is strongly recommended to avoid dependency conflicts with other packages (e.g., selenium's urllib3 requirements).
-
-### 2. Configure Claude Code
-
-Add to `~/.config/claude-code/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "mgcp": {
-      "command": "/path/to/MGCP/.venv/bin/python3",
-      "args": ["-m", "mgcp.server"],
-      "cwd": "/path/to/MGCP"
-    }
-  }
-}
-```
-
-> **Tip**: Using the full path to the venv python ensures MGCP runs with the correct dependencies regardless of your system's default Python.
-
-### 3. Bootstrap Initial Lessons
-
-```bash
+# Seed initial lessons
 mgcp-bootstrap
 ```
 
-### 4. Start the Dashboard
+> **Note**: Using a virtual environment avoids dependency conflicts with other packages.
+
+### 2. Configure Your LLM Client
+
+```bash
+mgcp-init
+```
+
+This auto-detects installed clients and configures them. Or specify manually:
+
+```bash
+mgcp-init --client claude-code    # Claude Code only
+mgcp-init --client cursor         # Cursor only
+mgcp-init --client all            # All supported clients
+mgcp-init --list                  # Show supported clients
+```
+
+**Supported clients:** Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Continue, Cline, Sourcegraph Cody
+
+Restart your LLM client, and MGCP is ready to use.
+
+> **Claude Code Users**: The init command also creates project hooks that remind the AI to save lessons throughout the session. See [Claude Code Hooks](#claude-code-hooks) for details.
+
+### 3. (Optional) Start the Dashboard
 
 ```bash
 mgcp-dashboard
 # Opens http://127.0.0.1:8765
-```
-
-### 5. (Optional) Enable Auto-Loading
-
-For automatic context loading at session start, copy the hook to your project:
-
-```bash
-mkdir -p your-project/.claude/hooks
-cp .claude/hooks/session-init.py your-project/.claude/hooks/
-cp examples/claude-hooks/settings.json your-project/.claude/
 ```
 
 ## Features
@@ -129,11 +119,18 @@ cp examples/claude-hooks/settings.json your-project/.claude/
 
 | Command | Description |
 |---------|-------------|
-| `mgcp` | Start MCP server (for Claude Code integration) |
+| `mgcp-init` | Configure MGCP for your LLM client (auto-detects installed clients) |
+| `mgcp-init --client X` | Configure specific client (claude-code, cursor, windsurf, continue, cline) |
+| `mgcp-init --verify` | Verify MGCP setup is working correctly |
+| `mgcp-init --doctor` | Diagnose Claude Code MCP configuration issues |
+| `mgcp-init --project-config` | Also configure project-specific MCP server in ~/.claude.json |
+| `mgcp` | Start MCP server (use `mgcp --help` for options) |
 | `mgcp-bootstrap` | Seed database with initial lessons |
 | `mgcp-dashboard` | Start web dashboard on port 8765 |
-| `mgcp-launcher status` | Show system status |
-| `mgcp-launcher all` | Start both dashboard and MCP server |
+| `mgcp-export lessons -o FILE` | Export all lessons to JSON |
+| `mgcp-import FILE` | Import lessons from JSON |
+| `mgcp-duplicates` | Find duplicate lessons by semantic similarity |
+| `mgcp-backup` | Backup data to archive (use `--restore` to restore) |
 
 ## MCP Tools Reference
 
@@ -237,7 +234,24 @@ python3 -m mgcp.web_server
 | Phase 2: Semantic Search | Complete |
 | Phase 3: Graph Traversal | Complete |
 | Phase 4: Refinement & Learning | Complete |
-| Phase 5: Proactive Intelligence | Planned |
+| Phase 5: Quality of Life | In Progress |
+| Phase 6: Proactive Intelligence | Planned |
+
+### Phase 5 Features (In Progress)
+- [x] Multi-client support (8 clients: Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Continue, Cline, Cody)
+- [x] Export/import lessons (`mgcp-export`, `mgcp-import`)
+- [x] Duplicate lesson detection (`mgcp-duplicates`)
+- [x] Backup and restore (`mgcp-backup`, `mgcp-backup --restore`)
+- [ ] Auto-tagging suggestions
+- [ ] Lesson usage analytics dashboard
+
+### Phase 6 Features (Planned)
+- Auto-suggest lessons from conversations
+- Feedback loop (track which lessons were helpful)
+- Git integration (parse commits/PRs for learnings)
+- Cross-project global lessons
+- Lesson templates (Error→Solution, Gotcha→Workaround)
+- Lesson quality scoring
 
 ## API Endpoints
 
@@ -255,6 +269,28 @@ The dashboard exposes a REST API for integration:
 | `GET /api/projects/{id}` | Get project context |
 | `GET /api/sessions` | Get session history |
 | `WS /ws/events` | Real-time event stream |
+
+## Claude Code Hooks
+
+For Claude Code users, `mgcp-init` creates project-level hooks that help the AI remember to use MGCP throughout the session:
+
+| Hook | Trigger | Purpose |
+|------|---------|---------|
+| `session-init.py` | Session start | Prompts AI to load project context and query relevant lessons |
+| `mgcp-reminder.sh` | After Edit/Write | Short reminder to save lessons when learning something new |
+| `mgcp-precompact.sh` | Before context compression | **Critical** reminder to save all lessons before context is lost |
+
+These hooks are created in your project's `.claude/` directory:
+```
+.claude/
+├── hooks/
+│   ├── session-init.py
+│   ├── mgcp-reminder.sh
+│   └── mgcp-precompact.sh
+└── settings.json
+```
+
+The hooks ensure the AI actively uses MGCP rather than forgetting about it mid-session.
 
 ## Contributing
 

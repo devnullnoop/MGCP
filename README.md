@@ -51,8 +51,16 @@ MGCP provides **23 MCP tools** that let your LLM:
 ```bash
 git clone https://github.com/devnullnoop/MGCP.git
 cd MGCP
-pip install -e ".[dev]"
+
+# Create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install MGCP
+pip3 install -e ".[dev]"
 ```
+
+> **Note**: Using a virtual environment is strongly recommended to avoid dependency conflicts with other packages (e.g., selenium's urllib3 requirements).
 
 ### 2. Configure Claude Code
 
@@ -62,13 +70,15 @@ Add to `~/.config/claude-code/settings.json`:
 {
   "mcpServers": {
     "mgcp": {
-      "command": "python",
+      "command": "/path/to/MGCP/.venv/bin/python3",
       "args": ["-m", "mgcp.server"],
       "cwd": "/path/to/MGCP"
     }
   }
 }
 ```
+
+> **Tip**: Using the full path to the venv python ensures MGCP runs with the correct dependencies regardless of your system's default Python.
 
 ### 3. Bootstrap Initial Lessons
 
@@ -196,8 +206,12 @@ See [docs/architecture.html](docs/architecture.html) for the full architecture d
 ## Development
 
 ```bash
+# Create virtual environment (if not already done)
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
 # Install dev dependencies
-pip install -e ".[dev]"
+pip3 install -e ".[dev]"
 
 # Run tests
 pytest
@@ -209,10 +223,10 @@ pytest tests/test_basic.py::TestLessonStore
 ruff check src/
 
 # Start MCP server directly
-python -m mgcp.server
+python3 -m mgcp.server
 
 # Start web dashboard
-python -m mgcp.web_server
+python3 -m mgcp.web_server
 ```
 
 ## Project Status

@@ -458,6 +458,151 @@ BOOTSTRAP_LESSONS = [
         parent_id="mgcp-knowledge-storage-types",
         tags=["mgcp", "workflows", "knowledge-management"],
     ),
+
+    # =========================================================================
+    # MGCP SESSION LIFECYCLE - Critical for bidirectional communication
+    # =========================================================================
+    Lesson(
+        id="mgcp-session-start",
+        trigger="session start, new session, starting, beginning, hello, hi, let's begin, help me with",
+        action="At SESSION START, ALWAYS do two things: (1) Call get_project_context with the project path to load todos, decisions, and prior state. (2) Call query_lessons with a brief description of the task to surface relevant knowledge. Do these BEFORE starting any work.",
+        rationale="Without loading context, you start from zero every session. Without querying lessons, you'll repeat past mistakes. These two calls bootstrap your knowledge for the session.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "session", "startup", "critical"],
+        examples=[
+            Example(
+                label="good",
+                code="# User says: 'Help me add authentication'\n# Step 1: get_project_context(project_path='/path/to/project')\n# Step 2: query_lessons(task_description='implementing authentication')\n# Step 3: Now start working with full context",
+                explanation="Load context and query lessons BEFORE writing any code",
+            ),
+        ],
+    ),
+    Lesson(
+        id="mgcp-query-before-action",
+        trigger="before, about to, going to, let me, I'll, implement, fix, debug, refactor, add, create, modify",
+        action="BEFORE taking significant action (implementing, debugging, refactoring), call query_lessons with a description of what you're about to do. Relevant lessons may prevent mistakes or suggest better approaches.",
+        rationale="Knowledge exists to be used. Querying before acting surfaces lessons that can save time, prevent bugs, and improve solutions. Acting first and querying never wastes the knowledge graph.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "query", "proactive", "critical"],
+        examples=[
+            Example(
+                label="bad",
+                code="# User: 'Fix the authentication bug'\n# Immediately start debugging without querying\nread_file('auth.py')",
+                explanation="Missed opportunity to surface lessons about auth bugs, debugging strategies",
+            ),
+            Example(
+                label="good",
+                code="# User: 'Fix the authentication bug'\nquery_lessons('debugging authentication issues')\n# Now debug with relevant lessons in mind",
+                explanation="Query first surfaces relevant debugging lessons and project-specific auth notes",
+            ),
+        ],
+    ),
+
+    # =========================================================================
+    # MGCP KNOWLEDGE MAINTENANCE - Keep the knowledge graph healthy
+    # =========================================================================
+    Lesson(
+        id="mgcp-check-before-adding",
+        trigger="add lesson, add to catalogue, store, save, record, remember",
+        action="BEFORE adding new knowledge, search for existing similar content: (1) query_lessons to check for similar lessons, (2) search_catalogue to check for similar catalogue items. If similar exists, use refine_lesson or update the existing item instead of creating duplicates.",
+        rationale="Duplicate knowledge fragments the graph. One refined lesson is better than three similar ones. Checking first prevents pollution and keeps knowledge consolidated.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "maintenance", "duplicates", "quality"],
+        examples=[
+            Example(
+                label="bad",
+                code="# Learning about API validation\nadd_lesson(id='validate-api-input', ...)\n# Later, add another similar one\nadd_lesson(id='check-api-responses', ...)\n# Now have two overlapping lessons",
+                explanation="Created duplicates instead of checking and refining",
+            ),
+            Example(
+                label="good",
+                code="# Learning about API validation\nquery_lessons('API validation')\n# Found 'verify-api-response' exists\nrefine_lesson(lesson_id='verify-api-response', refinement='Also validate request bodies, not just responses')",
+                explanation="Searched first, refined existing lesson instead of duplicating",
+            ),
+        ],
+    ),
+    Lesson(
+        id="mgcp-refine-not-duplicate",
+        trigger="refine, improve, update lesson, enhance, add to existing, already exists",
+        action="When a lesson exists but needs improvement, use refine_lesson to add new insight. Pass the lesson_id and a refinement string explaining the new knowledge. Optionally update the action text with new_action if the core instruction should change.",
+        rationale="Refinement preserves lesson history (versions) and consolidates knowledge. Creating a new lesson fragments knowledge and loses the connection to prior learning.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "refinement", "maintenance"],
+    ),
+    Lesson(
+        id="mgcp-link-related-lessons",
+        trigger="related, connected, depends on, prerequisite, alternative, complements, see also",
+        action="When lessons are related, call link_lessons to connect them. Choose relationship_type: 'prerequisite' (A before B), 'complements' (A+B together), 'alternative' (A or B), 'related' (similar topic), 'specializes' (A is specific case of B). This enables spider_lessons traversal.",
+        rationale="Isolated lessons are less valuable than connected ones. Links enable graph traversal - when one lesson is found, related lessons surface automatically via spider_lessons.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "graph", "relationships", "linking"],
+        examples=[
+            Example(
+                label="good",
+                code="# Just added 'validate-jwt-tokens' lesson\n# It relates to existing 'verify-api-response' lesson\nlink_lessons(\n    lesson_id_a='validate-jwt-tokens',\n    lesson_id_b='verify-api-response',\n    relationship_type='complements',\n    context='authentication'\n)",
+                explanation="New lesson linked to existing, enabling graph traversal",
+            ),
+        ],
+    ),
+    Lesson(
+        id="mgcp-spider-for-context",
+        trigger="related lessons, more context, what else, connected, explore, dig deeper",
+        action="When you find a relevant lesson, call spider_lessons with its ID to discover connected knowledge. Set depth=2 for moderate exploration or depth=3+ for thorough research. This traverses the knowledge graph to surface related lessons.",
+        rationale="One lesson often leads to others. Spider traversal surfaces the cluster of related knowledge, giving richer context than a single lesson query.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "graph", "traversal", "exploration"],
+    ),
+    Lesson(
+        id="mgcp-verify-storage",
+        trigger="did it save, was it stored, confirm, verify, check it worked",
+        action="After adding or refining knowledge, verify it was stored correctly: (1) For lessons: query_lessons with terms that should match, (2) For catalogue items: search_catalogue or get_catalogue_item to confirm. This closes the feedback loop.",
+        rationale="Storage can fail silently or store differently than expected. Verification confirms the knowledge will surface when needed and catches issues immediately.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "verification", "feedback", "quality"],
+    ),
+
+    # =========================================================================
+    # MGCP CATALOGUE ITEM TYPES - Guidance for each catalogue type
+    # =========================================================================
+    Lesson(
+        id="mgcp-record-security-notes",
+        trigger="security, vulnerability, CVE, exploit, risk, sensitive, injection, XSS, auth bypass",
+        action="When discovering a security concern, call add_catalogue_security_note with: title, description, severity (info/low/medium/high/critical), status (open/mitigated/accepted/resolved), and mitigation if known. Security knowledge must be project-scoped.",
+        rationale="Security issues are critical project-specific knowledge. Recording them ensures they're tracked, not forgotten, and communicated to future sessions working on the same codebase.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "catalogue", "security"],
+    ),
+    Lesson(
+        id="mgcp-record-conventions",
+        trigger="convention, naming, style, pattern, always do, never do, our way, standard, rule",
+        action="When establishing or discovering a coding convention, call add_catalogue_convention with: title, rule (the actual convention), category (naming/style/structure/testing/git), and examples. Conventions are project-specific standards.",
+        rationale="Conventions ensure consistency across a codebase. Recording them prevents style drift and helps new contributors (including future LLM sessions) follow established patterns.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "catalogue", "conventions", "style"],
+    ),
+    Lesson(
+        id="mgcp-record-error-patterns",
+        trigger="error, exception, stack trace, fix for, solution, when you see, how to fix",
+        action="When solving an error that may recur, call add_catalogue_error_pattern with: error_signature (what the error looks like), cause (root cause), solution (how to fix), and related_files. This creates a project-specific troubleshooting guide.",
+        rationale="Errors recur. Recording the signature→cause→solution mapping saves future debugging time. The next session hitting the same error can find the solution instantly.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "catalogue", "errors", "debugging"],
+        examples=[
+            Example(
+                label="good",
+                code="add_catalogue_error_pattern(\n    project_path='/path/to/project',\n    error_signature='ConnectionRefusedError: [Errno 111] Connection refused',\n    cause='Redis server not running',\n    solution='Start Redis: docker-compose up -d redis',\n    related_files='src/cache.py, docker-compose.yml'\n)",
+                explanation="Future sessions seeing this error can find the solution immediately",
+            ),
+        ],
+    ),
+    Lesson(
+        id="mgcp-record-dependencies",
+        trigger="library, framework, package, dependency, using, installed, requires, import",
+        action="When adding or noting a significant dependency, call add_catalogue_dependency with: name, purpose (why it's used in this project), dep_type (framework/library/tool), version, docs_url, and notes about project-specific usage patterns.",
+        rationale="Dependencies are project-specific context. Recording why a library was chosen and how it's used helps future sessions understand the codebase and make informed decisions about updates.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "catalogue", "dependencies"],
+    ),
 ]
 
 
@@ -881,6 +1026,38 @@ LESSON_RELATIONSHIPS = [
     ("catalogue-for-project-specific", "mgcp-record-decisions", "related", "Both concern project-specific knowledge storage"),
     ("catalogue-for-project-specific", "mgcp-record-gotchas", "related", "Both concern project-specific knowledge storage"),
     ("catalogue-for-project-specific", "mgcp-record-couplings", "related", "Both concern project-specific knowledge storage"),
+
+    # MGCP session lifecycle relationships
+    ("mgcp-usage", "mgcp-session-start", "prerequisite", "Understand MGCP before session start procedures"),
+    ("mgcp-usage", "mgcp-query-before-action", "prerequisite", "Understand MGCP before query patterns"),
+    ("mgcp-session-start", "mgcp-query-before-action", "sequence_next", "After session start, query before each action"),
+    ("mgcp-session-start", "mgcp-save-on-shutdown", "complements", "Session start and shutdown are bookends"),
+    ("mgcp-query-before-action", "mgcp-check-before-adding", "complements", "Query before acting, check before storing"),
+
+    # MGCP maintenance relationships
+    ("mgcp-usage", "mgcp-check-before-adding", "prerequisite", "Understand MGCP before maintenance practices"),
+    ("mgcp-usage", "mgcp-refine-not-duplicate", "prerequisite", "Understand MGCP before refinement"),
+    ("mgcp-usage", "mgcp-link-related-lessons", "prerequisite", "Understand MGCP before linking"),
+    ("mgcp-usage", "mgcp-spider-for-context", "prerequisite", "Understand MGCP before graph traversal"),
+    ("mgcp-usage", "mgcp-verify-storage", "prerequisite", "Understand MGCP before verification"),
+    ("mgcp-check-before-adding", "mgcp-refine-not-duplicate", "sequence_next", "Check for duplicates, then refine if found"),
+    ("mgcp-refine-not-duplicate", "mgcp-link-related-lessons", "sequence_next", "After refining, link to related lessons"),
+    ("mgcp-link-related-lessons", "mgcp-spider-for-context", "complements", "Linking enables spider traversal"),
+    ("mgcp-add-reusable-lessons", "mgcp-verify-storage", "sequence_next", "After adding, verify it was stored"),
+    ("lessons-are-generic-knowledge", "mgcp-check-before-adding", "complements", "Check existing before adding new"),
+
+    # MGCP catalogue item relationships
+    ("mgcp-usage", "mgcp-record-security-notes", "prerequisite", "Understand MGCP before security notes"),
+    ("mgcp-usage", "mgcp-record-conventions", "prerequisite", "Understand MGCP before conventions"),
+    ("mgcp-usage", "mgcp-record-error-patterns", "prerequisite", "Understand MGCP before error patterns"),
+    ("mgcp-usage", "mgcp-record-dependencies", "prerequisite", "Understand MGCP before dependencies"),
+    ("catalogue-for-project-specific", "mgcp-record-security-notes", "related", "Security notes are project-specific"),
+    ("catalogue-for-project-specific", "mgcp-record-conventions", "related", "Conventions are project-specific"),
+    ("catalogue-for-project-specific", "mgcp-record-error-patterns", "related", "Error patterns are project-specific"),
+    ("catalogue-for-project-specific", "mgcp-record-dependencies", "related", "Dependencies are project-specific"),
+    ("mgcp-record-security-notes", "mgcp-record-gotchas", "related", "Both document important project knowledge"),
+    ("mgcp-record-conventions", "mgcp-record-gotchas", "related", "Conventions and gotchas both guide behavior"),
+    ("mgcp-record-error-patterns", "mgcp-record-gotchas", "related", "Error patterns often capture gotchas"),
 ]
 
 

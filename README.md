@@ -4,6 +4,8 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
+> **⚠️ Alpha Software / Research Project** — This is a research project exploring ways to extend and improve LLM interactions through persistent memory. We're dogfooding it daily as we build it, which means things work but may change rapidly. APIs are not stable, data formats may evolve, and you might hit rough edges. If you're comfortable with that, welcome aboard! Feedback and bug reports are appreciated.
+
 **Persistent, graph-based memory for LLM interactions via the Model Context Protocol.**
 
 MGCP solves a fundamental problem with LLM assistants: **they forget everything between sessions**. Every conversation starts from zero. Lessons learned, project context, architectural decisions—all lost.
@@ -277,6 +279,7 @@ For Claude Code users, `mgcp-init` creates project-level hooks that help the AI 
 | Hook | Trigger | Purpose |
 |------|---------|---------|
 | `session-init.py` | Session start | Prompts AI to load project context and query relevant lessons |
+| `git-reminder.py` | User mentions "commit", "push", "git" | Reminds AI to query lessons before git operations |
 | `mgcp-reminder.sh` | After Edit/Write | Short reminder to save lessons when learning something new |
 | `mgcp-precompact.sh` | Before context compression | **Critical** reminder to save all lessons before context is lost |
 
@@ -285,6 +288,7 @@ These hooks are created in your project's `.claude/` directory:
 .claude/
 ├── hooks/
 │   ├── session-init.py
+│   ├── git-reminder.py
 │   ├── mgcp-reminder.sh
 │   └── mgcp-precompact.sh
 └── settings.json

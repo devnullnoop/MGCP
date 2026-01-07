@@ -58,14 +58,19 @@ cd MGCP
 python3 -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
+# Upgrade pip (required for editable installs with pyproject.toml)
+pip install --upgrade pip
+
 # Install MGCP
-pip3 install -e ".[dev]"
+pip install -e ".[dev]"
 
 # Seed initial lessons
 mgcp-bootstrap
 ```
 
 > **Note**: Using a virtual environment avoids dependency conflicts with other packages.
+>
+> **Conda users**: If you see `"setup.py" not found` errors, run `pip install --upgrade pip` first. Conda environments often have older pip versions that don't support modern Python packaging.
 
 ### 2. Configure Your LLM Client
 

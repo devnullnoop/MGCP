@@ -8,6 +8,7 @@ Or run installation with checks:
     python check_install.py --install
 """
 
+import platform
 import subprocess
 import sys
 from pathlib import Path
@@ -60,6 +61,51 @@ def check_pyproject():
     if not Path("pyproject.toml").exists():
         return False, "pyproject.toml not found - run from MGCP directory"
     return True, "pyproject.toml found"
+
+
+def check_xcode_tools():
+    """Check if Xcode Command Line Tools are installed (macOS only)."""
+    if platform.system() != "Darwin":
+        return True, "Not macOS (skipped)"
+
+    # Check if xcode-select can find the tools
+    result = subprocess.run(
+        ["xcode-select", "-p"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return False, "Xcode Command Line Tools not installed"
+
+    # Verify the path exists
+    tools_path = result.stdout.strip()
+    if not Path(tools_path).exists():
+        return False, f"Xcode tools path missing: {tools_path}"
+
+    # Test if C++ compiler actually works (most reliable check)
+    test_code = '#include <type_traits>\nint main() { return 0; }'
+    try:
+        result = subprocess.run(
+            ["c++", "-x", "c++", "-", "-fsyntax-only"],
+            input=test_code,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            # Check if it's the specific header error we saw
+            if "type_traits" in result.stderr or "file not found" in result.stderr:
+                return False, "C++ headers missing - run: xcode-select --install"
+            return False, f"C++ compiler error: {result.stderr[:100]}"
+    except FileNotFoundError:
+        return False, "C++ compiler not found - run: xcode-select --install"
+    except subprocess.TimeoutExpired:
+        return False, "C++ compiler check timed out"
+    except Exception as e:
+        # If we can't test, assume it's OK and let pip fail later with a clearer message
+        return True, f"Xcode tools present (compiler test skipped: {e})"
+
+    return True, "Xcode Command Line Tools installed"
 
 
 def upgrade_pip():
@@ -119,6 +165,7 @@ def main():
         ("pip version", check_pip_version),
         ("Virtual environment", check_venv),
         ("Project files", check_pyproject),
+        ("Build tools", check_xcode_tools),
     ]
 
     all_passed = True
@@ -151,6 +198,10 @@ def main():
                 print("    source .venv/bin/activate")
             elif check_fn == check_pyproject:
                 print(f"  • {name}: cd into the MGCP directory first")
+            elif check_fn == check_xcode_tools:
+                print(f"  • {name}: Install Xcode Command Line Tools:")
+                print("    xcode-select --install")
+                print("    (A dialog will appear - click Install)")
 
     # Handle --install flag
     if "--install" in sys.argv:
@@ -166,12 +217,18 @@ def main():
             python_ok, _ = check_python_version()
             venv_ok, _ = check_venv()
             pyproject_ok, _ = check_pyproject()
+            xcode_ok, xcode_msg = check_xcode_tools()
 
             if not python_ok:
                 print("\n❌ Cannot proceed: Python 3.11+ required")
                 sys.exit(1)
             if not pyproject_ok:
                 print("\n❌ Cannot proceed: Run from MGCP directory")
+                sys.exit(1)
+            if not xcode_ok and platform.system() == "Darwin":
+                print(f"\n❌ Cannot proceed: {xcode_msg}")
+                print("   Run: xcode-select --install")
+                print("   Then try again after installation completes.")
                 sys.exit(1)
             if not venv_ok:
                 print("\n⚠️  Warning: Installing without virtual environment")

@@ -1,5 +1,6 @@
 """Vector store for MGCP semantic project catalogue retrieval using ChromaDB."""
 
+import logging
 import os
 from pathlib import Path
 from typing import Literal
@@ -18,6 +19,8 @@ from .models import (
     ProjectCatalogue,
     SecurityNote,
 )
+
+logger = logging.getLogger("mgcp.catalogue_vector_store")
 
 DEFAULT_CHROMA_PATH = "~/.mgcp/chroma"
 
@@ -245,13 +248,19 @@ class CatalogueVectorStore:
             parts.append(f"Metadata: {', '.join(f'{k}={v}' for k, v in item.metadata.items())}")
         return "\n".join(parts)
 
-    def remove_item(self, project_id: str, item_type: ItemType, identifier: str) -> None:
-        """Remove a single item from the vector store."""
+    def remove_item(self, project_id: str, item_type: ItemType, identifier: str) -> bool:
+        """Remove a single item from the vector store.
+
+        Returns:
+            True if removal succeeded, False if not found or error occurred.
+        """
         doc_id = self._make_id(project_id, item_type, identifier)
         try:
             self.collection.delete(ids=[doc_id])
-        except Exception:
-            pass
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to remove catalogue item '{doc_id}': {e}")
+            return False
 
     def remove_project(self, project_id: str) -> None:
         """Remove all items for a project."""

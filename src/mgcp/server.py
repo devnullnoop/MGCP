@@ -5,15 +5,18 @@ Uses FastMCP for cleaner API - verified against official SDK docs.
 https://github.com/modelcontextprotocol/python-sdk
 """
 
+import asyncio
 import json
-import logging
+import re
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
 from .catalogue_vector_store import CatalogueVectorStore
 from .graph import LessonGraph
+from .logging_config import configure_logging, get_logger
 from .models import (
     ArchitecturalNote,
     Convention,
@@ -34,12 +37,9 @@ from .persistence import LessonStore
 from .telemetry import TelemetryLogger
 from .vector_store import VectorStore
 
-# Configure logging to stderr (CRITICAL: stdout breaks MCP STDIO)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger("mgcp")
+# Configure logging with rotation (CRITICAL: logs to file, not stdout which breaks MCP STDIO)
+configure_logging(console_output=False)
+logger = get_logger("server")
 
 # Initialize FastMCP server
 mcp = FastMCP("mgcp")
@@ -51,49 +51,89 @@ _catalogue_vector: CatalogueVectorStore | None = None
 _graph: LessonGraph | None = None
 _telemetry: TelemetryLogger | None = None
 _initialized = False
+_init_lock = asyncio.Lock()
+
+# Validation constants
+VALID_RELATIONSHIP_TYPES = frozenset({
+    "related", "prerequisite", "sequence_next", "alternative",
+    "complements", "specializes", "generalizes", "contradicts"
+})
+LESSON_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9\-]*[a-z0-9]$|^[a-z0-9]$")
+MAX_LESSON_ID_LENGTH = 100
+
+
+def _validate_lesson_id(lesson_id: str) -> str | None:
+    """Validate lesson ID format. Returns error message or None if valid."""
+    if not lesson_id:
+        return "Lesson ID cannot be empty"
+    if len(lesson_id) > MAX_LESSON_ID_LENGTH:
+        return f"Lesson ID too long (max {MAX_LESSON_ID_LENGTH} characters)"
+    if not LESSON_ID_PATTERN.match(lesson_id):
+        return "Lesson ID must be lowercase with dashes (e.g., 'my-lesson-id')"
+    return None
+
+
+def _validate_relationship_type(rel_type: str) -> str | None:
+    """Validate relationship type. Returns error message or None if valid."""
+    if rel_type not in VALID_RELATIONSHIP_TYPES:
+        valid = ", ".join(sorted(VALID_RELATIONSHIP_TYPES))
+        return f"Invalid relationship type '{rel_type}'. Valid types: {valid}"
+    return None
 
 
 async def _ensure_initialized() -> tuple[LessonStore, VectorStore, CatalogueVectorStore, LessonGraph, TelemetryLogger]:
-    """Lazy initialization of components."""
+    """Lazy initialization of components with thread-safe locking."""
     global _store, _vector_store, _catalogue_vector, _graph, _telemetry, _initialized
 
+    # Fast path: already initialized
     if _initialized:
         return _store, _vector_store, _catalogue_vector, _graph, _telemetry
 
-    logger.info("Initializing MGCP server...")
+    # Slow path: acquire lock and initialize
+    async with _init_lock:
+        # Double-check after acquiring lock
+        if _initialized:
+            return _store, _vector_store, _catalogue_vector, _graph, _telemetry
 
-    _store = LessonStore()
-    _vector_store = VectorStore()
-    _catalogue_vector = CatalogueVectorStore()
-    _graph = LessonGraph()
-    _telemetry = TelemetryLogger()
+        logger.info("Initializing MGCP server...")
 
-    # Load lessons from database
-    lessons = await _store.get_all_lessons()
-    logger.info(f"Loaded {len(lessons)} lessons from database")
+        try:
+            _store = LessonStore()
+            _vector_store = VectorStore()
+            _catalogue_vector = CatalogueVectorStore()
+            _graph = LessonGraph()
+            _telemetry = TelemetryLogger()
 
-    # Build graph
-    _graph.load_from_lessons(lessons)
+            # Load lessons from database
+            lessons = await _store.get_all_lessons()
+            logger.info(f"Loaded {len(lessons)} lessons from database")
 
-    # Sync vector store
-    stored_ids = set(_vector_store.get_all_ids())
-    for lesson in lessons:
-        if lesson.id not in stored_ids:
-            _vector_store.add_lesson(lesson)
+            # Build graph
+            _graph.load_from_lessons(lessons)
 
-    # Sync catalogue vector store
-    contexts = await _store.get_all_project_contexts()
-    for ctx in contexts:
-        _catalogue_vector.index_catalogue(ctx.project_id, ctx.catalogue)
-    logger.info(f"Indexed catalogues for {len(contexts)} projects")
+            # Sync vector store
+            stored_ids = set(_vector_store.get_all_ids())
+            for lesson in lessons:
+                if lesson.id not in stored_ids:
+                    _vector_store.add_lesson(lesson)
 
-    # Start telemetry session
-    await _telemetry.start_session()
+            # Sync catalogue vector store
+            contexts = await _store.get_all_project_contexts()
+            for ctx in contexts:
+                _catalogue_vector.index_catalogue(ctx.project_id, ctx.catalogue)
+            logger.info(f"Indexed catalogues for {len(contexts)} projects")
 
-    _initialized = True
-    logger.info("Server initialized successfully")
+            # Start telemetry session
+            await _telemetry.start_session()
 
-    return _store, _vector_store, _catalogue_vector, _graph, _telemetry
+            _initialized = True
+            logger.info("Server initialized successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize MGCP server: {e}")
+            raise
+
+        return _store, _vector_store, _catalogue_vector, _graph, _telemetry
 
 
 # ============================================================================
@@ -749,9 +789,9 @@ async def _get_or_create_project_context(project_path: str) -> ProjectContext:
     if context:
         return context
 
-    # Create new context
+    # Create new context using pathlib for cross-platform compatibility
     project_id = hashlib.sha256(project_path.encode()).hexdigest()[:12]
-    project_name = project_path.split("/")[-1] or "Unknown"
+    project_name = Path(project_path).name or "Unknown"
     context = ProjectContext(
         project_id=project_id,
         project_name=project_name,

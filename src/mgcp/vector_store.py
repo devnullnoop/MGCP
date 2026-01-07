@@ -1,5 +1,6 @@
 """Vector store for MGCP semantic lesson retrieval using ChromaDB."""
 
+import logging
 import os
 from pathlib import Path
 
@@ -7,6 +8,8 @@ import chromadb
 from chromadb.config import Settings
 
 from .models import Lesson
+
+logger = logging.getLogger("mgcp.vector_store")
 
 DEFAULT_CHROMA_PATH = "~/.mgcp/chroma"
 
@@ -52,12 +55,19 @@ class VectorStore:
             }],
         )
 
-    def remove_lesson(self, lesson_id: str) -> None:
-        """Remove a lesson from the vector store."""
+    def remove_lesson(self, lesson_id: str) -> bool:
+        """Remove a lesson from the vector store.
+
+        Returns:
+            True if removal succeeded, False if lesson not found or error occurred.
+        """
         try:
             self.collection.delete(ids=[lesson_id])
-        except Exception:
-            pass  # Ignore if not found
+            return True
+        except Exception as e:
+            # Log but don't raise - removal failure is not critical
+            logger.warning(f"Failed to remove lesson '{lesson_id}' from vector store: {e}")
+            return False
 
     def search(
         self,

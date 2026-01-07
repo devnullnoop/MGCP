@@ -1,7 +1,11 @@
 """SQLite persistence layer for MGCP lessons and telemetry."""
 
+import asyncio
 import json
+import logging
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,6 +21,8 @@ from .models import (
     Workflow,
     WorkflowStep,
 )
+
+logger = logging.getLogger("mgcp.persistence")
 
 DEFAULT_DB_PATH = "~/.mgcp/lessons.db"
 
@@ -95,24 +101,86 @@ CREATE INDEX IF NOT EXISTS idx_workflow_tags ON workflows(tags);
 
 
 class LessonStore:
-    """Async SQLite storage for lessons."""
+    """Async SQLite storage for lessons with connection pooling and transaction safety."""
 
     def __init__(self, db_path: str = DEFAULT_DB_PATH):
         self.db_path = Path(os.path.expanduser(db_path))
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialized = False
+        self._init_lock = asyncio.Lock()
+        self._pool: list[aiosqlite.Connection] = []
+        self._pool_lock = asyncio.Lock()
+        self._max_pool_size = 5
 
-    async def _get_conn(self) -> aiosqlite.Connection:
-        """Get database connection, initializing if needed."""
+    @asynccontextmanager
+    async def _connection(self, *, commit: bool = False) -> AsyncIterator[aiosqlite.Connection]:
+        """Get a database connection with automatic cleanup and optional commit.
+
+        Args:
+            commit: If True, commit on success, rollback on error.
+
+        Usage:
+            async with self._connection(commit=True) as conn:
+                await conn.execute(...)
+        """
+        conn = await self._acquire_conn()
+        try:
+            yield conn
+            if commit:
+                await conn.commit()
+                logger.debug("Transaction committed")
+        except Exception as e:
+            if commit:
+                await conn.rollback()
+                logger.warning(f"Transaction rolled back due to error: {e}")
+            raise
+        finally:
+            await self._release_conn(conn)
+
+    async def _acquire_conn(self) -> aiosqlite.Connection:
+        """Acquire a connection from pool or create new one."""
+        async with self._pool_lock:
+            if self._pool:
+                conn = self._pool.pop()
+                logger.debug("Reused connection from pool")
+                return conn
+
+        # Create new connection
         conn = await aiosqlite.connect(self.db_path)
         conn.row_factory = aiosqlite.Row
-        if not self._initialized:
-            await conn.executescript(SCHEMA)
-            # Run migrations for existing databases
-            await self._run_migrations(conn)
-            await conn.commit()
-            self._initialized = True
+
+        # Initialize schema if needed (thread-safe)
+        async with self._init_lock:
+            if not self._initialized:
+                logger.info(f"Initializing database at {self.db_path}")
+                await conn.executescript(SCHEMA)
+                await self._run_migrations(conn)
+                await conn.commit()
+                self._initialized = True
+                logger.info("Database initialized successfully")
+
         return conn
+
+    async def _release_conn(self, conn: aiosqlite.Connection) -> None:
+        """Return connection to pool or close if pool is full."""
+        async with self._pool_lock:
+            if len(self._pool) < self._max_pool_size:
+                self._pool.append(conn)
+                logger.debug(f"Returned connection to pool (size: {len(self._pool)})")
+                return
+
+        # Pool is full, close connection
+        await conn.close()
+        logger.debug("Closed connection (pool full)")
+
+    async def close_pool(self) -> None:
+        """Close all pooled connections. Call on shutdown."""
+        async with self._pool_lock:
+            for conn in self._pool:
+                await conn.close()
+            count = len(self._pool)
+            self._pool.clear()
+            logger.info(f"Closed {count} pooled connections")
 
     async def _run_migrations(self, conn: aiosqlite.Connection) -> None:
         """Run database migrations for schema updates."""
@@ -134,8 +202,7 @@ class LessonStore:
 
     async def add_lesson(self, lesson: Lesson) -> str:
         """Add a new lesson, return its ID."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection(commit=True) as conn:
             await conn.execute(
                 """
                 INSERT INTO lessons (
@@ -161,15 +228,12 @@ class LessonStore:
                     json.dumps([rel.model_dump() for rel in lesson.relationships]),
                 ),
             )
-            await conn.commit()
+            logger.debug(f"Added lesson: {lesson.id}")
             return lesson.id
-        finally:
-            await conn.close()
 
     async def get_lesson(self, lesson_id: str) -> Lesson | None:
         """Get a lesson by ID."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM lessons WHERE id = ?", (lesson_id,)
             )
@@ -177,23 +241,17 @@ class LessonStore:
             if not row:
                 return None
             return self._row_to_lesson(row)
-        finally:
-            await conn.close()
 
     async def get_all_lessons(self) -> list[Lesson]:
         """Get all lessons."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection() as conn:
             cursor = await conn.execute("SELECT * FROM lessons ORDER BY usage_count DESC")
             rows = await cursor.fetchall()
             return [self._row_to_lesson(row) for row in rows]
-        finally:
-            await conn.close()
 
     async def get_lessons_by_parent(self, parent_id: str | None) -> list[Lesson]:
         """Get lessons with a specific parent (None for root lessons)."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection() as conn:
             if parent_id is None:
                 cursor = await conn.execute(
                     "SELECT * FROM lessons WHERE parent_id IS NULL"
@@ -204,13 +262,10 @@ class LessonStore:
                 )
             rows = await cursor.fetchall()
             return [self._row_to_lesson(row) for row in rows]
-        finally:
-            await conn.close()
 
     async def get_lessons_by_tags(self, tags: list[str]) -> list[Lesson]:
         """Get lessons matching any of the given tags."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection() as conn:
             # SQLite JSON query for tag matching
             placeholders = " OR ".join(
                 ["EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)" for _ in tags]
@@ -220,13 +275,10 @@ class LessonStore:
             )
             rows = await cursor.fetchall()
             return [self._row_to_lesson(row) for row in rows]
-        finally:
-            await conn.close()
 
     async def update_lesson(self, lesson: Lesson) -> None:
         """Update an existing lesson."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection(commit=True) as conn:
             await conn.execute(
                 """
                 UPDATE lessons SET
@@ -251,14 +303,11 @@ class LessonStore:
                     lesson.id,
                 ),
             )
-            await conn.commit()
-        finally:
-            await conn.close()
+            logger.debug(f"Updated lesson: {lesson.id}")
 
     async def record_usage(self, lesson_id: str) -> None:
         """Record that a lesson was retrieved."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection(commit=True) as conn:
             now = datetime.now(UTC).isoformat()
             await conn.execute(
                 """
@@ -269,33 +318,26 @@ class LessonStore:
                 """,
                 (now, lesson_id),
             )
-            await conn.commit()
-        finally:
-            await conn.close()
 
     async def delete_lesson(self, lesson_id: str) -> bool:
         """Delete a lesson. Returns True if deleted."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection(commit=True) as conn:
             cursor = await conn.execute(
                 "DELETE FROM lessons WHERE id = ?", (lesson_id,)
             )
-            await conn.commit()
-            return cursor.rowcount > 0
-        finally:
-            await conn.close()
+            deleted = cursor.rowcount > 0
+            if deleted:
+                logger.info(f"Deleted lesson: {lesson_id}")
+            return deleted
 
     async def get_categories(self) -> list[str]:
         """Get unique top-level categories (root lesson IDs)."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection() as conn:
             cursor = await conn.execute(
                 "SELECT id FROM lessons WHERE parent_id IS NULL ORDER BY usage_count DESC"
             )
             rows = await cursor.fetchall()
             return [row["id"] for row in rows]
-        finally:
-            await conn.close()
 
     def _row_to_lesson(self, row: aiosqlite.Row) -> Lesson:
         """Convert database row to Lesson model."""
@@ -334,8 +376,7 @@ class LessonStore:
 
     async def get_project_context(self, project_id: str) -> ProjectContext | None:
         """Get project context by ID."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM project_contexts WHERE project_id = ?", (project_id,)
             )
@@ -343,13 +384,10 @@ class LessonStore:
             if not row:
                 return None
             return self._row_to_project_context(row)
-        finally:
-            await conn.close()
 
     async def get_project_context_by_path(self, project_path: str) -> ProjectContext | None:
         """Get project context by path."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM project_contexts WHERE project_path = ?", (project_path,)
             )
@@ -357,13 +395,10 @@ class LessonStore:
             if not row:
                 return None
             return self._row_to_project_context(row)
-        finally:
-            await conn.close()
 
     async def save_project_context(self, context: ProjectContext) -> None:
         """Save or update project context."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection(commit=True) as conn:
             await conn.execute(
                 """
                 INSERT INTO project_contexts (
@@ -395,21 +430,16 @@ class LessonStore:
                     context.notes,
                 ),
             )
-            await conn.commit()
-        finally:
-            await conn.close()
+            logger.debug(f"Saved project context: {context.project_name}")
 
     async def get_all_project_contexts(self) -> list[ProjectContext]:
         """Get all project contexts ordered by last accessed."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM project_contexts ORDER BY last_accessed DESC"
             )
             rows = await cursor.fetchall()
             return [self._row_to_project_context(row) for row in rows]
-        finally:
-            await conn.close()
 
     def _row_to_project_context(self, row: aiosqlite.Row) -> ProjectContext:
         """Convert database row to ProjectContext model."""
@@ -445,8 +475,7 @@ class LessonStore:
 
     async def save_workflow(self, workflow: Workflow) -> str:
         """Save or update a workflow."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection(commit=True) as conn:
             await conn.execute(
                 """
                 INSERT INTO workflows (
@@ -471,15 +500,12 @@ class LessonStore:
                     workflow.version,
                 ),
             )
-            await conn.commit()
+            logger.debug(f"Saved workflow: {workflow.id}")
             return workflow.id
-        finally:
-            await conn.close()
 
     async def get_workflow(self, workflow_id: str) -> Workflow | None:
         """Get a workflow by ID."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM workflows WHERE id = ?", (workflow_id,)
             )
@@ -487,30 +513,24 @@ class LessonStore:
             if not row:
                 return None
             return self._row_to_workflow(row)
-        finally:
-            await conn.close()
 
     async def get_all_workflows(self) -> list[Workflow]:
         """Get all workflows."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection() as conn:
             cursor = await conn.execute("SELECT * FROM workflows ORDER BY name")
             rows = await cursor.fetchall()
             return [self._row_to_workflow(row) for row in rows]
-        finally:
-            await conn.close()
 
     async def delete_workflow(self, workflow_id: str) -> bool:
         """Delete a workflow. Returns True if deleted."""
-        conn = await self._get_conn()
-        try:
+        async with self._connection(commit=True) as conn:
             cursor = await conn.execute(
                 "DELETE FROM workflows WHERE id = ?", (workflow_id,)
             )
-            await conn.commit()
-            return cursor.rowcount > 0
-        finally:
-            await conn.close()
+            deleted = cursor.rowcount > 0
+            if deleted:
+                logger.info(f"Deleted workflow: {workflow_id}")
+            return deleted
 
     def _row_to_workflow(self, row: aiosqlite.Row) -> Workflow:
         """Convert database row to Workflow model."""

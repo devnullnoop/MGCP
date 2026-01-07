@@ -46,6 +46,23 @@ MGCP provides **23 MCP tools** that let your LLM:
 - Traverse related knowledge through the graph
 - Save and restore project-specific context between sessions
 
+## Screenshots
+
+### Knowledge Graph Dashboard
+Interactive visualization of your lesson network with real-time updates, usage heatmaps, and neural firing animations.
+
+![Dashboard](docs/screenshots/dashboard.png)
+
+### Lesson Management
+Browse, search, and manage your lessons with hierarchical organization and relationship tracking.
+
+![Lessons](docs/screenshots/lessons.png)
+
+### Project Catalogue
+Store project-specific knowledge: architecture notes, security concerns, coding conventions, file couplings, and decisions.
+
+![Projects](docs/screenshots/projects.png)
+
 ## Quick Start
 
 ### 1. Install MGCP (one time)

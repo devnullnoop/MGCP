@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,6 +10,8 @@ from pathlib import Path
 from .models import Lesson
 from .persistence import LessonStore
 from .vector_store import VectorStore
+
+logger = logging.getLogger("mgcp.data_ops")
 
 
 async def export_lessons(output_path: Path | None = None, include_usage: bool = True) -> dict:
@@ -79,8 +82,21 @@ async def import_lessons(
     store = LessonStore()
     vector_store = VectorStore()
 
-    # Load import file
-    data = json.loads(input_path.read_text())
+    # Load import file with error handling
+    try:
+        data = json.loads(input_path.read_text())
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON file {input_path}: {e}")
+        return {
+            "total": 0,
+            "imported": 0,
+            "skipped": 0,
+            "overwritten": 0,
+            "renamed": 0,
+            "errors": [f"Invalid JSON file: {e}"],
+            "dry_run": dry_run
+        }
+
     lessons_data = data.get("lessons", [])
 
     # Get existing lesson IDs

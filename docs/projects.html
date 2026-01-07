@@ -118,51 +118,80 @@
                 <!-- Catalogue Tab -->
                 <div id="tab-catalogue" class="tab-content hidden">
                     <div class="space-y-6">
-                        <!-- Stack -->
+                        <!-- Technology Stack -->
                         <div>
-                            <h3 class="text-sm font-medium text-brand-cyan uppercase tracking-wide mb-3">Technology Stack</h3>
+                            <div class="flex justify-between items-center mb-3">
+                                <h3 class="text-sm font-medium text-brand-cyan uppercase tracking-wide">Technology Stack</h3>
+                                <button onclick="showAddItemModal('dependency')" class="text-xs text-brand-cyan hover:text-white">+ Add</button>
+                            </div>
                             <div id="catalogue-stack" class="space-y-2">
-                                <!-- Languages, frameworks, libraries -->
+                                <!-- Languages, frameworks, libraries, tools -->
                             </div>
                         </div>
 
-                        <!-- Entry Points -->
+                        <!-- Security Notes -->
                         <div>
-                            <h3 class="text-sm font-medium text-brand-cyan uppercase tracking-wide mb-3">Entry Points</h3>
-                            <div id="catalogue-entry-points" class="bg-brand-dark/50 rounded p-3 font-mono text-sm">
-                                <!-- Entry points -->
+                            <div class="flex justify-between items-center mb-3">
+                                <h3 class="text-sm font-medium text-red-400 uppercase tracking-wide">Security Notes</h3>
+                                <button onclick="showAddItemModal('security')" class="text-xs text-red-400 hover:text-white">+ Add</button>
+                            </div>
+                            <div id="catalogue-security" class="space-y-2">
+                                <!-- Security notes -->
                             </div>
                         </div>
 
                         <!-- Architecture Notes -->
                         <div>
-                            <h3 class="text-sm font-medium text-brand-cyan uppercase tracking-wide mb-3">Architecture Notes</h3>
+                            <div class="flex justify-between items-center mb-3">
+                                <h3 class="text-sm font-medium text-brand-cyan uppercase tracking-wide">Architecture Notes</h3>
+                                <button onclick="showAddItemModal('arch')" class="text-xs text-brand-cyan hover:text-white">+ Add</button>
+                            </div>
                             <div id="catalogue-notes" class="space-y-2">
                                 <!-- Architecture notes -->
                             </div>
                         </div>
 
-                        <!-- Key Concepts -->
+                        <!-- Conventions -->
                         <div>
-                            <h3 class="text-sm font-medium text-brand-cyan uppercase tracking-wide mb-3">Key Concepts</h3>
-                            <div id="catalogue-concepts" class="space-y-2">
-                                <!-- Key concepts -->
+                            <div class="flex justify-between items-center mb-3">
+                                <h3 class="text-sm font-medium text-green-400 uppercase tracking-wide">Conventions</h3>
+                                <button onclick="showAddItemModal('convention')" class="text-xs text-green-400 hover:text-white">+ Add</button>
+                            </div>
+                            <div id="catalogue-conventions" class="space-y-2">
+                                <!-- Conventions -->
                             </div>
                         </div>
 
-                        <!-- Commands -->
-                        <div class="grid grid-cols-2 gap-4">
-                            <div>
-                                <h3 class="text-sm font-medium text-brand-cyan uppercase tracking-wide mb-3">Test Commands</h3>
-                                <div id="catalogue-test-cmds" class="bg-brand-dark/50 rounded p-3 font-mono text-sm">
-                                    <!-- Test commands -->
-                                </div>
+                        <!-- Decisions -->
+                        <div>
+                            <div class="flex justify-between items-center mb-3">
+                                <h3 class="text-sm font-medium text-purple-400 uppercase tracking-wide">Architectural Decisions</h3>
+                                <button onclick="showAddItemModal('decision')" class="text-xs text-purple-400 hover:text-white">+ Add</button>
                             </div>
-                            <div>
-                                <h3 class="text-sm font-medium text-brand-cyan uppercase tracking-wide mb-3">Build Commands</h3>
-                                <div id="catalogue-build-cmds" class="bg-brand-dark/50 rounded p-3 font-mono text-sm">
-                                    <!-- Build commands -->
-                                </div>
+                            <div id="catalogue-decisions" class="space-y-2">
+                                <!-- Decisions with rationale -->
+                            </div>
+                        </div>
+
+                        <!-- File Couplings -->
+                        <div>
+                            <div class="flex justify-between items-center mb-3">
+                                <h3 class="text-sm font-medium text-orange-400 uppercase tracking-wide">File Couplings</h3>
+                                <button onclick="showAddItemModal('coupling')" class="text-xs text-orange-400 hover:text-white">+ Add</button>
+                            </div>
+                            <div id="catalogue-couplings" class="space-y-2">
+                                <!-- File couplings -->
+                            </div>
+                        </div>
+
+                        <!-- Error Patterns -->
+                        <div>
+                            <div class="flex justify-between items-center mb-3">
+                                <h3 class="text-sm font-medium text-yellow-400 uppercase tracking-wide">Error Patterns</h3>
+                                <button onclick="showAddItemModal('error')" class="text-xs text-yellow-400 hover:text-white">+ Add</button>
+                            </div>
+                            <div id="catalogue-errors" class="space-y-2">
+                                <!-- Error patterns -->
                             </div>
                         </div>
                     </div>
@@ -557,57 +586,247 @@
             if (!currentProject || !currentProject.catalogue) return;
             const cat = currentProject.catalogue;
 
-            // Stack
+            // Technology Stack (frameworks, libraries, tools)
             const stackHtml = [];
             if (cat.languages && cat.languages.length > 0) {
-                stackHtml.push(`<div class="flex items-center gap-2"><span class="text-gray-500 w-24">Languages:</span><div class="flex flex-wrap gap-2">${cat.languages.map(l => `<span class="px-2 py-0.5 bg-blue-500/20 text-blue-300 rounded text-xs">${escapeHtml(l)}</span>`).join('')}</div></div>`);
+                stackHtml.push(`<div class="flex items-center gap-2 mb-2"><span class="text-gray-500 w-24">Languages:</span><div class="flex flex-wrap gap-2">${cat.languages.map(l => `<span class="px-2 py-0.5 bg-blue-500/20 text-blue-300 rounded text-xs">${escapeHtml(l)}</span>`).join('')}</div></div>`);
             }
             if (cat.frameworks && cat.frameworks.length > 0) {
-                stackHtml.push(`<div class="flex items-start gap-2"><span class="text-gray-500 w-24">Frameworks:</span><div class="flex-1 space-y-1">${cat.frameworks.map(f => `<div class="flex items-center gap-2"><span class="px-2 py-0.5 bg-purple-500/20 text-purple-300 rounded text-xs">${escapeHtml(f.name)}</span><span class="text-gray-400 text-xs">${escapeHtml(f.purpose || '')}</span></div>`).join('')}</div></div>`);
+                stackHtml.push(`<div class="mb-2"><span class="text-purple-400 text-xs uppercase">Frameworks</span>${cat.frameworks.map(f => `<div class="flex items-center justify-between bg-purple-500/10 rounded p-2 mt-1"><div><span class="text-purple-300">${escapeHtml(f.name)}</span> <span class="text-gray-400 text-xs">${escapeHtml(f.purpose || '')}</span></div><button onclick="removeCatalogueItem('framework', '${escapeHtml(f.name)}')" class="text-red-400 hover:text-red-300 text-xs">×</button></div>`).join('')}</div>`);
             }
             if (cat.libraries && cat.libraries.length > 0) {
-                stackHtml.push(`<div class="flex items-start gap-2"><span class="text-gray-500 w-24">Libraries:</span><div class="flex-1 space-y-1">${cat.libraries.map(l => `<div class="flex items-center gap-2"><span class="text-green-300 text-sm">${escapeHtml(l.name)}</span><span class="text-gray-500 text-xs">- ${escapeHtml(l.purpose || '')}</span></div>`).join('')}</div></div>`);
+                stackHtml.push(`<div class="mb-2"><span class="text-green-400 text-xs uppercase">Libraries</span>${cat.libraries.map(l => `<div class="flex items-center justify-between bg-green-500/10 rounded p-2 mt-1"><div><span class="text-green-300">${escapeHtml(l.name)}</span> <span class="text-gray-400 text-xs">${escapeHtml(l.purpose || '')}</span></div><button onclick="removeCatalogueItem('library', '${escapeHtml(l.name)}')" class="text-red-400 hover:text-red-300 text-xs">×</button></div>`).join('')}</div>`);
             }
-            if (cat.patterns_used && cat.patterns_used.length > 0) {
-                stackHtml.push(`<div class="flex items-center gap-2"><span class="text-gray-500 w-24">Patterns:</span><div class="flex flex-wrap gap-2">${cat.patterns_used.map(p => `<span class="px-2 py-0.5 bg-gray-600/50 text-gray-300 rounded text-xs">${escapeHtml(p)}</span>`).join('')}</div></div>`);
+            if (cat.tools && cat.tools.length > 0) {
+                stackHtml.push(`<div class="mb-2"><span class="text-orange-400 text-xs uppercase">Tools</span>${cat.tools.map(t => `<div class="flex items-center justify-between bg-orange-500/10 rounded p-2 mt-1"><div><span class="text-orange-300">${escapeHtml(t.name)}</span> <span class="text-gray-400 text-xs">${escapeHtml(t.purpose || '')}</span></div><button onclick="removeCatalogueItem('tool', '${escapeHtml(t.name)}')" class="text-red-400 hover:text-red-300 text-xs">×</button></div>`).join('')}</div>`);
             }
-            document.getElementById('catalogue-stack').innerHTML = stackHtml.join('') || '<span class="text-gray-500">No stack defined</span>';
+            document.getElementById('catalogue-stack').innerHTML = stackHtml.join('') || '<span class="text-gray-500">No dependencies defined</span>';
 
-            // Entry Points
-            const entryPoints = cat.entry_points || {};
-            const entryHtml = Object.entries(entryPoints).map(([name, cmd]) =>
-                `<div class="flex gap-2"><span class="text-brand-cyan">${escapeHtml(name)}:</span><span class="text-gray-300">${escapeHtml(cmd)}</span></div>`
-            ).join('');
-            document.getElementById('catalogue-entry-points').innerHTML = entryHtml || '<span class="text-gray-500">No entry points defined</span>';
+            // Security Notes with severity colors
+            const securityNotes = cat.security_notes || [];
+            const severityColors = {
+                'critical': 'border-red-600 bg-red-600/20 text-red-300',
+                'high': 'border-red-500 bg-red-500/10 text-red-400',
+                'medium': 'border-orange-500 bg-orange-500/10 text-orange-400',
+                'low': 'border-yellow-500 bg-yellow-500/10 text-yellow-400',
+                'info': 'border-blue-500 bg-blue-500/10 text-blue-400'
+            };
+            const statusBadges = {
+                'open': 'bg-red-500/20 text-red-400',
+                'mitigated': 'bg-yellow-500/20 text-yellow-400',
+                'accepted': 'bg-blue-500/20 text-blue-400',
+                'resolved': 'bg-green-500/20 text-green-400'
+            };
+            const securityHtml = securityNotes.map(s => {
+                const color = severityColors[s.severity] || severityColors.info;
+                const badge = statusBadges[s.status] || statusBadges.open;
+                return `<div class="border-l-4 ${color} rounded-r p-3">
+                    <div class="flex justify-between items-start">
+                        <div class="flex-1">
+                            <div class="flex items-center gap-2">
+                                <span class="font-medium">${escapeHtml(s.title)}</span>
+                                <span class="px-2 py-0.5 rounded text-xs ${badge}">${s.status}</span>
+                                <span class="text-xs text-gray-500">${s.severity}</span>
+                            </div>
+                            <div class="text-xs text-gray-400 mt-1">${escapeHtml(s.description)}</div>
+                            ${s.mitigation ? `<div class="text-xs text-green-400 mt-1">Mitigation: ${escapeHtml(s.mitigation)}</div>` : ''}
+                        </div>
+                        <button onclick="removeCatalogueItem('security', '${escapeHtml(s.title)}')" class="text-red-400 hover:text-red-300 text-xs ml-2">×</button>
+                    </div>
+                </div>`;
+            }).join('');
+            document.getElementById('catalogue-security').innerHTML = securityHtml || '<span class="text-gray-500">No security notes</span>';
 
             // Architecture Notes
             const notes = cat.architecture_notes || [];
+            const categoryColors = {
+                'gotcha': 'border-yellow-500 bg-yellow-500/10',
+                'security': 'border-red-500 bg-red-500/10',
+                'architecture': 'border-blue-500 bg-blue-500/10',
+                'convention': 'border-green-500 bg-green-500/10',
+                'performance': 'border-purple-500 bg-purple-500/10'
+            };
             const notesHtml = notes.map(n => {
-                const categoryColors = {
-                    'gotcha': 'border-yellow-500 bg-yellow-500/10',
-                    'security': 'border-red-500 bg-red-500/10',
-                    'architecture': 'border-blue-500 bg-blue-500/10',
-                    'convention': 'border-green-500 bg-green-500/10',
-                    'performance': 'border-purple-500 bg-purple-500/10'
-                };
                 const color = categoryColors[n.category] || 'border-gray-500 bg-gray-500/10';
-                return `<div class="border-l-2 ${color} pl-3 py-2 rounded-r"><div class="text-sm font-medium text-white">${escapeHtml(n.title)}</div><div class="text-xs text-gray-400">${escapeHtml(n.description)}</div>${n.related_files && n.related_files.length > 0 ? `<div class="text-xs text-gray-500 mt-1">Files: ${n.related_files.join(', ')}</div>` : ''}</div>`;
+                return `<div class="border-l-2 ${color} pl-3 py-2 rounded-r flex justify-between">
+                    <div class="flex-1">
+                        <div class="text-sm font-medium text-white">${escapeHtml(n.title)} <span class="text-xs text-gray-500">[${n.category}]</span></div>
+                        <div class="text-xs text-gray-400">${escapeHtml(n.description)}</div>
+                        ${n.related_files && n.related_files.length > 0 ? `<div class="text-xs text-gray-500 mt-1">Files: ${n.related_files.join(', ')}</div>` : ''}
+                    </div>
+                    <button onclick="removeCatalogueItem('arch', '${escapeHtml(n.title)}')" class="text-red-400 hover:text-red-300 text-xs ml-2">×</button>
+                </div>`;
             }).join('');
             document.getElementById('catalogue-notes').innerHTML = notesHtml || '<span class="text-gray-500">No architecture notes</span>';
 
-            // Key Concepts
-            const concepts = cat.key_concepts || {};
-            const conceptsHtml = Object.entries(concepts).map(([term, def]) =>
-                `<div class="bg-brand-dark/50 rounded p-3"><span class="text-brand-cyan font-medium">${escapeHtml(term)}</span><span class="text-gray-400">: ${escapeHtml(def)}</span></div>`
-            ).join('');
-            document.getElementById('catalogue-concepts').innerHTML = conceptsHtml || '<span class="text-gray-500">No concepts defined</span>';
+            // Conventions
+            const conventions = cat.conventions || [];
+            const conventionColors = {
+                'naming': 'border-blue-400',
+                'style': 'border-green-400',
+                'structure': 'border-purple-400',
+                'testing': 'border-orange-400',
+                'git': 'border-cyan-400'
+            };
+            const conventionsHtml = conventions.map(c => {
+                const color = conventionColors[c.category] || 'border-gray-400';
+                return `<div class="border-l-2 ${color} bg-brand-dark/50 pl-3 py-2 rounded-r flex justify-between">
+                    <div class="flex-1">
+                        <div class="text-sm font-medium text-green-300">${escapeHtml(c.title)} <span class="text-xs text-gray-500">[${c.category}]</span></div>
+                        <div class="text-xs text-gray-300">${escapeHtml(c.rule)}</div>
+                        ${c.examples && c.examples.length > 0 ? `<div class="text-xs text-gray-500 mt-1 font-mono">${c.examples.join(' | ')}</div>` : ''}
+                    </div>
+                    <button onclick="removeCatalogueItem('convention', '${escapeHtml(c.title)}')" class="text-red-400 hover:text-red-300 text-xs ml-2">×</button>
+                </div>`;
+            }).join('');
+            document.getElementById('catalogue-conventions').innerHTML = conventionsHtml || '<span class="text-gray-500">No conventions defined</span>';
 
-            // Commands
-            const testCmds = (cat.test_commands || []).map(c => `<div class="text-gray-300">$ ${escapeHtml(c)}</div>`).join('');
-            document.getElementById('catalogue-test-cmds').innerHTML = testCmds || '<span class="text-gray-500">None</span>';
+            // Decisions with rationale
+            const decisions = cat.decisions || [];
+            const decisionsHtml = decisions.map(d => {
+                const date = d.date ? new Date(d.date).toLocaleDateString() : '';
+                return `<div class="bg-purple-500/10 border border-purple-500/30 rounded p-3 flex justify-between">
+                    <div class="flex-1">
+                        <div class="text-sm font-medium text-purple-300">${escapeHtml(d.title)}</div>
+                        <div class="text-xs text-gray-300 mt-1">${escapeHtml(d.decision)}</div>
+                        <div class="text-xs text-gray-400 mt-1"><strong>Rationale:</strong> ${escapeHtml(d.rationale)}</div>
+                        ${d.alternatives && d.alternatives.length > 0 ? `<div class="text-xs text-gray-500 mt-1">Alternatives considered: ${d.alternatives.join(', ')}</div>` : ''}
+                        ${date ? `<div class="text-xs text-gray-600 mt-1">${date}</div>` : ''}
+                    </div>
+                    <button onclick="removeCatalogueItem('decision', '${escapeHtml(d.title)}')" class="text-red-400 hover:text-red-300 text-xs ml-2">×</button>
+                </div>`;
+            }).join('');
+            document.getElementById('catalogue-decisions').innerHTML = decisionsHtml || '<span class="text-gray-500">No decisions documented</span>';
 
-            const buildCmds = (cat.build_commands || []).map(c => `<div class="text-gray-300">$ ${escapeHtml(c)}</div>`).join('');
-            document.getElementById('catalogue-build-cmds').innerHTML = buildCmds || '<span class="text-gray-500">None</span>';
+            // File Couplings
+            const couplings = cat.file_couplings || [];
+            const couplingsHtml = couplings.map((c, idx) => {
+                const arrow = c.direction === 'bidirectional' ? '↔' : '→';
+                return `<div class="bg-orange-500/10 border border-orange-500/30 rounded p-2 flex justify-between items-center">
+                    <div>
+                        <span class="font-mono text-orange-300 text-sm">${c.files.join(` ${arrow} `)}</span>
+                        <span class="text-xs text-gray-400 ml-2">${escapeHtml(c.reason)}</span>
+                    </div>
+                    <button onclick="removeCatalogueItem('coupling', '${idx}')" class="text-red-400 hover:text-red-300 text-xs ml-2">×</button>
+                </div>`;
+            }).join('');
+            document.getElementById('catalogue-couplings').innerHTML = couplingsHtml || '<span class="text-gray-500">No file couplings defined</span>';
+
+            // Error Patterns
+            const errors = cat.error_patterns || [];
+            const errorsHtml = errors.map(e => {
+                return `<div class="bg-yellow-500/10 border border-yellow-500/30 rounded p-3 flex justify-between">
+                    <div class="flex-1">
+                        <div class="font-mono text-yellow-300 text-sm">${escapeHtml(e.error_signature)}</div>
+                        <div class="text-xs text-gray-400 mt-1"><strong>Cause:</strong> ${escapeHtml(e.cause)}</div>
+                        <div class="text-xs text-green-400 mt-1"><strong>Solution:</strong> ${escapeHtml(e.solution)}</div>
+                        ${e.related_files && e.related_files.length > 0 ? `<div class="text-xs text-gray-500 mt-1">Files: ${e.related_files.join(', ')}</div>` : ''}
+                    </div>
+                    <button onclick="removeCatalogueItem('error', '${escapeHtml(e.error_signature)}')" class="text-red-400 hover:text-red-300 text-xs ml-2">×</button>
+                </div>`;
+            }).join('');
+            document.getElementById('catalogue-errors').innerHTML = errorsHtml || '<span class="text-gray-500">No error patterns documented</span>';
+        }
+
+        // ================================================================
+        // Catalogue Item Management
+        // ================================================================
+
+        async function removeCatalogueItem(itemType, identifier) {
+            if (!currentProject) return;
+            if (!confirm(`Remove this ${itemType} item?`)) return;
+
+            const result = await fetchAPI(`/api/projects/${currentProject.project_id}/catalogue/${itemType}/${encodeURIComponent(identifier)}`, {
+                method: 'DELETE'
+            });
+
+            if (result && !result.error) {
+                await loadProjects();
+                currentProject = projects.find(p => p.project_id === currentProject.project_id);
+                renderCatalogue();
+            } else {
+                alert(result?.error || 'Failed to remove item');
+            }
+        }
+
+        function showAddItemModal(itemType) {
+            // Simple prompt-based adding for now
+            // In a production app, you'd show a proper modal form
+            let data = null;
+
+            switch(itemType) {
+                case 'dependency':
+                    const depType = prompt('Type (framework/library/tool):');
+                    if (!depType) return;
+                    const depName = prompt('Name:');
+                    if (!depName) return;
+                    const depPurpose = prompt('Purpose:');
+                    data = { name: depName, purpose: depPurpose || '' };
+                    itemType = depType;
+                    break;
+                case 'security':
+                    const secTitle = prompt('Title:');
+                    if (!secTitle) return;
+                    const secDesc = prompt('Description:');
+                    const secSeverity = prompt('Severity (info/low/medium/high/critical):') || 'info';
+                    data = { title: secTitle, description: secDesc || '', severity: secSeverity, status: 'open' };
+                    break;
+                case 'arch':
+                    const archTitle = prompt('Title:');
+                    if (!archTitle) return;
+                    const archDesc = prompt('Description:');
+                    const archCat = prompt('Category (architecture/convention/gotcha/security/performance):') || 'architecture';
+                    data = { title: archTitle, description: archDesc || '', category: archCat };
+                    break;
+                case 'convention':
+                    const convTitle = prompt('Title:');
+                    if (!convTitle) return;
+                    const convRule = prompt('Rule:');
+                    const convCat = prompt('Category (naming/style/structure/testing/git):') || 'style';
+                    data = { title: convTitle, rule: convRule || '', category: convCat };
+                    break;
+                case 'decision':
+                    const decTitle = prompt('Title:');
+                    if (!decTitle) return;
+                    const decDecision = prompt('Decision:');
+                    const decRationale = prompt('Rationale:');
+                    data = { title: decTitle, decision: decDecision || '', rationale: decRationale || '' };
+                    break;
+                case 'coupling':
+                    const files = prompt('Files (comma-separated):');
+                    if (!files) return;
+                    const reason = prompt('Reason:');
+                    data = { files: files.split(',').map(f => f.trim()), reason: reason || '' };
+                    break;
+                case 'error':
+                    const errSig = prompt('Error signature:');
+                    if (!errSig) return;
+                    const cause = prompt('Cause:');
+                    const solution = prompt('Solution:');
+                    data = { error_signature: errSig, cause: cause || '', solution: solution || '' };
+                    break;
+            }
+
+            if (data) {
+                addCatalogueItem(itemType, data);
+            }
+        }
+
+        async function addCatalogueItem(itemType, data) {
+            if (!currentProject) return;
+
+            const result = await fetchAPI(`/api/projects/${currentProject.project_id}/catalogue/${itemType}`, {
+                method: 'POST',
+                body: JSON.stringify(data)
+            });
+
+            if (result && !result.error) {
+                await loadProjects();
+                currentProject = projects.find(p => p.project_id === currentProject.project_id);
+                renderCatalogue();
+            } else {
+                alert(result?.error || 'Failed to add item');
+            }
         }
 
         // ================================================================

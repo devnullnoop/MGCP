@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 telemetry: TelemetryLogger | None = None
 store: LessonStore | None = None
 vector_store: VectorStore | None = None
+catalogue_vector = None  # CatalogueVectorStore, initialized lazily
 graph: LessonGraph | None = None
 
 
@@ -84,11 +85,19 @@ async def ensure_initialized():
 
 @app.get("/api/health")
 async def health_check() -> dict[str, Any]:
-    """Health check endpoint."""
+    """Health check endpoint with detailed system status."""
     await ensure_initialized()
+
+    lessons = await store.get_all_lessons() if store else []
+    projects = await store.get_all_project_contexts() if store else []
+
     return {
         "status": "healthy",
-        "lessons_loaded": len(await store.get_all_lessons()) if store else 0,
+        "lessons_count": len(lessons),
+        "projects_count": len(projects),
+        "vector_store": "connected" if vector_store else "not initialized",
+        "catalogue_store": "connected" if catalogue_vector else "not initialized",
+        "telemetry": "enabled" if telemetry else "disabled",
     }
 
 
@@ -349,6 +358,156 @@ async def delete_project(project_id: str) -> dict[str, Any]:
         await conn.close()
 
     return {"deleted": project_id}
+
+
+# ============================================================================
+# Project Catalogue API
+# ============================================================================
+
+
+@app.get("/api/projects/{project_id}/catalogue")
+async def get_project_catalogue(project_id: str) -> dict[str, Any]:
+    """Get full catalogue for a project."""
+    await ensure_initialized()
+
+    ctx = await store.get_project_context(project_id)
+    if not ctx:
+        return {"error": "Project not found"}
+
+    return ctx.catalogue.model_dump(mode="json")
+
+
+@app.post("/api/projects/{project_id}/catalogue/{item_type}")
+async def add_catalogue_item(project_id: str, item_type: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Add a catalogue item to a project.
+
+    item_type: arch, security, framework, library, tool, convention, coupling, decision, error
+    """
+    await ensure_initialized()
+    from .models import (
+        ArchitecturalNote,
+        Convention,
+        Decision,
+        Dependency,
+        ErrorPattern,
+        FileCoupling,
+        SecurityNote,
+    )
+
+    ctx = await store.get_project_context(project_id)
+    if not ctx:
+        return {"error": "Project not found"}
+
+    cat = ctx.catalogue
+    item = None
+
+    if item_type == "arch":
+        item = ArchitecturalNote(**data)
+        cat.architecture_notes.append(item)
+    elif item_type == "security":
+        item = SecurityNote(**data)
+        cat.security_notes.append(item)
+    elif item_type == "framework":
+        item = Dependency(**data)
+        cat.frameworks.append(item)
+    elif item_type == "library":
+        item = Dependency(**data)
+        cat.libraries.append(item)
+    elif item_type == "tool":
+        item = Dependency(**data)
+        cat.tools.append(item)
+    elif item_type == "convention":
+        item = Convention(**data)
+        cat.conventions.append(item)
+    elif item_type == "coupling":
+        item = FileCoupling(**data)
+        cat.file_couplings.append(item)
+    elif item_type == "decision":
+        item = Decision(**data)
+        cat.decisions.append(item)
+    elif item_type == "error":
+        item = ErrorPattern(**data)
+        cat.error_patterns.append(item)
+    else:
+        return {"error": f"Unknown item type: {item_type}"}
+
+    await store.save_project_context(ctx)
+
+    # Broadcast update via WebSocket
+    if telemetry:
+        await telemetry.log_event(
+            "catalogue_update",
+            {"project_id": project_id, "item_type": item_type, "action": "add"},
+        )
+
+    return {"added": item.model_dump(mode="json") if item else None}
+
+
+@app.delete("/api/projects/{project_id}/catalogue/{item_type}/{identifier}")
+async def remove_catalogue_item_endpoint(
+    project_id: str, item_type: str, identifier: str
+) -> dict[str, Any]:
+    """Remove a catalogue item from a project.
+
+    identifier: title (for notes/decisions), name (for dependencies), or index (for couplings)
+    """
+    await ensure_initialized()
+
+    ctx = await store.get_project_context(project_id)
+    if not ctx:
+        return {"error": "Project not found"}
+
+    cat = ctx.catalogue
+    removed = False
+
+    if item_type == "arch":
+        original_len = len(cat.architecture_notes)
+        cat.architecture_notes = [n for n in cat.architecture_notes if n.title != identifier]
+        removed = len(cat.architecture_notes) < original_len
+    elif item_type == "security":
+        original_len = len(cat.security_notes)
+        cat.security_notes = [n for n in cat.security_notes if n.title != identifier]
+        removed = len(cat.security_notes) < original_len
+    elif item_type == "framework":
+        original_len = len(cat.frameworks)
+        cat.frameworks = [d for d in cat.frameworks if d.name != identifier]
+        removed = len(cat.frameworks) < original_len
+    elif item_type == "library":
+        original_len = len(cat.libraries)
+        cat.libraries = [d for d in cat.libraries if d.name != identifier]
+        removed = len(cat.libraries) < original_len
+    elif item_type == "tool":
+        original_len = len(cat.tools)
+        cat.tools = [d for d in cat.tools if d.name != identifier]
+        removed = len(cat.tools) < original_len
+    elif item_type == "convention":
+        original_len = len(cat.conventions)
+        cat.conventions = [c for c in cat.conventions if c.title != identifier]
+        removed = len(cat.conventions) < original_len
+    elif item_type == "coupling":
+        # For couplings, identifier is the index
+        try:
+            idx = int(identifier)
+            if 0 <= idx < len(cat.file_couplings):
+                cat.file_couplings.pop(idx)
+                removed = True
+        except ValueError:
+            pass
+    elif item_type == "decision":
+        original_len = len(cat.decisions)
+        cat.decisions = [d for d in cat.decisions if d.title != identifier]
+        removed = len(cat.decisions) < original_len
+    elif item_type == "error":
+        # For errors, match by error_signature
+        original_len = len(cat.error_patterns)
+        cat.error_patterns = [e for e in cat.error_patterns if e.error_signature != identifier]
+        removed = len(cat.error_patterns) < original_len
+
+    if removed:
+        await store.save_project_context(ctx)
+        return {"removed": identifier, "type": item_type}
+    else:
+        return {"error": f"Item not found: {identifier}"}
 
 
 # ============================================================================

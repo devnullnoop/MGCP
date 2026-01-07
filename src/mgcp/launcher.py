@@ -3,7 +3,6 @@
 import argparse
 import asyncio
 import logging
-import os
 import signal
 import subprocess
 import sys
@@ -21,6 +20,7 @@ logger = logging.getLogger(__name__)
 def run_web_server(host: str, port: int):
     """Run the web server for telemetry visualization."""
     import uvicorn
+
     from .web_server import app
 
     uvicorn.run(app, host=host, port=port, log_level="warning")
@@ -69,8 +69,8 @@ Examples:
     dash_parser.add_argument("--port", type=int, default=8765, help="Port to bind to")
     dash_parser.add_argument("--no-browser", action="store_true", help="Don't open browser")
 
-    # MCP command
-    mcp_parser = subparsers.add_parser("mcp", help="Start MCP server")
+    # MCP command (no extra args needed)
+    subparsers.add_parser("mcp", help="Start MCP server")
 
     # All command
     all_parser = subparsers.add_parser("all", help="Start dashboard and MCP server")
@@ -78,11 +78,11 @@ Examples:
     all_parser.add_argument("--dashboard-port", type=int, default=8765, help="Dashboard port")
     all_parser.add_argument("--no-browser", action="store_true", help="Don't open browser")
 
-    # Bootstrap command
-    bootstrap_parser = subparsers.add_parser("bootstrap", help="Seed initial lessons")
+    # Bootstrap command (no extra args needed)
+    subparsers.add_parser("bootstrap", help="Seed initial lessons")
 
-    # Status command
-    status_parser = subparsers.add_parser("status", help="Show system status")
+    # Status command (no extra args needed)
+    subparsers.add_parser("status", help="Show system status")
 
     args = parser.parse_args()
 
@@ -192,7 +192,6 @@ async def show_status():
 
     # Check paths
     print("\n  Paths:")
-    from pathlib import Path
     data_dir = Path.home() / ".mgcp"
     print(f"    Data directory: {data_dir}")
     print(f"    Exists: {data_dir.exists()}")

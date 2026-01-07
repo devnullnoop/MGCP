@@ -9,17 +9,14 @@ These tests verify the system handles failures gracefully:
 - Recovery from bad states
 """
 
-import json
-import os
 import sqlite3
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 from mgcp.graph import LessonGraph
-from mgcp.models import Lesson, ProjectContext, ProjectTodo
+from mgcp.models import Lesson
 from mgcp.persistence import LessonStore
 from mgcp.vector_store import VectorStore
 
@@ -136,7 +133,7 @@ class TestMissingFiles:
             # (behavior depends on implementation - could recreate or error)
             try:
                 await store.get_lesson("test")
-            except Exception as e:
+            except Exception:
                 # Should be a clear database error
                 assert True  # Any exception is acceptable here
 

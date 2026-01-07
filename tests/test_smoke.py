@@ -5,7 +5,6 @@ These tests verify that the system works at a basic level.
 They should be fast and catch obvious breakages.
 """
 
-import asyncio
 import subprocess
 import sys
 import tempfile
@@ -24,7 +23,7 @@ class TestImports:
 
     def test_import_models(self):
         """Models module can be imported."""
-        from mgcp.models import Lesson, ProjectContext, Example, Relationship
+        from mgcp.models import Lesson, ProjectContext
         assert Lesson is not None
         assert ProjectContext is not None
 
@@ -45,14 +44,14 @@ class TestImports:
 
     def test_import_data_ops(self):
         """Data ops module can be imported."""
-        from mgcp.data_ops import export_lessons, import_lessons, find_duplicates
+        from mgcp.data_ops import export_lessons, find_duplicates, import_lessons
         assert export_lessons is not None
         assert import_lessons is not None
         assert find_duplicates is not None
 
     def test_import_init_project(self):
         """Init project module can be imported."""
-        from mgcp.init_project import main, LLM_CLIENTS
+        from mgcp.init_project import LLM_CLIENTS, main
         assert main is not None
         assert len(LLM_CLIENTS) >= 8  # We support 8 clients
 

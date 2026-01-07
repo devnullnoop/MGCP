@@ -246,7 +246,10 @@ async def ensure_unique_project_path(db_path: str = DEFAULT_DB_PATH) -> bool:
             HAVING COUNT(*) > 1
         """)
         if await cursor.fetchone():
-            logger.warning("Cannot add UNIQUE constraint - duplicates still exist. Run deduplicate_project_contexts first.")
+            logger.warning(
+                "Cannot add UNIQUE constraint - duplicates still exist. "
+                "Run deduplicate_project_contexts first."
+            )
             return False
 
         # Recreate table with UNIQUE constraint

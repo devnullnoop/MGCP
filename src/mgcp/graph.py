@@ -1,6 +1,5 @@
 """Graph operations for MGCP lesson relationships using NetworkX."""
 
-from typing import Iterator
 
 import networkx as nx
 

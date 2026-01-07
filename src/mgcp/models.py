@@ -34,7 +34,10 @@ class Relationship(BaseModel):
     target: str = Field(..., description="ID of the related lesson")
     type: RelationshipType = Field(default="related", description="Type of relationship")
     weight: float = Field(default=0.5, ge=0.0, le=1.0, description="Strength of relationship 0-1")
-    context: list[str] = Field(default_factory=list, description="Contexts where this relationship applies (e.g., ['ui', 'debugging'])")
+    context: list[str] = Field(
+        default_factory=list,
+        description="Contexts where this applies (e.g., ['ui', 'debugging'])"
+    )
     bidirectional: bool = Field(default=True, description="Whether this relationship goes both ways")
 
 
@@ -52,7 +55,7 @@ class Lesson(BaseModel):
     last_used: datetime | None = Field(None, description="Last retrieval time")
     usage_count: int = Field(default=0, description="Times retrieved")
     tags: list[str] = Field(default_factory=list)
-    parent_id: str | None = Field(None, description="Primary parent lesson for hierarchy (deprecated, use relationships)")
+    parent_id: str | None = Field(None, description="Parent lesson (deprecated, use relationships)")
     related_ids: list[str] = Field(default_factory=list, description="Cross-links (deprecated, use relationships)")
     relationships: list[Relationship] = Field(default_factory=list, description="Typed relationships to other lessons")
 
@@ -252,7 +255,7 @@ class Workflow(BaseModel):
         lines = [
             f"## Workflow: {self.name}",
             f"{self.description}",
-            f"\n**Steps:**",
+            "\n**Steps:**",
         ]
         for step in sorted(self.steps, key=lambda s: s.order):
             lines.append(f"\n### Step {step.order}: {step.name}")
@@ -284,7 +287,7 @@ class ProjectCatalogue(BaseModel):
     patterns_used: list[str] = Field(default_factory=list, description="Design patterns (e.g., 'MVC', 'Repository')")
 
     # Development
-    entry_points: dict[str, str] = Field(default_factory=dict, description="Key entry points (e.g., {'server': 'src/server.py'})")
+    entry_points: dict[str, str] = Field(default_factory=dict, description="Entry points")
     test_commands: list[str] = Field(default_factory=list, description="How to run tests")
     build_commands: list[str] = Field(default_factory=list, description="How to build/deploy")
 
@@ -293,7 +296,7 @@ class ProjectCatalogue(BaseModel):
     known_issues: list[str] = Field(default_factory=list, description="Known bugs or limitations")
 
     # Quick reference
-    key_concepts: dict[str, str] = Field(default_factory=dict, description="Domain concepts explained (e.g., {'Lesson': 'A reusable piece of knowledge...'})")
+    key_concepts: dict[str, str] = Field(default_factory=dict, description="Domain concepts")
 
     # LLM-optimized knowledge (new)
     conventions: list[Convention] = Field(default_factory=list, description="Coding style rules and conventions")
@@ -302,7 +305,7 @@ class ProjectCatalogue(BaseModel):
     error_patterns: list[ErrorPattern] = Field(default_factory=list, description="Common errors and solutions")
 
     # Flexible custom items (extensible)
-    custom_items: list["GenericCatalogueItem"] = Field(default_factory=list, description="Custom catalogue items of any type")
+    custom_items: list["GenericCatalogueItem"] = Field(default_factory=list, description="Custom items")
 
 
 class ProjectContext(BaseModel):

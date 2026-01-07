@@ -5,12 +5,10 @@ Uses FastMCP for cleaner API - verified against official SDK docs.
 https://github.com/modelcontextprotocol/python-sdk
 """
 
-import asyncio
 import json
 import logging
 import time
 from datetime import UTC, datetime
-from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -22,7 +20,6 @@ from .models import (
     Decision,
     Dependency,
     ErrorPattern,
-    Example,
     FileCoupling,
     GenericCatalogueItem,
     Lesson,
@@ -491,7 +488,6 @@ async def get_project_context(project_path: str) -> str:
     Args:
         project_path: Absolute path to the project root directory
     """
-    import hashlib
 
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
 
@@ -604,7 +600,6 @@ async def add_project_todo(
         )
 
     # Add todo
-    from .models import ProjectTodo
     new_todo = ProjectTodo(
         content=todo,
         priority=min(max(priority, 0), 9),
@@ -778,7 +773,7 @@ async def search_catalogue(
     Args:
         query: What to search for (e.g., "authentication", "security vulnerability")
         project_path: Limit to specific project (empty for all projects)
-        item_types: Comma-separated filter: arch, security, framework, library, tool, convention, coupling, decision, error
+        item_types: Comma-separated filter (arch, security, framework, library, tool, etc.)
         limit: Max results (default 10)
     """
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
@@ -1189,12 +1184,18 @@ async def remove_catalogue_item(
         original_len = len(cat.error_patterns)
         cat.error_patterns = [e for e in cat.error_patterns if not e.error_signature.startswith(identifier)]
         removed = len(cat.error_patterns) < original_len
-    elif item_type == "custom" or item_type not in ("arch", "security", "framework", "library", "tool", "convention", "coupling", "decision", "error"):
+    elif item_type == "custom" or item_type not in (
+        "arch", "security", "framework", "library", "tool", "convention",
+        "coupling", "decision", "error"
+    ):
         # Handle custom items - identifier can be "type:title" or just "title"
         if ":" in identifier:
             custom_type, custom_title = identifier.split(":", 1)
             original_len = len(cat.custom_items)
-            cat.custom_items = [i for i in cat.custom_items if not (i.item_type == custom_type and i.title == custom_title)]
+            cat.custom_items = [
+                i for i in cat.custom_items
+                if not (i.item_type == custom_type and i.title == custom_title)
+            ]
             removed = len(cat.custom_items) < original_len
         else:
             # Search by title only

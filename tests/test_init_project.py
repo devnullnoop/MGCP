@@ -6,11 +6,12 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 from mgcp.init_project import (
+    HOOK_SCRIPT,
+    HOOK_SETTINGS,
     LLM_CLIENTS,
     LLMClient,
     configure_client,
@@ -19,10 +20,7 @@ from mgcp.init_project import (
     get_mgcp_install_dir,
     get_mgcp_python_path,
     init_claude_hooks,
-    HOOK_SCRIPT,
-    HOOK_SETTINGS,
 )
-
 
 # ============================================================================
 # Fixtures
@@ -61,7 +59,6 @@ def mock_config_paths(temp_home, monkeypatch):
     # Patch each client's get_config_path function
     for client_name, path in paths.items():
         client = LLM_CLIENTS[client_name]
-        original_func = client.get_config_path
         # Create a closure to capture the path
         def make_path_func(p):
             return lambda: p

@@ -11,7 +11,6 @@ These tests verify the system performs acceptably under load:
 import asyncio
 import gc
 import random
-import string
 import tempfile
 import time
 from pathlib import Path
@@ -431,7 +430,6 @@ class TestMemoryUsage:
 
     def _get_memory_usage(self) -> int:
         """Get current memory usage in bytes."""
-        import sys
 
         # This is a rough estimate - actual memory profiling would need tracemalloc
         # For now, use sys.getsizeof on tracked objects

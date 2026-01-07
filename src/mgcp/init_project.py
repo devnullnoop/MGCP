@@ -3,9 +3,9 @@
 import json
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 
 def get_mgcp_python_path() -> str:
@@ -78,11 +78,12 @@ def _continue_path() -> Path:
 
 def _cline_path() -> Path:
     """Cline stores MCP config in VS Code settings directory."""
+    cline_subpath = Path("globalStorage") / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json"
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json"
+        return Path.home() / "Library" / "Application Support" / "Code" / "User" / cline_subpath
     elif sys.platform == "win32":
-        return Path(os.environ.get("APPDATA", "")) / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json"
-    return Path.home() / ".config" / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json"
+        return Path(os.environ.get("APPDATA", "")) / "Code" / "User" / cline_subpath
+    return Path.home() / ".config" / "Code" / "User" / cline_subpath
 
 
 def _zed_path() -> Path:
@@ -105,11 +106,12 @@ def _claude_desktop_path() -> Path:
 
 def _cody_path() -> Path:
     """Sourcegraph Cody VS Code extension config."""
+    cody_subpath = Path("globalStorage") / "sourcegraph.cody-ai" / "cody_mcp_settings.json"
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Code" / "User" / "globalStorage" / "sourcegraph.cody-ai" / "cody_mcp_settings.json"
+        return Path.home() / "Library" / "Application Support" / "Code" / "User" / cody_subpath
     elif sys.platform == "win32":
-        return Path(os.environ.get("APPDATA", "")) / "Code" / "User" / "globalStorage" / "sourcegraph.cody-ai" / "cody_mcp_settings.json"
-    return Path.home() / ".config" / "Code" / "User" / "globalStorage" / "sourcegraph.cody-ai" / "cody_mcp_settings.json"
+        return Path(os.environ.get("APPDATA", "")) / "Code" / "User" / cody_subpath
+    return Path.home() / ".config" / "Code" / "User" / cody_subpath
 
 
 # Registry of supported LLM clients
@@ -335,7 +337,8 @@ def configure_client(client: LLMClient, dry_run: bool = False) -> dict:
             if not dry_run:
                 settings_path.write_text(json.dumps(settings, indent=2) + "\n")
             result["status"] = "would_update" if dry_run else "updated"
-            result["message"] = "Would update MGCP server configuration" if dry_run else "Updated MGCP server configuration"
+            msg = "Would update MGCP server configuration" if dry_run else "Updated MGCP server configuration"
+            result["message"] = msg
         else:
             result["status"] = "unchanged"
             result["message"] = "MGCP already configured"
@@ -613,7 +616,7 @@ def verify_setup() -> dict:
 
     # Check MGCP can be imported
     try:
-        import mgcp.server
+        import mgcp.server  # noqa: F401 - intentionally checking importability
         results["mgcp_importable"] = True
     except ImportError as e:
         results["errors"].append(f"Cannot import mgcp.server: {e}")
@@ -850,7 +853,7 @@ For Claude Code users, this also creates project hooks:
 
     if dry_run:
         print("\n  DRY RUN - no changes will be made\n")
-    print(f"  Initializing MGCP")
+    print("  Initializing MGCP")
     print(f"  Project: {project_dir}\n")
 
     # Configure each client

@@ -6,7 +6,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .models import Lesson, ProjectContext
+from .models import Lesson
 from .persistence import LessonStore
 from .vector_store import VectorStore
 
@@ -374,7 +374,7 @@ def main_import():
         print(f"  Renamed: {result['renamed']}")
 
         if result['errors']:
-            print(f"\n  Errors:")
+            print("\n  Errors:")
             for e in result['errors']:
                 print(f"    - {e}")
 

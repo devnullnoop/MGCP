@@ -1,6 +1,5 @@
 """Tests for database migrations."""
 
-import asyncio
 import hashlib
 import json
 import tempfile

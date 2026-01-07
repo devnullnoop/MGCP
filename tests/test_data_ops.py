@@ -1,7 +1,6 @@
 """Tests for data operations - export, import, duplicates."""
 
 import json
-import os
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,7 +15,6 @@ from mgcp.data_ops import (
     suggest_tags,
 )
 from mgcp.models import Example, Lesson, ProjectContext, ProjectTodo, Relationship
-
 
 # =============================================================================
 # Fixtures

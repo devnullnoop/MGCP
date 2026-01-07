@@ -1,9 +1,8 @@
 """MGCP web server for telemetry visualization and REST API."""
 
 import asyncio
-import json
+import hashlib
 import logging
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -14,6 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .graph import LessonGraph
+from .models import ProjectContext, ProjectTodo
 from .persistence import LessonStore
 from .telemetry import TelemetryLogger
 from .vector_store import VectorStore
@@ -320,9 +320,6 @@ async def get_common_queries(limit: int = 20) -> list[dict[str, Any]]:
 # ============================================================================
 # Project Context API
 # ============================================================================
-
-from .models import ProjectContext, ProjectTodo
-import hashlib
 
 
 @app.get("/api/projects")
@@ -690,7 +687,7 @@ async def websocket_events(websocket: WebSocket):
                     "session_id": event.session_id,
                     "payload": event.payload,
                 })
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Send heartbeat to keep connection alive
                 await websocket.send_json({"type": "heartbeat"})
     except WebSocketDisconnect:

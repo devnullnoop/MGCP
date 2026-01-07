@@ -8,19 +8,14 @@ from pathlib import Path
 import aiosqlite
 
 from .models import (
-    ArchitecturalNote,
-    Dependency,
     Example,
     Lesson,
-    LessonSummary,
     ProjectCatalogue,
     ProjectContext,
     ProjectTodo,
     Relationship,
-    SecurityNote,
     Workflow,
     WorkflowStep,
-    WorkflowStepLesson,
 )
 
 DEFAULT_DB_PATH = "~/.mgcp/lessons.db"
@@ -218,7 +213,7 @@ class LessonStore:
         try:
             # SQLite JSON query for tag matching
             placeholders = " OR ".join(
-                [f"EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)" for _ in tags]
+                ["EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)" for _ in tags]
             )
             cursor = await conn.execute(
                 f"SELECT * FROM lessons WHERE {placeholders}", tags

@@ -2,11 +2,10 @@
 
 import asyncio
 
+from .graph import LessonGraph
 from .models import Example, Lesson, Relationship, Workflow, WorkflowStep, WorkflowStepLesson
 from .persistence import LessonStore
 from .vector_store import VectorStore
-from .graph import LessonGraph
-
 
 # =============================================================================
 # BOOTSTRAP LESSONS

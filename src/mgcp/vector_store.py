@@ -6,7 +6,7 @@ from pathlib import Path
 import chromadb
 from chromadb.config import Settings
 
-from .models import Lesson, QueryResult
+from .models import Lesson
 
 DEFAULT_CHROMA_PATH = "~/.mgcp/chroma"
 

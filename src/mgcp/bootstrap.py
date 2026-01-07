@@ -2,7 +2,7 @@
 
 import asyncio
 
-from .models import Example, Lesson, Workflow, WorkflowStep, WorkflowStepLesson
+from .models import Example, Lesson, Relationship, Workflow, WorkflowStep, WorkflowStepLesson
 from .persistence import LessonStore
 from .vector_store import VectorStore
 from .graph import LessonGraph
@@ -540,6 +540,43 @@ BUG_FIX_WORKFLOW = Workflow(
 DEFAULT_WORKFLOWS = [FEATURE_DEVELOPMENT_WORKFLOW, BUG_FIX_WORKFLOW]
 
 
+# =============================================================================
+# LESSON RELATIONSHIPS
+# Cross-links between lessons to demonstrate graph connectivity
+# =============================================================================
+
+LESSON_RELATIONSHIPS = [
+    # Prerequisite relationships (A must be understood before B)
+    ("api-research", "check-api-versions", "prerequisite", "Must understand research process before checking versions"),
+    ("api-research", "verify-api-response", "prerequisite", "Research APIs before logging responses"),
+    ("testing", "test-known-inputs", "prerequisite", "Understand testing principles before specific patterns"),
+    ("testing", "test-edge-cases", "prerequisite", "General testing before edge case specifics"),
+    ("error-handling", "specific-exceptions", "prerequisite", "Understand error handling before exception specifics"),
+    ("error-handling", "error-context", "prerequisite", "General handling before context patterns"),
+
+    # Complements relationships (A and B work together)
+    ("check-api-versions", "verify-api-response", "complements", "Version checking and response logging work together"),
+    ("test-known-inputs", "test-edge-cases", "complements", "Known inputs and edge cases are complementary tests"),
+    ("specific-exceptions", "error-context", "complements", "Specific exceptions with contextual messages"),
+    ("verify-before-assert", "error-context", "complements", "Verification with informative error messages"),
+
+    # Related relationships (A and B cover similar topics)
+    ("verification", "testing", "related", "Both concern validating correctness"),
+    ("verification", "api-research", "related", "Both concern verifying before acting"),
+    ("testing", "error-handling", "related", "Testing often reveals error handling needs"),
+    ("check-api-versions", "check-breaking-changes", "related", "Both concern dependency management"),
+    ("verify-file-paths", "verify-calculations", "related", "Both are verification patterns"),
+
+    # Sequence relationships (After A, often do B)
+    ("api-research", "testing", "sequence_next", "After research, test your understanding"),
+    ("test-known-inputs", "verify-before-assert", "sequence_next", "After testing, add runtime verification"),
+    ("specific-exceptions", "test-edge-cases", "sequence_next", "After exception handling, test edge cases"),
+
+    # Alternative relationships (A or B can solve similar problems)
+    ("verify-before-assert", "verify-calculations", "alternative", "Different verification approaches"),
+]
+
+
 async def seed_database() -> None:
     """Seed the database with bootstrap lessons and workflows."""
     store = LessonStore()
@@ -587,6 +624,69 @@ async def seed_database() -> None:
 
     print(f"\nWorkflows: {wf_added} added, {wf_skipped} skipped")
     print(f"Total workflows in database: {len(await store.get_all_workflows())}")
+
+    # Seed lesson relationships
+    print("\nSeeding lesson relationships...")
+
+    rel_added = 0
+    rel_skipped = 0
+
+    for source_id, target_id, rel_type, context in LESSON_RELATIONSHIPS:
+        source = await store.get_lesson(source_id)
+        target = await store.get_lesson(target_id)
+
+        if not source or not target:
+            print(f"  Skipping {source_id} -> {target_id} (lesson not found)")
+            rel_skipped += 1
+            continue
+
+        # Check if relationship already exists
+        existing = [r for r in source.relationships if r.target == target_id and r.type == rel_type]
+        if existing:
+            rel_skipped += 1
+            continue
+
+        # Add relationship to source lesson
+        new_rel = Relationship(
+            target=target_id,
+            type=rel_type,
+            weight=0.7,
+            context=[context],
+            bidirectional=True,
+        )
+        source.relationships.append(new_rel)
+        if target_id not in source.related_ids:
+            source.related_ids.append(target_id)
+        await store.update_lesson(source)
+
+        # Add reverse relationship to target lesson
+        reverse_type = rel_type
+        if rel_type == "prerequisite":
+            reverse_type = "sequence_next"
+        elif rel_type == "sequence_next":
+            reverse_type = "prerequisite"
+
+        reverse_rel = Relationship(
+            target=source_id,
+            type=reverse_type,
+            weight=0.7,
+            context=[context],
+            bidirectional=True,
+        )
+        if source_id not in [r.target for r in target.relationships]:
+            target.relationships.append(reverse_rel)
+            if source_id not in target.related_ids:
+                target.related_ids.append(source_id)
+            await store.update_lesson(target)
+
+        # Update graph
+        graph.add_lesson(source)
+        graph.add_lesson(target)
+
+        print(f"  Added {source_id} --[{rel_type}]--> {target_id}")
+        rel_added += 1
+
+    print(f"\nRelationships: {rel_added} added, {rel_skipped} skipped")
 
 
 def main():

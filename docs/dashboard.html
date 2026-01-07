@@ -1127,6 +1127,20 @@
                 nodePositions[d.id] = { x: d.x, y: d.y, data: d };
             });
 
+            // Build typed relationship map (non-parent links)
+            const typedRelations = {};
+            graphData.links.forEach(link => {
+                const source = link.source.id || link.source;
+                const target = link.target.id || link.target;
+                const relType = link.relation || 'parent';
+                if (relType !== 'parent') {
+                    if (!typedRelations[source]) typedRelations[source] = [];
+                    typedRelations[source].push({ target, relType, link });
+                    if (!typedRelations[target]) typedRelations[target] = [];
+                    typedRelations[target].push({ target: source, relType, link });
+                }
+            });
+
             // Fire each node in sequence along the path
             path.forEach((nodeId, index) => {
                 const pos = nodePositions[nodeId];
@@ -1219,6 +1233,75 @@
                                     .attr("stroke-opacity", d => 0.4 + (d.weight || 0.5) * 0.4);
                             }
                         }
+                    }
+
+                    // === SPIDER EFFECT: At leaf node, cascade through typed relationships ===
+                    if (index === path.length - 1) {
+                        const relations = typedRelations[nodeId] || [];
+                        relations.forEach((rel, relIndex) => {
+                            const targetPos = nodePositions[rel.target];
+                            if (!targetPos) return;
+
+                            const spiderDelay = 200 + (relIndex * 150);
+
+                            setTimeout(() => {
+                                const pulseLayer = g.select(".pulse-layer");
+                                if (pulseLayer.node()) {
+                                    // Get color for this relationship type
+                                    const relColor = getLinkColor(rel.relType);
+
+                                    // Create traveling pulse along relationship edge
+                                    const pulse = pulseLayer.append("circle")
+                                        .attr("cx", pos.x)
+                                        .attr("cy", pos.y)
+                                        .attr("r", 6)
+                                        .attr("fill", relColor)
+                                        .attr("filter", "url(#neural-glow)")
+                                        .attr("opacity", 1);
+
+                                    pulse.transition()
+                                        .duration(350)
+                                        .attr("cx", targetPos.x)
+                                        .attr("cy", targetPos.y)
+                                        .attr("r", 3)
+                                        .attr("opacity", 0)
+                                        .remove();
+
+                                    // Flash the typed relationship edge with its color
+                                    g.select(".link-layer")
+                                        .selectAll("line")
+                                        .filter(d => {
+                                            const s = d.source.id || d.source;
+                                            const t = d.target.id || d.target;
+                                            return (s === nodeId && t === rel.target) || (s === rel.target && t === nodeId);
+                                        })
+                                        .transition()
+                                        .duration(100)
+                                        .attr("stroke", relColor)
+                                        .attr("stroke-width", 5)
+                                        .attr("stroke-opacity", 1)
+                                        .transition()
+                                        .duration(700)
+                                        .attr("stroke", d => getLinkColor(d.relation))
+                                        .attr("stroke-width", d => 1 + (d.weight || 0.5) * 2)
+                                        .attr("stroke-opacity", d => 0.4 + (d.weight || 0.5) * 0.4);
+
+                                    // Fire the related node (secondary activation with relationship color)
+                                    window.graphNode.filter(d => d.id === rel.target)
+                                        .select("circle")
+                                        .attr("filter", "url(#neural-glow)")
+                                        .transition()
+                                        .duration(150)
+                                        .attr("fill", relColor)
+                                        .attr("r", d => (d.type === "root" ? 25 : d.type === "category" ? 20 : 15) * 1.3)
+                                        .transition()
+                                        .duration(400)
+                                        .attr("r", d => d.type === "root" ? 25 : d.type === "category" ? 20 : 15)
+                                        .attr("fill", d => getNodeColor(d))
+                                        .attr("filter", null);
+                                }
+                            }, spiderDelay);
+                        });
                     }
                 }, delay);
             });

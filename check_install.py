@@ -30,10 +30,12 @@ def get_pip_version():
 
 
 def check_python_version():
-    """Check Python version is 3.11+."""
+    """Check Python version is 3.11-3.13 (best compatibility)."""
     version = sys.version_info
     if version < (3, 11):
         return False, f"Python 3.11+ required, found {version.major}.{version.minor}"
+    if version >= (3, 14):
+        return False, f"Python 3.14+ not yet supported (found {version.major}.{version.minor}) - use Python 3.11, 3.12, or 3.13"
     return True, f"Python {version.major}.{version.minor}.{version.micro}"
 
 
@@ -61,10 +63,10 @@ def check_pyproject():
 
 
 def upgrade_pip():
-    """Upgrade pip to latest version."""
-    print("\n📦 Upgrading pip...")
+    """Upgrade pip, setuptools, and wheel to latest versions."""
+    print("\n📦 Upgrading pip, setuptools, and wheel...")
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--upgrade", "pip"],
+        [sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
         capture_output=True,
         text=True,
     )
@@ -74,6 +76,22 @@ def upgrade_pip():
         return True
     else:
         print(f"   ❌ Failed: {result.stderr}")
+        return False
+
+
+def install_numpy_first():
+    """Install numpy explicitly first to avoid build issues."""
+    print("\n📦 Pre-installing numpy (avoids build issues on Intel Macs)...")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "numpy>=1.26.0,<2.0"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        print("   ✅ numpy installed")
+        return True
+    else:
+        print(f"   ❌ numpy install failed: {result.stderr}")
         return False
 
 
@@ -160,6 +178,18 @@ def main():
                 response = input("   Continue anyway? [y/N]: ")
                 if response.lower() != "y":
                     sys.exit(1)
+
+        # Always upgrade pip/setuptools/wheel first
+        upgrade_pip()
+
+        # Pre-install numpy to avoid build issues
+        if not install_numpy_first():
+            version = sys.version_info
+            print(f"\n❌ numpy installation failed on Python {version.major}.{version.minor}")
+            if version >= (3, 13):
+                print("   Python 3.13 requires numpy 2.0+, which may conflict with onnxruntime.")
+                print("   Recommended: Use Python 3.11 or 3.12 for best compatibility.")
+            sys.exit(1)
 
         # Proceed with installation
         if install_mgcp():

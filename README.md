@@ -1,7 +1,7 @@
 # MGCP - Memory Graph Control Protocol
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/Python-3.11--3.13-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
 > **⚠️ Alpha Software / Research Project** — This is a research project exploring ways to extend and improve LLM interactions through persistent memory. We're dogfooding it daily as we build it, which means things work but may change rapidly. APIs are not stable, data formats may evolve, and you might hit rough edges. If you're comfortable with that, welcome aboard! Feedback and bug reports are appreciated.
@@ -87,6 +87,12 @@ mgcp-bootstrap
 The `check_install.py` script verifies Python version, pip version, and virtual environment before installing. It will auto-fix pip if needed and provide clear guidance for any issues.
 
 > **Note**: Using a virtual environment avoids dependency conflicts with other packages.
+>
+> **Intel Mac / Older Systems**: If you see `metadata-generation-failed` errors, your pip is too old and trying to build packages from source. Run these commands in order:
+> ```bash
+> pip install --upgrade pip setuptools wheel
+> pip install -e ".[dev]"
+> ```
 >
 > **Conda users**: If you see `"setup.py" not found` errors, run `pip install --upgrade pip` first. Conda environments often have older pip versions that don't support modern Python packaging.
 

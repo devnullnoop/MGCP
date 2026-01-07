@@ -19,7 +19,7 @@ classifiers = [
 dependencies = [
     "mcp>=1.0.0",
     "networkx>=3.2",
-    "numpy<2.0",  # Pin to avoid onnxruntime compatibility issues with numpy 2.0
+    "numpy>=1.26.0,<2.0",  # Pin 1.26.x - has wheels for Intel+ARM Mac, avoids numpy 2.0/onnxruntime conflict
     "chromadb>=0.5.23",
     "sentence-transformers>=2.2.2",
     "pydantic>=2.5.0",

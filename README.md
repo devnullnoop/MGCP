@@ -58,15 +58,16 @@ cd MGCP
 python3 -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Upgrade pip (required for editable installs with pyproject.toml)
+# Option A: Use the install helper (recommended - checks for issues first)
+python check_install.py --install
+
+# Option B: Manual installation
 pip install --upgrade pip
-
-# Install MGCP
 pip install -e ".[dev]"
-
-# Seed initial lessons
 mgcp-bootstrap
 ```
+
+The `check_install.py` script verifies Python version, pip version, and virtual environment before installing. It will auto-fix pip if needed and provide clear guidance for any issues.
 
 > **Note**: Using a virtual environment avoids dependency conflicts with other packages.
 >

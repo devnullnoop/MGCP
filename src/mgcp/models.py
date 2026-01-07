@@ -179,6 +179,97 @@ class GenericCatalogueItem(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+# ============================================================================
+# WORKFLOW MODELS
+# ============================================================================
+
+
+class WorkflowStepLesson(BaseModel):
+    """A lesson attached to a workflow step with context."""
+
+    lesson_id: str = Field(..., description="ID of the linked lesson")
+    relevance: str = Field(..., description="Why this lesson applies to this step")
+    priority: int = Field(default=1, ge=1, le=3, description="1=critical, 2=important, 3=helpful")
+
+
+class WorkflowStep(BaseModel):
+    """A single step in a development workflow.
+
+    Steps are sequential (ordered) but lessons can be attached to multiple steps,
+    providing bidirectional navigation between process and knowledge.
+    """
+
+    id: str = Field(..., description="Unique step identifier (e.g., 'research', 'plan')")
+    name: str = Field(..., description="Human-readable name")
+    description: str = Field(..., description="What happens in this step")
+    order: int = Field(..., ge=1, description="Position in workflow (1, 2, 3...)")
+    guidance: str = Field(default="", description="Detailed guidance for this step")
+    checklist: list[str] = Field(default_factory=list, description="Items to verify before moving to next step")
+    lessons: list[WorkflowStepLesson] = Field(default_factory=list, description="Lessons attached to this step")
+    outputs: list[str] = Field(default_factory=list, description="Expected outputs/artifacts from this step")
+
+
+class Workflow(BaseModel):
+    """A development workflow defining a process with linked lessons.
+
+    Workflows provide process structure (sequential steps) while lessons
+    provide knowledge. A lesson can be linked to multiple workflow steps,
+    and workflows enable contextual lesson surfacing based on current step.
+    """
+
+    id: str = Field(..., description="Unique identifier (e.g., 'feature-development')")
+    name: str = Field(..., description="Human-readable name")
+    description: str = Field(..., description="When to use this workflow")
+    trigger: str = Field(..., description="Keywords/patterns that activate this workflow")
+    steps: list[WorkflowStep] = Field(default_factory=list, description="Ordered steps in the workflow")
+    tags: list[str] = Field(default_factory=list, description="Categorization tags")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    version: int = Field(default=1, description="Workflow version")
+
+    def get_step(self, step_id: str) -> WorkflowStep | None:
+        """Get a step by ID."""
+        for step in self.steps:
+            if step.id == step_id:
+                return step
+        return None
+
+    def get_step_by_order(self, order: int) -> WorkflowStep | None:
+        """Get a step by its order number."""
+        for step in self.steps:
+            if step.order == order:
+                return step
+        return None
+
+    def get_next_step(self, current_step_id: str) -> WorkflowStep | None:
+        """Get the next step after the given step."""
+        current = self.get_step(current_step_id)
+        if current:
+            return self.get_step_by_order(current.order + 1)
+        return None
+
+    def to_context(self) -> str:
+        """Format workflow for LLM consumption."""
+        lines = [
+            f"## Workflow: {self.name}",
+            f"{self.description}",
+            f"\n**Steps:**",
+        ]
+        for step in sorted(self.steps, key=lambda s: s.order):
+            lines.append(f"\n### Step {step.order}: {step.name}")
+            lines.append(f"{step.description}")
+            if step.guidance:
+                lines.append(f"\n*Guidance:* {step.guidance}")
+            if step.lessons:
+                lines.append(f"\n*Related lessons:* {', '.join(l.lesson_id for l in step.lessons)}")
+            if step.checklist:
+                lines.append("\n*Checklist:*")
+                for item in step.checklist:
+                    lines.append(f"  ☐ {item}")
+            if step.outputs:
+                lines.append(f"\n*Outputs:* {', '.join(step.outputs)}")
+        return "\n".join(lines)
+
+
 class ProjectCatalogue(BaseModel):
     """Structured knowledge base for a project - the bootstrap guide."""
 

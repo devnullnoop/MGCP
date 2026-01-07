@@ -18,6 +18,9 @@ from .models import (
     ProjectTodo,
     Relationship,
     SecurityNote,
+    Workflow,
+    WorkflowStep,
+    WorkflowStepLesson,
 )
 
 DEFAULT_DB_PATH = "~/.mgcp/lessons.db"
@@ -80,6 +83,19 @@ CREATE TABLE IF NOT EXISTS project_contexts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_project_path ON project_contexts(project_path);
+
+CREATE TABLE IF NOT EXISTS workflows (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    steps JSON NOT NULL DEFAULT '[]',
+    tags JSON NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_tags ON workflows(tags);
 """
 
 
@@ -426,4 +442,93 @@ class LessonStore:
             last_accessed=datetime.fromisoformat(row["last_accessed"]),
             session_count=row["session_count"],
             notes=row["notes"],
+        )
+
+    # =========================================================================
+    # Workflow Methods
+    # =========================================================================
+
+    async def save_workflow(self, workflow: Workflow) -> str:
+        """Save or update a workflow."""
+        conn = await self._get_conn()
+        try:
+            await conn.execute(
+                """
+                INSERT INTO workflows (
+                    id, name, description, trigger, steps, tags, created_at, version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    description = excluded.description,
+                    trigger = excluded.trigger,
+                    steps = excluded.steps,
+                    tags = excluded.tags,
+                    version = excluded.version
+                """,
+                (
+                    workflow.id,
+                    workflow.name,
+                    workflow.description,
+                    workflow.trigger,
+                    json.dumps([s.model_dump(mode="json") for s in workflow.steps]),
+                    json.dumps(workflow.tags),
+                    workflow.created_at.isoformat(),
+                    workflow.version,
+                ),
+            )
+            await conn.commit()
+            return workflow.id
+        finally:
+            await conn.close()
+
+    async def get_workflow(self, workflow_id: str) -> Workflow | None:
+        """Get a workflow by ID."""
+        conn = await self._get_conn()
+        try:
+            cursor = await conn.execute(
+                "SELECT * FROM workflows WHERE id = ?", (workflow_id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_workflow(row)
+        finally:
+            await conn.close()
+
+    async def get_all_workflows(self) -> list[Workflow]:
+        """Get all workflows."""
+        conn = await self._get_conn()
+        try:
+            cursor = await conn.execute("SELECT * FROM workflows ORDER BY name")
+            rows = await cursor.fetchall()
+            return [self._row_to_workflow(row) for row in rows]
+        finally:
+            await conn.close()
+
+    async def delete_workflow(self, workflow_id: str) -> bool:
+        """Delete a workflow. Returns True if deleted."""
+        conn = await self._get_conn()
+        try:
+            cursor = await conn.execute(
+                "DELETE FROM workflows WHERE id = ?", (workflow_id,)
+            )
+            await conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            await conn.close()
+
+    def _row_to_workflow(self, row: aiosqlite.Row) -> Workflow:
+        """Convert database row to Workflow model."""
+        steps_data = json.loads(row["steps"]) if row["steps"] else []
+        steps = [WorkflowStep(**s) for s in steps_data]
+
+        return Workflow(
+            id=row["id"],
+            name=row["name"],
+            description=row["description"],
+            trigger=row["trigger"],
+            steps=steps,
+            tags=json.loads(row["tags"]) if row["tags"] else [],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            version=row["version"],
         )

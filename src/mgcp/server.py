@@ -29,6 +29,9 @@ from .models import (
     ProjectContext,
     ProjectTodo,
     SecurityNote,
+    Workflow,
+    WorkflowStep,
+    WorkflowStepLesson,
 )
 from .persistence import LessonStore
 from .telemetry import TelemetryLogger
@@ -1263,6 +1266,260 @@ async def get_catalogue_item(
         return json.dumps(item.model_dump(mode="json"), indent=2, default=str)
     else:
         return f"Item not found: {identifier}"
+
+
+# ============================================================================
+# WORKFLOW TOOLS
+# ============================================================================
+
+
+@mcp.tool()
+async def list_workflows() -> str:
+    """List all available development workflows.
+
+    Workflows define process steps with linked lessons for contextual guidance.
+    Use workflows to follow best practices for common development tasks.
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    workflows = await store.get_all_workflows()
+
+    if not workflows:
+        return "No workflows found. Use create_workflow to add one, or run mgcp-bootstrap to seed defaults."
+
+    lines = ["# Development Workflows\n"]
+    for wf in workflows:
+        step_count = len(wf.steps)
+        lesson_count = sum(len(s.lessons) for s in wf.steps)
+        lines.append(f"**{wf.name}** (`{wf.id}`)")
+        lines.append(f"  {wf.description}")
+        lines.append(f"  {step_count} steps, {lesson_count} linked lessons")
+        lines.append(f"  Trigger: {wf.trigger}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_workflow(workflow_id: str) -> str:
+    """Get a workflow with all its steps and linked lessons.
+
+    Use this to understand the full process and what lessons apply at each step.
+
+    Args:
+        workflow_id: The workflow identifier (e.g., 'feature-development')
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    workflow = await store.get_workflow(workflow_id)
+    if not workflow:
+        return f"Workflow not found: {workflow_id}"
+
+    return workflow.to_context()
+
+
+@mcp.tool()
+async def get_workflow_step(
+    workflow_id: str,
+    step_id: str,
+    expand_lessons: bool = True,
+) -> str:
+    """Get details for a specific workflow step with its linked lessons.
+
+    Use this when you're at a particular step and want to see all relevant guidance.
+
+    Args:
+        workflow_id: The workflow identifier
+        step_id: The step identifier (e.g., 'research', 'plan', 'execute')
+        expand_lessons: Whether to include full lesson details (default True)
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    workflow = await store.get_workflow(workflow_id)
+    if not workflow:
+        return f"Workflow not found: {workflow_id}"
+
+    step = workflow.get_step(step_id)
+    if not step:
+        return f"Step '{step_id}' not found in workflow '{workflow_id}'"
+
+    lines = [
+        f"## Step {step.order}: {step.name}",
+        f"{step.description}",
+    ]
+
+    if step.guidance:
+        lines.append(f"\n**Guidance:** {step.guidance}")
+
+    if step.checklist:
+        lines.append("\n**Checklist (complete before next step):**")
+        for item in step.checklist:
+            lines.append(f"  ☐ {item}")
+
+    if step.outputs:
+        lines.append(f"\n**Expected outputs:** {', '.join(step.outputs)}")
+
+    if step.lessons:
+        lines.append(f"\n**Linked Lessons ({len(step.lessons)}):**")
+        for lesson_link in sorted(step.lessons, key=lambda l: l.priority):
+            priority_label = {1: "🔴 Critical", 2: "🟡 Important", 3: "🟢 Helpful"}.get(lesson_link.priority, "")
+            lines.append(f"\n  {priority_label}: `{lesson_link.lesson_id}`")
+            lines.append(f"  *Why here:* {lesson_link.relevance}")
+
+            if expand_lessons:
+                lesson = await store.get_lesson(lesson_link.lesson_id)
+                if lesson:
+                    lines.append(f"  *Action:* {lesson.action}")
+                    if lesson.rationale:
+                        lines.append(f"  *Rationale:* {lesson.rationale[:100]}...")
+
+    # Show next step hint
+    next_step = workflow.get_next_step(step_id)
+    if next_step:
+        lines.append(f"\n**Next:** Step {next_step.order}: {next_step.name}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def link_lesson_to_workflow_step(
+    workflow_id: str,
+    step_id: str,
+    lesson_id: str,
+    relevance: str,
+    priority: int = 2,
+) -> str:
+    """Link a lesson to a workflow step.
+
+    This creates a bidirectional connection: the lesson is surfaced when you're
+    at this step, and the workflow step is findable from the lesson.
+
+    Args:
+        workflow_id: The workflow identifier
+        step_id: The step identifier (e.g., 'research', 'execute')
+        lesson_id: The lesson to link
+        relevance: Why this lesson applies to this step (1-2 sentences)
+        priority: 1=critical (always show), 2=important (show by default), 3=helpful (show on demand)
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    workflow = await store.get_workflow(workflow_id)
+    if not workflow:
+        return f"Workflow not found: {workflow_id}"
+
+    step = workflow.get_step(step_id)
+    if not step:
+        return f"Step '{step_id}' not found in workflow '{workflow_id}'"
+
+    lesson = await store.get_lesson(lesson_id)
+    if not lesson:
+        return f"Lesson not found: {lesson_id}"
+
+    # Check if already linked
+    existing = [l for l in step.lessons if l.lesson_id == lesson_id]
+    if existing:
+        return f"Lesson '{lesson_id}' is already linked to step '{step_id}'"
+
+    # Add the link
+    link = WorkflowStepLesson(
+        lesson_id=lesson_id,
+        relevance=relevance,
+        priority=min(max(priority, 1), 3),
+    )
+    step.lessons.append(link)
+
+    await store.save_workflow(workflow)
+
+    return f"Linked lesson '{lesson_id}' to step '{step_id}' in workflow '{workflow_id}'"
+
+
+@mcp.tool()
+async def create_workflow(
+    workflow_id: str,
+    name: str,
+    description: str,
+    trigger: str,
+    tags: str = "",
+) -> str:
+    """Create a new development workflow.
+
+    Workflows define sequential steps for common development tasks.
+    After creating, use add_workflow_step to add steps.
+
+    Args:
+        workflow_id: Unique identifier (lowercase-with-dashes)
+        name: Human-readable name
+        description: When to use this workflow
+        trigger: Keywords that activate this workflow
+        tags: Comma-separated tags for categorization
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    existing = await store.get_workflow(workflow_id)
+    if existing:
+        return f"Workflow '{workflow_id}' already exists."
+
+    workflow = Workflow(
+        id=workflow_id,
+        name=name,
+        description=description,
+        trigger=trigger,
+        tags=[t.strip() for t in tags.split(",") if t.strip()] if tags else [],
+    )
+
+    await store.save_workflow(workflow)
+    return f"Created workflow '{name}'. Use add_workflow_step to add steps."
+
+
+@mcp.tool()
+async def add_workflow_step(
+    workflow_id: str,
+    step_id: str,
+    name: str,
+    description: str,
+    order: int,
+    guidance: str = "",
+    checklist: str = "",
+    outputs: str = "",
+) -> str:
+    """Add a step to an existing workflow.
+
+    Args:
+        workflow_id: The workflow to add the step to
+        step_id: Unique identifier for this step (e.g., 'research', 'plan')
+        name: Human-readable name
+        description: What happens in this step
+        order: Position in workflow (1, 2, 3...)
+        guidance: Detailed guidance for this step
+        checklist: Comma-separated items to verify before moving to next step
+        outputs: Comma-separated expected outputs/artifacts
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    workflow = await store.get_workflow(workflow_id)
+    if not workflow:
+        return f"Workflow not found: {workflow_id}"
+
+    # Check for duplicate step ID
+    existing = workflow.get_step(step_id)
+    if existing:
+        return f"Step '{step_id}' already exists in workflow '{workflow_id}'"
+
+    step = WorkflowStep(
+        id=step_id,
+        name=name,
+        description=description,
+        order=order,
+        guidance=guidance,
+        checklist=[c.strip() for c in checklist.split(",") if c.strip()] if checklist else [],
+        outputs=[o.strip() for o in outputs.split(",") if o.strip()] if outputs else [],
+    )
+
+    workflow.steps.append(step)
+    workflow.steps.sort(key=lambda s: s.order)
+
+    await store.save_workflow(workflow)
+    return f"Added step '{name}' (order {order}) to workflow '{workflow.name}'"
 
 
 # ============================================================================

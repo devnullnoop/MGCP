@@ -19,6 +19,7 @@ classifiers = [
 dependencies = [
     "mcp>=1.0.0",
     "networkx>=3.2",
+    "numpy<2.0",  # Pin to avoid onnxruntime compatibility issues with numpy 2.0
     "chromadb>=0.5.23",
     "sentence-transformers>=2.2.2",
     "pydantic>=2.5.0",

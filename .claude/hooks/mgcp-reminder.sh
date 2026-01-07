@@ -1,3 +1,10 @@
 #!/bin/bash
-# PostToolUse hook - short reminder after code changes
-echo "[MGCP] Did you learn something worth saving? Use mcp__mgcp__add_lesson"
+# PostToolUse hook - contextual reminder after code changes
+
+cat << 'EOF'
+[MGCP Checkpoint] After this edit, consider:
+  • Discovered a pattern/gotcha? → add_catalogue_arch_note
+  • Files that change together? → add_catalogue_coupling
+  • Made a design decision? → add_catalogue_decision
+  • Learned something reusable? → add_lesson
+EOF

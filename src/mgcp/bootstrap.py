@@ -341,6 +341,66 @@ BOOTSTRAP_LESSONS = [
             ),
         ],
     ),
+
+    # =========================================================================
+    # MGCP SELF-TEACHING LESSONS
+    # These lessons teach how to use MGCP itself effectively
+    # =========================================================================
+    Lesson(
+        id="mgcp-usage",
+        trigger="mgcp, memory, lessons, context, catalogue, save context",
+        action="Use MGCP tools throughout the session to capture knowledge, not just at start/end",
+        rationale="MGCP is most valuable when knowledge is captured as it's discovered, not reconstructed later",
+        tags=["meta", "mgcp", "workflow"],
+    ),
+    Lesson(
+        id="mgcp-save-before-commit",
+        trigger="commit, git commit, push, let's commit, commit this, ready to commit",
+        action="BEFORE committing, call save_project_context with notes summarizing what was accomplished, active_files listing key files changed, and decision for any architectural choices made.",
+        rationale="Project context captures the 'why' behind changes that git commits don't preserve. Saving before commit ensures continuity between sessions.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "workflow", "git", "session-management"],
+    ),
+    Lesson(
+        id="mgcp-save-on-shutdown",
+        trigger="shutdown, end session, done for now, signing off, closing, goodbye, that's all",
+        action="Call save_project_context before session ends. Include notes about current state, any blockers, and what to pick up next time.",
+        rationale="Session context is lost when the session closes. Saving ensures the next session can resume seamlessly without re-explaining context.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "workflow", "session-management"],
+    ),
+    Lesson(
+        id="mgcp-record-decisions",
+        trigger="decided to, chose, picked, went with, selected, decision, chose X over Y, why did we",
+        action="When making an architectural or design decision, call add_catalogue_decision with title, decision, rationale, and alternatives considered. This prevents re-litigating the same decisions later.",
+        rationale="Decisions without recorded rationale get questioned repeatedly. Recording alternatives considered shows the decision was thoughtful.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "architecture", "decisions", "documentation"],
+    ),
+    Lesson(
+        id="mgcp-record-couplings",
+        trigger="these files, change together, coupled, related files, when you modify, also update, depends on",
+        action="When discovering files that must change together, call add_catalogue_coupling with the files list and reason. This helps future sessions know what else to check when modifying code.",
+        rationale="File couplings are tribal knowledge that gets lost. Recording them prevents bugs from partial updates and helps onboarding.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "architecture", "couplings", "maintenance"],
+    ),
+    Lesson(
+        id="mgcp-record-gotchas",
+        trigger="gotcha, watch out, careful, quirk, weird, surprising, unexpected, don't forget, remember to",
+        action="When discovering a gotcha or non-obvious behavior, call add_catalogue_arch_note with title, description, and category (gotcha/architecture/convention/performance). These save future debugging time.",
+        rationale="Gotchas are discovered through pain and forgotten quickly. Recording them immediately prevents others from hitting the same issues.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "architecture", "gotchas", "documentation"],
+    ),
+    Lesson(
+        id="mgcp-add-reusable-lessons",
+        trigger="learned, discovered, realized, figured out, turns out, the trick is, pro tip, best practice",
+        action="When learning something applicable beyond this specific project, call add_lesson with a clear trigger (when it applies), action (what to do), and rationale (why). Good lessons are actionable imperatives.",
+        rationale="Lessons are the core value of MGCP - reusable knowledge across all sessions. If you learned it once, you shouldn't have to learn it again.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "meta", "lessons", "knowledge-management"],
+    ),
 ]
 
 
@@ -741,6 +801,18 @@ LESSON_RELATIONSHIPS = [
     ("dependency-security", "check-api-versions", "related", "Both concern dependency management and versions"),
     ("validate-input", "test-edge-cases", "complements", "Test edge cases to verify input validation"),
     ("no-hardcoded-secrets", "verify-file-paths", "related", "Both concern sensitive resource access"),
+
+    # MGCP self-teaching relationships
+    ("mgcp-usage", "mgcp-save-before-commit", "prerequisite", "Understand MGCP usage before specific triggers"),
+    ("mgcp-usage", "mgcp-save-on-shutdown", "prerequisite", "Understand MGCP usage before specific triggers"),
+    ("mgcp-usage", "mgcp-record-decisions", "prerequisite", "Understand MGCP usage before catalogue tools"),
+    ("mgcp-usage", "mgcp-record-couplings", "prerequisite", "Understand MGCP usage before catalogue tools"),
+    ("mgcp-usage", "mgcp-record-gotchas", "prerequisite", "Understand MGCP usage before catalogue tools"),
+    ("mgcp-usage", "mgcp-add-reusable-lessons", "prerequisite", "Understand MGCP usage before adding lessons"),
+    ("mgcp-save-before-commit", "mgcp-save-on-shutdown", "related", "Both concern saving context at key moments"),
+    ("mgcp-record-decisions", "mgcp-record-gotchas", "complements", "Decisions and gotchas both capture architectural knowledge"),
+    ("mgcp-record-couplings", "mgcp-record-gotchas", "complements", "Couplings and gotchas both capture maintenance knowledge"),
+    ("mgcp-add-reusable-lessons", "mgcp-save-before-commit", "sequence_next", "After adding lessons, save context before committing"),
 ]
 
 

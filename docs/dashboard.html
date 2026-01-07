@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lesson Memory Dashboard</title>
+    <title>MGCP Metrics</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -40,6 +40,28 @@
         .animate-spin {
             animation: spin 1s linear infinite;
         }
+
+        /* Neural firing animations */
+        @keyframes neural-pulse {
+            0% { stroke-opacity: 0; stroke-width: 1; }
+            20% { stroke-opacity: 1; stroke-width: 4; }
+            100% { stroke-opacity: 0; stroke-width: 1; }
+        }
+        @keyframes node-fire {
+            0% { transform: scale(1); filter: brightness(1); }
+            30% { transform: scale(1.4); filter: brightness(2) drop-shadow(0 0 20px currentColor); }
+            100% { transform: scale(1); filter: brightness(1); }
+        }
+        @keyframes ripple {
+            0% { r: 15; opacity: 0.8; }
+            100% { r: 60; opacity: 0; }
+        }
+        .neural-active {
+            animation: node-fire 0.6s ease-out;
+        }
+        .link-pulse {
+            animation: neural-pulse 0.8s ease-out;
+        }
     </style>
 </head>
 <body class="bg-brand-dark text-gray-200 font-sans">
@@ -49,7 +71,7 @@
         <!-- Header -->
         <header class="col-span-2 bg-gradient-to-br from-brand-panel to-brand-surface px-6 py-4 flex justify-between items-center border-b border-brand-cyan">
             <div class="flex items-center gap-6">
-                <h1 class="text-xl font-semibold text-white">Lesson Memory Dashboard</h1>
+                <h1 class="text-xl font-semibold text-white">MGCP Metrics</h1>
                 <nav class="flex gap-4 text-sm">
                     <a href="/" class="text-brand-cyan">Dashboard</a>
                     <a href="/session" class="text-gray-400 hover:text-brand-cyan transition-colors">Sessions</a>
@@ -68,7 +90,17 @@
                     <button onclick="toggleHeatmap()" class="bg-brand-cyan/20 border border-brand-cyan text-brand-cyan px-4 py-2 rounded text-sm font-medium hover:bg-brand-cyan/40 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-brand-cyan focus:ring-offset-2 focus:ring-offset-brand-dark">
                         Toggle Heatmap
                     </button>
+                    <button onclick="testNeuralFire()" class="bg-green-500/20 border border-green-500 text-green-400 px-4 py-2 rounded text-sm font-medium hover:bg-green-500/40 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:ring-offset-brand-dark">
+                        ⚡ Test Fire
+                    </button>
                 </div>
+
+                <!-- Health Widget -->
+                <div id="health-widget" class="flex items-center gap-2 px-3 py-1.5 bg-brand-dark/50 rounded-lg border border-gray-700">
+                    <div id="health-dot" class="w-2 h-2 rounded-full bg-gray-500"></div>
+                    <span id="health-text" class="text-xs text-gray-400">Loading...</span>
+                </div>
+
                 <div id="status-dot" class="w-3 h-3 rounded-full bg-gray-500 transition-colors duration-300"></div>
                 <span id="status-text" class="text-sm text-gray-300">Connecting...</span>
             </div>
@@ -290,9 +322,14 @@
             if (events.length > 50) events.pop();
             updateEventList();
 
-            // Highlight nodes for retrieve events
+            // Trigger neural firing for retrieve events
             if (event.type === 'retrieve' && event.payload?.lesson_ids) {
-                highlightNodes(event.payload.lesson_ids);
+                triggerNeuralFiring(event.payload.lesson_ids, { intensity: 1.0, cascade: true });
+            }
+
+            // For query events, fire from root node to show "thinking"
+            if (event.type === 'query') {
+                triggerNeuralFiring(['root'], { intensity: 0.5, cascade: true });
             }
 
             // Update statistics
@@ -413,8 +450,11 @@
             svg.selectAll("*").remove();
             svg.attr("width", width).attr("height", height);
 
+            // Defs for markers and filters
+            const defs = svg.append("defs");
+
             // Arrow marker for directed links
-            svg.append("defs").append("marker")
+            defs.append("marker")
                 .attr("id", "arrowhead")
                 .attr("viewBox", "-0 -5 10 10")
                 .attr("refX", 20)
@@ -425,6 +465,47 @@
                 .append("path")
                 .attr("d", "M 0,-5 L 10,0 L 0,5")
                 .attr("fill", "#555");
+
+            // Glow filter for neural firing effect
+            const glowFilter = defs.append("filter")
+                .attr("id", "neural-glow")
+                .attr("x", "-50%")
+                .attr("y", "-50%")
+                .attr("width", "200%")
+                .attr("height", "200%");
+            glowFilter.append("feGaussianBlur")
+                .attr("in", "SourceGraphic")
+                .attr("stdDeviation", "4")
+                .attr("result", "blur");
+            glowFilter.append("feMerge")
+                .selectAll("feMergeNode")
+                .data(["blur", "SourceGraphic"])
+                .join("feMergeNode")
+                .attr("in", d => d);
+
+            // Intense glow for active nodes
+            const intenseGlow = defs.append("filter")
+                .attr("id", "neural-glow-intense")
+                .attr("x", "-100%")
+                .attr("y", "-100%")
+                .attr("width", "300%")
+                .attr("height", "300%");
+            intenseGlow.append("feGaussianBlur")
+                .attr("in", "SourceGraphic")
+                .attr("stdDeviation", "8")
+                .attr("result", "blur");
+            const intenseMerge = intenseGlow.append("feMerge");
+            intenseMerge.append("feMergeNode").attr("in", "blur");
+            intenseMerge.append("feMergeNode").attr("in", "blur");
+            intenseMerge.append("feMergeNode").attr("in", "SourceGraphic");
+
+            // Pulse gradient for links
+            const pulseGradient = defs.append("linearGradient")
+                .attr("id", "pulse-gradient")
+                .attr("gradientUnits", "userSpaceOnUse");
+            pulseGradient.append("stop").attr("offset", "0%").attr("stop-color", "#4fc3f7").attr("stop-opacity", "0");
+            pulseGradient.append("stop").attr("offset", "50%").attr("stop-color", "#4fc3f7").attr("stop-opacity", "1");
+            pulseGradient.append("stop").attr("offset", "100%").attr("stop-color", "#4fc3f7").attr("stop-opacity", "0");
 
             const g = svg.append("g");
 
@@ -441,8 +522,15 @@
                 .force("center", d3.forceCenter(width / 2, height / 2))
                 .force("collision", d3.forceCollide().radius(40));
 
+            // Group for ripple effects (behind everything)
+            const rippleGroup = g.append("g").attr("class", "ripple-layer");
+
+            // Group for pulse effects on links
+            const pulseGroup = g.append("g").attr("class", "pulse-layer");
+
             // Draw links with typed relationship colors
-            const link = g.append("g")
+            const linkGroup = g.append("g").attr("class", "link-layer");
+            const link = linkGroup
                 .selectAll("line")
                 .data(graphData.links)
                 .join("line")
@@ -450,7 +538,9 @@
                 .attr("stroke-width", d => 1 + (d.weight || 0.5) * 2)
                 .attr("stroke-dasharray", d => getLinkDashArray(d.relation))
                 .attr("stroke-opacity", d => 0.4 + (d.weight || 0.5) * 0.4)
-                .attr("marker-end", "url(#arrowhead)");
+                .attr("marker-end", "url(#arrowhead)")
+                .attr("data-source", d => d.source.id || d.source)
+                .attr("data-target", d => d.target.id || d.target);
 
             // Draw nodes
             const node = g.append("g")
@@ -575,30 +665,174 @@
         }
 
         /**
-         * Highlights specified nodes with pulse animation.
-         * @param {Array} nodeIds - Array of node IDs to highlight
+         * Triggers neural firing visualization - like neurons firing in a brain.
+         * Creates cascading light pulses across nodes and edges.
+         * @param {Array} nodeIds - Array of node IDs that were activated
+         * @param {Object} options - Animation options (intensity, cascade)
          */
-        function highlightNodes(nodeIds) {
-            activeNodes = new Set(nodeIds);
-            updateNodeColors();
+        function triggerNeuralFiring(nodeIds, options = {}) {
+            const intensity = options.intensity || 1.0;
+            const cascade = options.cascade !== false;
+            const svg = d3.select("#graph");
+            const g = svg.select("g");
 
-            // Pulse animation on highlighted nodes
-            if (window.graphNode) {
-                window.graphNode.filter(d => activeNodes.has(d.id))
-                    .select("circle")
-                    .transition()
-                    .duration(200)
-                    .attr("r", d => (d.type === "root" ? 25 : d.type === "category" ? 20 : 15) + 10)
-                    .transition()
-                    .duration(200)
-                    .attr("r", d => d.type === "root" ? 25 : d.type === "category" ? 20 : 15);
+            if (!g.node() || !window.graphNode) return;
+
+            activeNodes = new Set(nodeIds);
+
+            // Get node positions
+            const nodePositions = {};
+            window.graphNode.each(function(d) {
+                nodePositions[d.id] = { x: d.x, y: d.y, data: d };
+            });
+
+            // 1. Create ripple effects at activated nodes
+            nodeIds.forEach((nodeId, index) => {
+                const pos = nodePositions[nodeId];
+                if (!pos) return;
+
+                const delay = index * 50; // Stagger the firing
+
+                // Create expanding ripple ring
+                setTimeout(() => {
+                    const rippleLayer = g.select(".ripple-layer");
+                    if (!rippleLayer.node()) return;
+
+                    for (let i = 0; i < 3; i++) {
+                        rippleLayer.append("circle")
+                            .attr("cx", pos.x)
+                            .attr("cy", pos.y)
+                            .attr("r", 15)
+                            .attr("fill", "none")
+                            .attr("stroke", "#4fc3f7")
+                            .attr("stroke-width", 3 * intensity)
+                            .attr("opacity", 0.8)
+                            .transition()
+                            .delay(i * 100)
+                            .duration(800)
+                            .attr("r", 80)
+                            .attr("opacity", 0)
+                            .attr("stroke-width", 1)
+                            .remove();
+                    }
+                }, delay);
+            });
+
+            // 2. Fire the primary nodes with glow
+            window.graphNode.filter(d => activeNodes.has(d.id))
+                .select("circle")
+                .attr("filter", "url(#neural-glow-intense)")
+                .transition()
+                .duration(150)
+                .attr("fill", "#00ff88")
+                .attr("r", d => (d.type === "root" ? 25 : d.type === "category" ? 20 : 15) * 1.5)
+                .transition()
+                .duration(400)
+                .attr("r", d => d.type === "root" ? 25 : d.type === "category" ? 20 : 15)
+                .attr("fill", "#4caf50")
+                .transition()
+                .delay(2000)
+                .duration(500)
+                .attr("filter", null)
+                .attr("fill", d => getNodeColor(d));
+
+            // 3. Animate pulses along connected edges
+            if (cascade) {
+                const pulseLayer = g.select(".pulse-layer");
+                if (pulseLayer.node()) {
+                    graphData.links.forEach(link => {
+                        const sourceId = link.source.id || link.source;
+                        const targetId = link.target.id || link.target;
+
+                        // If either end is an activated node, pulse this edge
+                        if (activeNodes.has(sourceId) || activeNodes.has(targetId)) {
+                            const sourcePos = nodePositions[sourceId];
+                            const targetPos = nodePositions[targetId];
+                            if (!sourcePos || !targetPos) return;
+
+                            // Determine direction (from activated node outward)
+                            const isSourceActive = activeNodes.has(sourceId);
+                            const startPos = isSourceActive ? sourcePos : targetPos;
+                            const endPos = isSourceActive ? targetPos : sourcePos;
+
+                            // Create animated pulse along the edge
+                            const pulseDelay = isSourceActive ? 100 : 300;
+
+                            setTimeout(() => {
+                                // Glowing pulse traveling along edge
+                                const pulse = pulseLayer.append("circle")
+                                    .attr("cx", startPos.x)
+                                    .attr("cy", startPos.y)
+                                    .attr("r", 6)
+                                    .attr("fill", "#4fc3f7")
+                                    .attr("filter", "url(#neural-glow)")
+                                    .attr("opacity", 1);
+
+                                pulse.transition()
+                                    .duration(400)
+                                    .attr("cx", endPos.x)
+                                    .attr("cy", endPos.y)
+                                    .attr("r", 4)
+                                    .attr("opacity", 0)
+                                    .remove();
+
+                                // Flash the edge itself
+                                g.select(".link-layer")
+                                    .selectAll("line")
+                                    .filter(d => {
+                                        const s = d.source.id || d.source;
+                                        const t = d.target.id || d.target;
+                                        return (s === sourceId && t === targetId) || (s === targetId && t === sourceId);
+                                    })
+                                    .transition()
+                                    .duration(100)
+                                    .attr("stroke", "#4fc3f7")
+                                    .attr("stroke-width", 4)
+                                    .attr("stroke-opacity", 1)
+                                    .transition()
+                                    .duration(600)
+                                    .attr("stroke", d => getLinkColor(d.relation))
+                                    .attr("stroke-width", d => 1 + (d.weight || 0.5) * 2)
+                                    .attr("stroke-opacity", d => 0.4 + (d.weight || 0.5) * 0.4);
+
+                                // Cascade to connected nodes (secondary activation)
+                                if (!activeNodes.has(endPos.data?.id)) {
+                                    setTimeout(() => {
+                                        const secondaryNode = window.graphNode.filter(d => d.id === endPos.data?.id);
+                                        if (secondaryNode.node()) {
+                                            secondaryNode.select("circle")
+                                                .transition()
+                                                .duration(150)
+                                                .attr("fill", "#4fc3f7")
+                                                .attr("filter", "url(#neural-glow)")
+                                                .attr("r", d => (d.type === "root" ? 25 : d.type === "category" ? 20 : 15) * 1.2)
+                                                .transition()
+                                                .duration(400)
+                                                .attr("r", d => d.type === "root" ? 25 : d.type === "category" ? 20 : 15)
+                                                .attr("fill", d => getNodeColor(d))
+                                                .attr("filter", null);
+                                        }
+                                    }, 300);
+                                }
+                            }, pulseDelay);
+                        }
+                    });
+                }
             }
 
-            // Clear highlights after 3 seconds
+            // 4. Clear active state after animation completes
             setTimeout(() => {
                 activeNodes.clear();
                 updateNodeColors();
-            }, 3000);
+            }, 3500);
+        }
+
+        /**
+         * Legacy highlight function - now calls neural firing
+         * @param {Array} nodeIds - Array of node IDs to highlight
+         */
+        function highlightNodes(nodeIds) {
+            triggerNeuralFiring(nodeIds, { intensity: 1.0, cascade: true });
         }
 
         // Drag event handlers
@@ -779,13 +1013,85 @@
         // Initialization
         // ====================================================================
 
+        // ====================================================================
+        // Health Widget
+        // ====================================================================
+
+        /**
+         * Updates the health widget with current system status.
+         */
+        async function updateHealthWidget() {
+            const healthDot = document.getElementById('health-dot');
+            const healthText = document.getElementById('health-text');
+
+            try {
+                const health = await fetchAPI('/api/health');
+                if (health && health.status === 'healthy') {
+                    healthDot.classList.remove('bg-gray-500', 'bg-red-500');
+                    healthDot.classList.add('bg-green-500');
+                    healthText.textContent = `${health.lessons_count} lessons · ${health.projects_count} projects`;
+                    healthText.classList.remove('text-red-400');
+                    healthText.classList.add('text-gray-400');
+                } else {
+                    healthDot.classList.remove('bg-gray-500', 'bg-green-500');
+                    healthDot.classList.add('bg-red-500');
+                    healthText.textContent = 'Unhealthy';
+                    healthText.classList.remove('text-gray-400');
+                    healthText.classList.add('text-red-400');
+                }
+            } catch (err) {
+                healthDot.classList.remove('bg-gray-500', 'bg-green-500');
+                healthDot.classList.add('bg-red-500');
+                healthText.textContent = 'Error';
+            }
+        }
+
+        // ====================================================================
+        // Test Functions
+        // ====================================================================
+
+        /**
+         * Test function to trigger neural firing with random nodes.
+         * Useful for demonstrating the visualization effect.
+         */
+        function testNeuralFire() {
+            if (!graphData.nodes || graphData.nodes.length === 0) {
+                console.log('No nodes to fire');
+                return;
+            }
+
+            // Pick 1-5 random lesson nodes
+            const lessonNodes = graphData.nodes.filter(n => n.type === 'lesson');
+            if (lessonNodes.length === 0) {
+                // Fall back to any nodes
+                const randomNode = graphData.nodes[Math.floor(Math.random() * graphData.nodes.length)];
+                triggerNeuralFiring([randomNode.id], { intensity: 1.0, cascade: true });
+                return;
+            }
+
+            const count = Math.min(Math.floor(Math.random() * 4) + 1, lessonNodes.length);
+            const shuffled = lessonNodes.sort(() => 0.5 - Math.random());
+            const selected = shuffled.slice(0, count).map(n => n.id);
+
+            console.log('Firing nodes:', selected);
+            triggerNeuralFiring(selected, { intensity: 1.0, cascade: true });
+        }
+
+        // ====================================================================
+        // Initialization
+        // ====================================================================
+
         /**
          * Main initialization function.
          * Loads initial data and establishes WebSocket connection.
          */
         async function init() {
             await loadInitialData();
+            await updateHealthWidget();
             connectWebSocket();
+
+            // Periodically update health
+            setInterval(updateHealthWidget, 30000);
         }
 
         init();

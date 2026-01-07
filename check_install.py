@@ -31,12 +31,12 @@ def get_pip_version():
 
 
 def check_python_version():
-    """Check Python version is 3.11-3.13 (best compatibility)."""
+    """Check Python version is 3.11 or 3.12 (best compatibility)."""
     version = sys.version_info
     if version < (3, 11):
         return False, f"Python 3.11+ required, found {version.major}.{version.minor}"
-    if version >= (3, 14):
-        return False, f"Python 3.14+ not yet supported (found {version.major}.{version.minor}) - use Python 3.11, 3.12, or 3.13"
+    if version >= (3, 13):
+        return False, f"Python {version.major}.{version.minor} not recommended - use Python 3.11 or 3.12 for best compatibility"
     return True, f"Python {version.major}.{version.minor}.{version.micro}"
 
 
@@ -188,8 +188,15 @@ def main():
 
         for name, message, check_fn in issues:
             if check_fn == check_python_version:
-                print(f"  • {name}: Install Python 3.11 or later")
-                print("    https://www.python.org/downloads/")
+                version = sys.version_info
+                if version >= (3, 13):
+                    print(f"  • {name}: Python 3.13+ lacks pre-built wheels for some dependencies")
+                    print("    Install Python 3.11 or 3.12 instead:")
+                    print("    brew install python@3.12")
+                    print("    python3.12 -m venv .venv && source .venv/bin/activate")
+                else:
+                    print(f"  • {name}: Install Python 3.11 or 3.12")
+                    print("    https://www.python.org/downloads/")
             elif check_fn == check_pip_version:
                 print(f"  • {name}: Run `pip install --upgrade pip`")
             elif check_fn == check_venv:
@@ -220,7 +227,14 @@ def main():
             xcode_ok, xcode_msg = check_xcode_tools()
 
             if not python_ok:
-                print("\n❌ Cannot proceed: Python 3.11+ required")
+                version = sys.version_info
+                if version >= (3, 13):
+                    print(f"\n❌ Cannot proceed: Python {version.major}.{version.minor} lacks pre-built wheels")
+                    print("   Install Python 3.11 or 3.12:")
+                    print("   brew install python@3.12")
+                    print("   rm -rf .venv && python3.12 -m venv .venv && source .venv/bin/activate")
+                else:
+                    print("\n❌ Cannot proceed: Python 3.11 or 3.12 required")
                 sys.exit(1)
             if not pyproject_ok:
                 print("\n❌ Cannot proceed: Run from MGCP directory")

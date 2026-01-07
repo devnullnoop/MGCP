@@ -1,7 +1,7 @@
 # MGCP - Memory Graph Control Protocol
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Python](https://img.shields.io/badge/Python-3.11--3.13-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/Python-3.11%20|%203.12-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
 > **⚠️ Alpha Software / Research Project** — This is a research project exploring ways to extend and improve LLM interactions through persistent memory. We're dogfooding it daily as we build it, which means things work but may change rapidly. APIs are not stable, data formats may evolve, and you might hit rough edges. If you're comfortable with that, welcome aboard! Feedback and bug reports are appreciated.

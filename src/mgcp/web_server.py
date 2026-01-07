@@ -210,6 +210,63 @@ async def get_graph_data() -> dict[str, Any]:
                     "weight": 0.5,
                 })
 
+    # Add workflow nodes and their lesson connections
+    workflows = await store.get_all_workflows()
+    for workflow in workflows:
+        # Add workflow root node
+        workflow_root_id = f"wf-{workflow.id}"
+        nodes.append({
+            "id": workflow_root_id,
+            "label": workflow.name,
+            "type": "workflow",
+            "usage": 50,  # Neutral usage
+            "action": workflow.description,
+        })
+        # Connect workflow root to global root
+        links.append({
+            "source": "root",
+            "target": workflow_root_id,
+            "relation": "workflow",
+            "weight": 0.8,
+        })
+
+        # Add workflow steps as nodes
+        for step in workflow.steps:
+            step_id = f"wf-{workflow.id}-{step.id}"
+            nodes.append({
+                "id": step_id,
+                "label": f"{step.order}. {step.name}",
+                "type": "workflow_step",
+                "usage": 30,
+                "action": step.description,
+                "order": step.order,
+            })
+            # Connect step to workflow root or previous step
+            if step.order == 1:
+                links.append({
+                    "source": workflow_root_id,
+                    "target": step_id,
+                    "relation": "workflow_step",
+                    "weight": 1.0,
+                })
+            else:
+                prev_step_id = f"wf-{workflow.id}-{workflow.steps[step.order - 2].id}"
+                links.append({
+                    "source": prev_step_id,
+                    "target": step_id,
+                    "relation": "workflow_step",
+                    "weight": 1.0,
+                })
+
+            # Connect step to its linked lessons
+            for lesson_link in step.lessons:
+                links.append({
+                    "source": step_id,
+                    "target": lesson_link.lesson_id,
+                    "relation": "step_lesson",
+                    "weight": 0.8 if lesson_link.priority == 1 else 0.5,
+                })
+
     return {"nodes": nodes, "links": links}
 
 

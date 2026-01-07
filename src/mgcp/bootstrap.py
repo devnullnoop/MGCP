@@ -400,6 +400,64 @@ BOOTSTRAP_LESSONS = [
         parent_id="mgcp-usage",
         tags=["mgcp", "meta", "lessons", "knowledge-management"],
     ),
+
+    # MGCP Knowledge Storage Types - Critical for correct usage
+    Lesson(
+        id="mgcp-knowledge-storage-types",
+        trigger="mgcp, store knowledge, save lesson, remember this, add to memory, what to save, where to store",
+        action="MGCP has 3 storage mechanisms - choose correctly: (1) LESSONS = generic, cross-project knowledge, (2) CATALOGUE = project-specific facts, (3) WORKFLOW LINKS = attach lessons to process steps. Ask 'Is this universal or project-specific?' before storing.",
+        rationale="Using the wrong storage pollutes the knowledge graph. Generic lessons with project details become noise. Project facts in lessons clutter unrelated projects.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "meta", "knowledge-management"],
+    ),
+    Lesson(
+        id="lessons-are-generic-knowledge",
+        trigger="add_lesson, create lesson, new lesson, learned something",
+        action="Before calling add_lesson, ask: 'Would this apply to ANY project?' If yes, make it abstract and reusable. If it's project-specific, use the catalogue instead (add_catalogue_arch_note, add_catalogue_decision, add_catalogue_convention, etc.).",
+        rationale="Lessons polluted with project-specific details become noise in other projects. Keep lessons abstract: 'verify API responses' not 'verify the Stripe API response in payment.py'.",
+        parent_id="mgcp-knowledge-storage-types",
+        tags=["mgcp", "lessons", "knowledge-management"],
+        examples=[
+            Example(
+                label="bad",
+                code="add_lesson(id='stripe-api-check', trigger='payment', action='Check Stripe API v3 in payment.py')",
+                explanation="Too specific - mentions Stripe, v3, and payment.py which are project details",
+            ),
+            Example(
+                label="good",
+                code="add_lesson(id='verify-api-responses', trigger='API, response', action='Verify API responses match expected schema before parsing')",
+                explanation="Generic - applies to any API in any project",
+            ),
+        ],
+    ),
+    Lesson(
+        id="catalogue-for-project-specific",
+        trigger="project-specific, this project, this codebase, architecture decision, file coupling, convention, gotcha",
+        action="Use the project catalogue for project-specific knowledge: add_catalogue_arch_note (patterns/gotchas), add_catalogue_decision (choices with rationale), add_catalogue_convention (local rules), add_catalogue_coupling (linked files), add_catalogue_security_note (vulnerabilities). NOT lessons.",
+        rationale="The catalogue is scoped to a project_path. It won't pollute other projects. Lessons are global and should only contain universally applicable knowledge.",
+        parent_id="mgcp-knowledge-storage-types",
+        tags=["mgcp", "catalogue", "knowledge-management"],
+        examples=[
+            Example(
+                label="bad",
+                code="add_lesson(id='our-auth-pattern', action='Use JWT with Redis sessions')",
+                explanation="Project-specific architecture detail stored as global lesson",
+            ),
+            Example(
+                label="good",
+                code="add_catalogue_decision(title='Auth approach', decision='JWT with Redis', rationale='Needed stateless + session revocation')",
+                explanation="Project decision stored in catalogue, won't appear in other projects",
+            ),
+        ],
+    ),
+    Lesson(
+        id="workflow-links-for-process-guidance",
+        trigger="workflow, process, step-by-step, checklist, review workflow",
+        action="To add guidance to a workflow step, use link_lesson_to_workflow_step - don't create new lessons just for workflows. Workflows aggregate existing lessons at the right moments. Check get_workflow first to see what lessons are already linked.",
+        rationale="Workflows are process templates. They don't contain knowledge themselves - they reference lessons that apply at each step. This keeps knowledge DRY and allows lessons to be reused across multiple workflows.",
+        parent_id="mgcp-knowledge-storage-types",
+        tags=["mgcp", "workflows", "knowledge-management"],
+    ),
 ]
 
 
@@ -812,6 +870,17 @@ LESSON_RELATIONSHIPS = [
     ("mgcp-record-decisions", "mgcp-record-gotchas", "complements", "Decisions and gotchas both capture architectural knowledge"),
     ("mgcp-record-couplings", "mgcp-record-gotchas", "complements", "Couplings and gotchas both capture maintenance knowledge"),
     ("mgcp-add-reusable-lessons", "mgcp-save-before-commit", "sequence_next", "After adding lessons, save context before committing"),
+
+    # MGCP knowledge storage type relationships
+    ("mgcp-usage", "mgcp-knowledge-storage-types", "prerequisite", "Understand MGCP usage before storage type distinctions"),
+    ("mgcp-knowledge-storage-types", "lessons-are-generic-knowledge", "prerequisite", "Understand storage types before lesson guidelines"),
+    ("mgcp-knowledge-storage-types", "catalogue-for-project-specific", "prerequisite", "Understand storage types before catalogue guidelines"),
+    ("mgcp-knowledge-storage-types", "workflow-links-for-process-guidance", "prerequisite", "Understand storage types before workflow guidelines"),
+    ("lessons-are-generic-knowledge", "catalogue-for-project-specific", "complements", "Lessons and catalogue work together - one for generic, one for specific"),
+    ("lessons-are-generic-knowledge", "mgcp-add-reusable-lessons", "related", "Both concern when and how to add lessons"),
+    ("catalogue-for-project-specific", "mgcp-record-decisions", "related", "Both concern project-specific knowledge storage"),
+    ("catalogue-for-project-specific", "mgcp-record-gotchas", "related", "Both concern project-specific knowledge storage"),
+    ("catalogue-for-project-specific", "mgcp-record-couplings", "related", "Both concern project-specific knowledge storage"),
 ]
 
 

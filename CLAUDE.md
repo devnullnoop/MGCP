@@ -89,7 +89,7 @@ All source files are in `src/mgcp/`:
 - `launcher.py` - Unified CLI launcher
 - `bootstrap.py` - Initial lesson seeding
 - `migrations.py` - Database migrations
-- `init_client.py` - Multi-client MCP configuration (8 LLM clients supported)
+- `init_project.py` - Multi-client MCP configuration (8 LLM clients supported)
 - `data_ops.py` - Export, import, and duplicate detection
 - `backup.py` - Backup and restore functionality
 

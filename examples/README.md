@@ -12,6 +12,7 @@ The `claude-hooks/` directory contains templates for automatic session initializ
 |------|-------|---------|
 | `session-init.py` | SessionStart | Load project context, inject MGCP usage instructions |
 | `git-reminder.py` | UserPromptSubmit | Detect "commit/push/git" keywords, remind to query lessons |
+| `catalogue-reminder.py` | UserPromptSubmit | Detect library/security/decision mentions, remind to catalogue |
 | `mgcp-reminder.sh` | PostToolUse (Edit/Write) | Remind to save lessons after code changes |
 | `mgcp-precompact.sh` | PreCompact | Critical reminder to save before context compression |
 

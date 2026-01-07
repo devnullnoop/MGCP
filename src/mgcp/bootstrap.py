@@ -557,6 +557,8 @@ FEATURE_DEVELOPMENT_WORKFLOW = Workflow(
                 "Verify error handling is complete",
                 "Check documentation is updated",
                 "Ensure tests are committed",
+                "Check for hardcoded secrets (grep for api_key, token, password, secret)",
+                "Verify .env files are gitignored",
             ],
             outputs=["clean commit", "complete feature"],
             lessons=[
@@ -569,6 +571,11 @@ FEATURE_DEVELOPMENT_WORKFLOW = Workflow(
                     lesson_id="error-handling",
                     relevance="Verify error handling is complete and consistent before commit",
                     priority=2,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="no-hardcoded-secrets",
+                    relevance="Critical: Check for accidentally committed secrets before pushing",
+                    priority=1,
                 ),
             ],
         ),

@@ -25,18 +25,9 @@ mgcp-init --client claude-code
 
 This automatically configures the MCP server and creates project hooks.
 
-For manual setup:
+For manual setup, copy hooks from the MGCP `.claude/hooks/` directory to your project.
 
-1. Copy the hooks to your project:
-   ```bash
-   mkdir -p your-project/.claude/hooks
-   cp claude-hooks/*.py your-project/.claude/hooks/
-   cp claude-hooks/*.sh your-project/.claude/hooks/
-   cp claude-hooks/settings.json your-project/.claude/
-   chmod +x your-project/.claude/hooks/*
-   ```
-
-2. Restart Claude Code in that project
+Note: The `mgcp-init` command is strongly recommended as it generates the hooks with correct paths.
 
 ### How Hooks Work
 

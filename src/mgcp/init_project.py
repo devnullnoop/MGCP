@@ -236,8 +236,101 @@ cat << 'EOF'
 EOF
 '''
 
+GIT_REMINDER_HOOK_SCRIPT = '''#!/usr/bin/env python3
+"""UserPromptSubmit hook that detects git operations and reminds to query lessons."""
+import json
+import re
+import sys
+
+GIT_KEYWORDS = [r"\\bcommit\\b", r"\\bpush\\b", r"\\bgit\\b", r"\\bpr\\b", r"\\bpull request\\b", r"\\bmerge\\b"]
+
+def main():
+    try:
+        hook_input = json.load(sys.stdin)
+    except json.JSONDecodeError:
+        sys.exit(0)
+
+    prompt = hook_input.get("prompt", "").lower()
+
+    for pattern in GIT_KEYWORDS:
+        if re.search(pattern, prompt, re.IGNORECASE):
+            print("""<user-prompt-submit-hook>
+BEFORE executing any git operation (commit, push, PR):
+1. Call mcp__mgcp__query_lessons with "git commit workflow"
+2. Follow any project-specific git lessons (like attribution rules)
+3. Then proceed with the git operation
+</user-prompt-submit-hook>""")
+            sys.exit(0)
+
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main()
+'''
+
+CATALOGUE_REMINDER_HOOK_SCRIPT = '''#!/usr/bin/env python3
+"""UserPromptSubmit hook that detects library/security/decision mentions."""
+import json
+import re
+import sys
+
+CATALOGUE_PATTERNS = [
+    (r"\\b(using|chose|picked|selected|installed|added)\\b.{0,30}\\b(library|package|framework|tool)\\b", "dependency"),
+    (r"\\b(pip install|npm install|cargo add|go get)\\b", "dependency"),
+    (r"\\b(security|vulnerability|cve|exploit)\\b.{0,20}\\b(issue|bug|concern|risk)\\b", "security"),
+    (r"\\b(decided|choosing|picked|went with)\\b.{0,20}\\b(over|instead of)\\b", "decision"),
+    (r"\\b(gotcha|quirk|caveat|watch out|careful|tricky)\\b", "arch_note"),
+    (r"\\b(convention|naming|style|always|never)\\b.{0,20}\\b(use|follow|do|avoid)\\b", "convention"),
+]
+
+REMINDERS = {
+    "dependency": "mcp__mgcp__add_catalogue_dependency (name, purpose, version)",
+    "security": "mcp__mgcp__add_catalogue_security_note (title, description, severity)",
+    "decision": "mcp__mgcp__add_catalogue_decision (title, decision, rationale)",
+    "arch_note": "mcp__mgcp__add_catalogue_arch_note (title, description, category)",
+    "convention": "mcp__mgcp__add_catalogue_convention (title, rule, category)",
+}
+
+def main():
+    try:
+        hook_input = json.load(sys.stdin)
+    except json.JSONDecodeError:
+        sys.exit(0)
+
+    prompt = hook_input.get("prompt", "")
+    detected = set()
+
+    for pattern, cat_type in CATALOGUE_PATTERNS:
+        if re.search(pattern, prompt, re.IGNORECASE):
+            detected.add(cat_type)
+
+    if detected:
+        print("<user-prompt-submit-hook>")
+        print("Consider cataloguing: " + ", ".join(REMINDERS[t] for t in detected))
+        print("</user-prompt-submit-hook>")
+
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main()
+'''
+
 HOOK_SETTINGS = {
     "hooks": {
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/git-reminder.py"
+                    },
+                    {
+                        "type": "command",
+                        "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/catalogue-reminder.py"
+                    }
+                ]
+            }
+        ],
         "SessionStart": [
             {
                 "hooks": [
@@ -368,10 +461,12 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False) -> dict:
     Initialize Claude Code hooks in a project directory.
 
     Creates:
-    - .claude/hooks/session-init.py     (SessionStart hook)
-    - .claude/hooks/mgcp-reminder.sh    (PostToolUse hook)
-    - .claude/hooks/mgcp-precompact.sh  (PreCompact hook)
-    - .claude/settings.json             (Hook configuration)
+    - .claude/hooks/session-init.py       (SessionStart hook)
+    - .claude/hooks/git-reminder.py       (UserPromptSubmit hook - git operations)
+    - .claude/hooks/catalogue-reminder.py (UserPromptSubmit hook - catalogue prompts)
+    - .claude/hooks/mgcp-reminder.sh      (PostToolUse hook)
+    - .claude/hooks/mgcp-precompact.sh    (PreCompact hook)
+    - .claude/settings.json               (Hook configuration)
 
     Args:
         project_dir: The project directory to initialize
@@ -394,6 +489,8 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False) -> dict:
     # Define all hook files to create
     hook_files = [
         (hooks_dir / "session-init.py", HOOK_SCRIPT),
+        (hooks_dir / "git-reminder.py", GIT_REMINDER_HOOK_SCRIPT),
+        (hooks_dir / "catalogue-reminder.py", CATALOGUE_REMINDER_HOOK_SCRIPT),
         (hooks_dir / "mgcp-reminder.sh", REMINDER_HOOK_SCRIPT),
         (hooks_dir / "mgcp-precompact.sh", PRECOMPACT_HOOK_SCRIPT),
     ]
@@ -681,10 +778,12 @@ Examples:
   mgcp-init --detect                 # Show which clients are installed
 
 For Claude Code users, this also creates project hooks:
-  .claude/hooks/session-init.py      # Loads MGCP context on session start
-  .claude/hooks/mgcp-reminder.sh     # Reminds to save lessons after edits
-  .claude/hooks/mgcp-precompact.sh   # Critical reminder before context compression
-  .claude/settings.json              # Enables all hooks
+  .claude/hooks/session-init.py       # Loads MGCP context on session start
+  .claude/hooks/git-reminder.py       # Reminds to query lessons before git ops
+  .claude/hooks/catalogue-reminder.py # Prompts to catalogue libraries/decisions
+  .claude/hooks/mgcp-reminder.sh      # Reminds to save lessons after edits
+  .claude/hooks/mgcp-precompact.sh    # Critical reminder before context compression
+  .claude/settings.json               # Enables all hooks
         """,
     )
 

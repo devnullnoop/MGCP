@@ -37,9 +37,14 @@ dev = [
 
 [project.scripts]
 mgcp = "mgcp.server:main"
+mgcp-init = "mgcp.init_project:main"
 mgcp-bootstrap = "mgcp.bootstrap:main"
 mgcp-dashboard = "mgcp.web_server:main"
 mgcp-launcher = "mgcp.launcher:main"
+mgcp-export = "mgcp.data_ops:main_export"
+mgcp-import = "mgcp.data_ops:main_import"
+mgcp-duplicates = "mgcp.data_ops:main_duplicates"
+mgcp-backup = "mgcp.backup:main"
 
 [project.urls]
 Homepage = "https://github.com/devnullnoop/MGCP"

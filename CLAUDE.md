@@ -47,6 +47,27 @@ pytest tests/test_basic.py::test_name
 ruff check src/
 ```
 
+## Data Management Commands
+
+```bash
+# Backup MGCP data
+mgcp-backup                          # Create backup in current directory
+mgcp-backup -o backup.tar.gz         # Specify output file
+mgcp-backup --list                   # Preview what would be backed up
+mgcp-backup --restore backup.tar.gz  # Restore from backup
+
+# Export/Import lessons
+mgcp-export lessons -o lessons.json  # Export lessons to JSON
+mgcp-export projects -o proj.json    # Export project contexts
+mgcp-import lessons.json             # Import lessons (skips duplicates)
+mgcp-import data.json --merge overwrite  # Overwrite duplicates
+mgcp-import data.json --dry-run      # Preview import without changes
+
+# Find duplicate lessons
+mgcp-duplicates                      # Find similar lessons (0.85 threshold)
+mgcp-duplicates -t 0.90              # Higher threshold for stricter matching
+```
+
 ## Architecture
 
 See `docs/architecture.html` for the interactive architecture diagram.
@@ -68,6 +89,9 @@ All source files are in `src/mgcp/`:
 - `launcher.py` - Unified CLI launcher
 - `bootstrap.py` - Initial lesson seeding
 - `migrations.py` - Database migrations
+- `init_client.py` - Multi-client MCP configuration (8 LLM clients supported)
+- `data_ops.py` - Export, import, and duplicate detection
+- `backup.py` - Backup and restore functionality
 
 ### Data Model
 
@@ -147,4 +171,5 @@ Data is stored in `~/.mgcp/` by default.
 2. ~~Phase 2: Semantic search with embeddings~~ Complete
 3. ~~Phase 3: Graph traversal and hierarchical structure~~ Complete
 4. ~~Phase 4: Refinement, versioning, and learning loops~~ Complete
-5. Phase 5: Intelligence layer with proactive suggestions (planned)
+5. Phase 5: Quality of Life (in progress) - Multi-client support, export/import, backup/restore
+6. Phase 6: Proactive Intelligence (planned) - Auto-suggestions, feedback loops, git integration

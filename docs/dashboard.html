@@ -1051,8 +1051,8 @@
         // ====================================================================
 
         /**
-         * Test function to trigger neural firing with random nodes.
-         * Useful for demonstrating the visualization effect.
+         * Test function to trigger neural firing along a path from root.
+         * Simulates a query tracing through the graph hierarchy.
          */
         function testNeuralFire() {
             if (!graphData.nodes || graphData.nodes.length === 0) {
@@ -1060,21 +1060,168 @@
                 return;
             }
 
-            // Pick 1-5 random lesson nodes
-            const lessonNodes = graphData.nodes.filter(n => n.type === 'lesson');
-            if (lessonNodes.length === 0) {
-                // Fall back to any nodes
-                const randomNode = graphData.nodes[Math.floor(Math.random() * graphData.nodes.length)];
-                triggerNeuralFiring([randomNode.id], { intensity: 1.0, cascade: true });
+            // Build a path from root to a random leaf lesson
+            const path = buildPathFromRoot();
+            if (path.length === 0) {
+                console.log('Could not build path');
                 return;
             }
 
-            const count = Math.min(Math.floor(Math.random() * 4) + 1, lessonNodes.length);
-            const shuffled = lessonNodes.sort(() => 0.5 - Math.random());
-            const selected = shuffled.slice(0, count).map(n => n.id);
+            console.log('Firing path:', path);
+            triggerNeuralFiringPath(path, { intensity: 1.0 });
+        }
 
-            console.log('Firing nodes:', selected);
-            triggerNeuralFiring(selected, { intensity: 1.0, cascade: true });
+        /**
+         * Builds a random path from root down to a leaf lesson node.
+         * @returns {Array} Array of node IDs forming the path
+         */
+        function buildPathFromRoot() {
+            // Build adjacency map (parent -> children)
+            const children = {};
+            graphData.links.forEach(link => {
+                const source = link.source.id || link.source;
+                const target = link.target.id || link.target;
+                if (link.relation === 'parent') {
+                    if (!children[source]) children[source] = [];
+                    children[source].push(target);
+                }
+            });
+
+            // Start from root and walk down randomly
+            const path = ['root'];
+            let current = 'root';
+            let maxDepth = 10; // Safety limit
+
+            while (maxDepth-- > 0) {
+                const childList = children[current];
+                if (!childList || childList.length === 0) break;
+
+                // Pick a random child
+                const next = childList[Math.floor(Math.random() * childList.length)];
+                path.push(next);
+                current = next;
+
+                // Stop at lessons (leaf nodes)
+                const node = graphData.nodes.find(n => n.id === current);
+                if (node && node.type === 'lesson') break;
+            }
+
+            return path;
+        }
+
+        /**
+         * Triggers neural firing along a path, with sequential timing.
+         * @param {Array} path - Array of node IDs forming the path (in order)
+         * @param {Object} options - Animation options
+         */
+        function triggerNeuralFiringPath(path, options = {}) {
+            const intensity = options.intensity || 1.0;
+            const svg = d3.select("#graph");
+            const g = svg.select("g");
+
+            if (!g.node() || !window.graphNode) return;
+
+            // Get node positions
+            const nodePositions = {};
+            window.graphNode.each(function(d) {
+                nodePositions[d.id] = { x: d.x, y: d.y, data: d };
+            });
+
+            // Fire each node in sequence along the path
+            path.forEach((nodeId, index) => {
+                const pos = nodePositions[nodeId];
+                if (!pos) return;
+
+                const delay = index * 300; // 300ms between each node in path
+
+                setTimeout(() => {
+                    // Create ripple at this node
+                    const rippleLayer = g.select(".ripple-layer");
+                    if (rippleLayer.node()) {
+                        for (let i = 0; i < 2; i++) {
+                            rippleLayer.append("circle")
+                                .attr("cx", pos.x)
+                                .attr("cy", pos.y)
+                                .attr("r", 15)
+                                .attr("fill", "none")
+                                .attr("stroke", "#4fc3f7")
+                                .attr("stroke-width", 3 * intensity)
+                                .attr("opacity", 0.8)
+                                .transition()
+                                .delay(i * 80)
+                                .duration(600)
+                                .attr("r", 60)
+                                .attr("opacity", 0)
+                                .attr("stroke-width", 1)
+                                .remove();
+                        }
+                    }
+
+                    // Fire this node
+                    window.graphNode.filter(d => d.id === nodeId)
+                        .select("circle")
+                        .attr("filter", "url(#neural-glow-intense)")
+                        .transition()
+                        .duration(150)
+                        .attr("fill", "#00ff88")
+                        .attr("r", d => (d.type === "root" ? 25 : d.type === "category" ? 20 : 15) * 1.4)
+                        .transition()
+                        .duration(300)
+                        .attr("r", d => d.type === "root" ? 25 : d.type === "category" ? 20 : 15)
+                        .attr("fill", "#4caf50")
+                        .transition()
+                        .delay(1500)
+                        .duration(400)
+                        .attr("filter", null)
+                        .attr("fill", d => getNodeColor(d));
+
+                    // Animate pulse to next node in path
+                    if (index < path.length - 1) {
+                        const nextId = path[index + 1];
+                        const nextPos = nodePositions[nextId];
+                        if (nextPos) {
+                            const pulseLayer = g.select(".pulse-layer");
+                            if (pulseLayer.node()) {
+                                // Create traveling pulse
+                                const pulse = pulseLayer.append("circle")
+                                    .attr("cx", pos.x)
+                                    .attr("cy", pos.y)
+                                    .attr("r", 8)
+                                    .attr("fill", "#4fc3f7")
+                                    .attr("filter", "url(#neural-glow)")
+                                    .attr("opacity", 1);
+
+                                pulse.transition()
+                                    .duration(250)
+                                    .attr("cx", nextPos.x)
+                                    .attr("cy", nextPos.y)
+                                    .attr("r", 4)
+                                    .attr("opacity", 0.3)
+                                    .remove();
+
+                                // Flash the connecting edge
+                                g.select(".link-layer")
+                                    .selectAll("line")
+                                    .filter(d => {
+                                        const s = d.source.id || d.source;
+                                        const t = d.target.id || d.target;
+                                        return (s === nodeId && t === nextId) || (s === nextId && t === nodeId);
+                                    })
+                                    .transition()
+                                    .duration(100)
+                                    .attr("stroke", "#00ff88")
+                                    .attr("stroke-width", 5)
+                                    .attr("stroke-opacity", 1)
+                                    .transition()
+                                    .duration(500)
+                                    .attr("stroke", d => getLinkColor(d.relation))
+                                    .attr("stroke-width", d => 1 + (d.weight || 0.5) * 2)
+                                    .attr("stroke-opacity", d => 0.4 + (d.weight || 0.5) * 0.4);
+                            }
+                        }
+                    }
+                }, delay);
+            });
         }
 
         // ====================================================================

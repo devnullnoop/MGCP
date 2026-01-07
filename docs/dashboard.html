@@ -649,11 +649,15 @@
          */
         function getNodeColor(d) {
             if (activeNodes.has(d.id)) return "#4caf50";
+
+            // Always show distinctive colors for structural nodes (root, workflow, etc.)
+            if (d.type === "root") return "#f44336";
+            if (d.type === "category") return "#9c27b0";
+            if (d.type === "workflow") return "#f59e0b"; // Amber for workflow
+            if (d.type === "workflow_step") return "#fbbf24"; // Yellow for steps
+
+            // For lessons, use heatmap or type-based color
             if (!showHeatmap) {
-                if (d.type === "root") return "#f44336";
-                if (d.type === "category") return "#9c27b0";
-                if (d.type === "workflow") return "#f59e0b"; // Amber for workflow
-                if (d.type === "workflow_step") return "#fbbf24"; // Yellow for steps
                 return "#4fc3f7";
             }
             // Heatmap based on usage percentage

@@ -16,6 +16,13 @@ from .graph import LessonGraph
 BOOTSTRAP_LESSONS = [
     # ROOT CATEGORIES
     Lesson(
+        id="security",
+        trigger="security, secure, vulnerability, attack, exploit, injection, xss, csrf",
+        action="Apply security best practices at every step of development",
+        rationale="Security vulnerabilities are expensive to fix after deployment. Build security in from the start.",
+        tags=["meta", "security", "quality"],
+    ),
+    Lesson(
         id="verification",
         trigger="verify, check, validate, confirm, ensure, test",
         action="Always verify assumptions before acting on them",
@@ -217,6 +224,123 @@ BOOTSTRAP_LESSONS = [
             ),
         ],
     ),
+
+    # SECURITY CHILDREN
+    Lesson(
+        id="validate-input",
+        trigger="input, user input, form, request, parameter, query",
+        action="Validate and sanitize all external input before use",
+        rationale="Untrusted input is the root cause of injection attacks, XSS, and many vulnerabilities",
+        parent_id="security",
+        tags=["security", "input-validation"],
+        examples=[
+            Example(
+                label="bad",
+                code="query = f\"SELECT * FROM users WHERE id = {user_input}\"",
+                explanation="SQL injection vulnerability - user controls query",
+            ),
+            Example(
+                label="good",
+                code="query = \"SELECT * FROM users WHERE id = ?\"\ncursor.execute(query, (user_input,))",
+                explanation="Parameterized query prevents injection",
+            ),
+        ],
+    ),
+    Lesson(
+        id="no-hardcoded-secrets",
+        trigger="password, secret, key, token, credential, api key",
+        action="Never hardcode secrets - use environment variables or secret managers",
+        rationale="Hardcoded secrets end up in version control and are easily leaked",
+        parent_id="security",
+        tags=["security", "secrets"],
+        examples=[
+            Example(
+                label="bad",
+                code="API_KEY = \"sk-abc123secret\"  # Committed to git",
+                explanation="Secret will be in git history forever",
+            ),
+            Example(
+                label="good",
+                code="API_KEY = os.environ.get('API_KEY')\nif not API_KEY:\n    raise ValueError('API_KEY not set')",
+                explanation="Secret comes from environment, not code",
+            ),
+        ],
+    ),
+    Lesson(
+        id="least-privilege",
+        trigger="permission, access, role, privilege, scope, capability",
+        action="Request only the minimum permissions needed for the task",
+        rationale="Excessive permissions increase attack surface and blast radius",
+        parent_id="security",
+        tags=["security", "permissions"],
+        examples=[
+            Example(
+                label="bad",
+                code="# Request admin access when read-only would suffice\nconn = db.connect(role='admin')",
+                explanation="Over-privileged connection",
+            ),
+            Example(
+                label="good",
+                code="# Use read-only connection for queries\nconn = db.connect(role='readonly')",
+                explanation="Minimum privilege for the task",
+            ),
+        ],
+    ),
+    Lesson(
+        id="secure-error-messages",
+        trigger="error message, exception, stack trace, debug",
+        action="Never expose sensitive information in error messages to users",
+        rationale="Detailed errors help attackers understand system internals",
+        parent_id="security",
+        tags=["security", "errors"],
+        examples=[
+            Example(
+                label="bad",
+                code="return f'Database error: {e}'  # Exposes DB details",
+                explanation="Reveals database structure to attacker",
+            ),
+            Example(
+                label="good",
+                code="logger.error(f'DB error: {e}')  # Log internally\nreturn 'An error occurred'  # Generic to user",
+                explanation="Log details internally, show generic message to user",
+            ),
+        ],
+    ),
+    Lesson(
+        id="dependency-security",
+        trigger="dependency, package, library, npm, pip, vulnerability, CVE",
+        action="Audit dependencies for known vulnerabilities before adding them",
+        rationale="Supply chain attacks through compromised dependencies are common",
+        parent_id="security",
+        tags=["security", "dependencies"],
+        examples=[
+            Example(
+                label="good",
+                code="# Before adding: pip-audit, npm audit, or snyk\n# Check: is it maintained? recent commits? known issues?",
+                explanation="Audit before trusting third-party code",
+            ),
+        ],
+    ),
+    Lesson(
+        id="escape-output",
+        trigger="output, html, template, render, display, XSS",
+        action="Escape output based on context (HTML, JS, URL, etc.)",
+        rationale="Unescaped output enables XSS attacks",
+        parent_id="security",
+        tags=["security", "xss", "output"],
+        examples=[
+            Example(
+                label="bad",
+                code="return f'<div>{user_name}</div>'  # XSS if name contains <script>",
+                explanation="User-controlled content rendered as HTML",
+            ),
+            Example(
+                label="good",
+                code="from html import escape\nreturn f'<div>{escape(user_name)}</div>'",
+                explanation="HTML entities escaped, script tags neutralized",
+            ),
+        ],
+    ),
 ]
 
 
@@ -260,6 +384,11 @@ FEATURE_DEVELOPMENT_WORKFLOW = Workflow(
                 WorkflowStepLesson(
                     lesson_id="verify-api-response",
                     relevance="Log actual responses during research to understand real API behavior",
+                    priority=2,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="dependency-security",
+                    relevance="Check dependencies for known vulnerabilities during research phase",
                     priority=2,
                 ),
             ],
@@ -355,6 +484,26 @@ FEATURE_DEVELOPMENT_WORKFLOW = Workflow(
                 WorkflowStepLesson(
                     lesson_id="error-context",
                     relevance="Include full context in error messages for future debugging",
+                    priority=2,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="validate-input",
+                    relevance="Validate all external input - user data, API responses, file contents",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="no-hardcoded-secrets",
+                    relevance="Never commit secrets to code - use environment variables",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="escape-output",
+                    relevance="Escape output when rendering to HTML, SQL, or other contexts",
+                    priority=2,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="secure-error-messages",
+                    relevance="Don't leak sensitive info in error messages shown to users",
                     priority=2,
                 ),
             ],
@@ -574,6 +723,17 @@ LESSON_RELATIONSHIPS = [
 
     # Alternative relationships (A or B can solve similar problems)
     ("verify-before-assert", "verify-calculations", "alternative", "Different verification approaches"),
+
+    # Security relationships
+    ("security", "validate-input", "prerequisite", "Understand security principles before input validation"),
+    ("security", "no-hardcoded-secrets", "prerequisite", "Understand security before secrets management"),
+    ("security", "least-privilege", "prerequisite", "Understand security before privilege management"),
+    ("security", "escape-output", "prerequisite", "Understand security before output handling"),
+    ("validate-input", "escape-output", "complements", "Input validation and output escaping work together"),
+    ("secure-error-messages", "error-context", "related", "Both deal with error information, but different audiences"),
+    ("dependency-security", "check-api-versions", "related", "Both concern dependency management and versions"),
+    ("validate-input", "test-edge-cases", "complements", "Test edge cases to verify input validation"),
+    ("no-hardcoded-secrets", "verify-file-paths", "related", "Both concern sensitive resource access"),
 ]
 
 

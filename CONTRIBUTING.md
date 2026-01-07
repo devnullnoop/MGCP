@@ -37,15 +37,17 @@ pytest --cov=src/mgcp
 
 ### Code Style
 
-We use [ruff](https://github.com/astral-sh/ruff) for linting:
+We use [ruff](https://github.com/astral-sh/ruff) for linting (line-length: 120):
 
 ```bash
 # Check for issues
-ruff check src/
+ruff check src/ tests/
 
 # Auto-fix where possible
-ruff check --fix src/
+ruff check --fix src/ tests/
 ```
+
+**Important**: Treat warnings as errors. The CI will fail if there are any linter warnings.
 
 ### Making Changes
 
@@ -93,6 +95,31 @@ Key files to understand:
 3. Implement persistence in `persistence.py` if needed
 4. Add tests in `tests/`
 5. Update documentation in README.md and CLAUDE.md
+
+## Adding Claude Code Hooks
+
+MGCP uses hooks to make lessons proactive. Hooks are in `.claude/hooks/`:
+
+| Event | Use Case |
+|-------|----------|
+| `SessionStart` | Load context at session start |
+| `UserPromptSubmit` | Detect keywords in user messages |
+| `PostToolUse` | React after tool execution |
+| `PreCompact` | Save state before context compression |
+
+Example hook pattern (UserPromptSubmit):
+```python
+import json, sys, re
+
+hook_input = json.load(sys.stdin)
+prompt = hook_input.get("prompt", "").lower()
+
+if re.search(r"\bcommit\b", prompt):
+    print("<reminder>Query lessons before committing</reminder>")
+sys.exit(0)
+```
+
+Update `.claude/settings.json` to register new hooks.
 
 ## Reporting Issues
 

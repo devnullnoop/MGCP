@@ -280,6 +280,7 @@ For Claude Code users, `mgcp-init` creates project-level hooks that help the AI 
 |------|---------|---------|
 | `session-init.py` | Session start | Prompts AI to load project context and query relevant lessons |
 | `git-reminder.py` | User mentions "commit", "push", "git" | Reminds AI to query lessons before git operations |
+| `catalogue-reminder.py` | User mentions libraries, security, decisions | Reminds AI to catalogue dependencies, security notes, decisions |
 | `mgcp-reminder.sh` | After Edit/Write | Short reminder to save lessons when learning something new |
 | `mgcp-precompact.sh` | Before context compression | **Critical** reminder to save all lessons before context is lost |
 
@@ -289,6 +290,7 @@ These hooks are created in your project's `.claude/` directory:
 ├── hooks/
 │   ├── session-init.py
 │   ├── git-reminder.py
+│   ├── catalogue-reminder.py
 │   ├── mgcp-reminder.sh
 │   └── mgcp-precompact.sh
 └── settings.json

@@ -4,28 +4,59 @@ This directory contains example configurations for integrating MGCP with Claude 
 
 ## Claude Code Hooks
 
-The `claude-hooks/` directory contains templates for automatic session initialization.
+The `claude-hooks/` directory contains templates for automatic session initialization and proactive lesson surfacing.
+
+### Available Hooks
+
+| Hook | Event | Purpose |
+|------|-------|---------|
+| `session-init.py` | SessionStart | Load project context, inject MGCP usage instructions |
+| `git-reminder.py` | UserPromptSubmit | Detect "commit/push/git" keywords, remind to query lessons |
+| `mgcp-reminder.sh` | PostToolUse (Edit/Write) | Remind to save lessons after code changes |
+| `mgcp-precompact.sh` | PreCompact | Critical reminder to save before context compression |
 
 ### Setup
+
+The easiest way is to use `mgcp-init`:
+
+```bash
+mgcp-init --client claude-code
+```
+
+This automatically configures the MCP server and creates project hooks.
+
+For manual setup:
 
 1. Copy the hooks to your project:
    ```bash
    mkdir -p your-project/.claude/hooks
-   cp claude-hooks/session-init.py your-project/.claude/hooks/
+   cp claude-hooks/*.py your-project/.claude/hooks/
+   cp claude-hooks/*.sh your-project/.claude/hooks/
    cp claude-hooks/settings.json your-project/.claude/
+   chmod +x your-project/.claude/hooks/*
    ```
 
-2. Edit `settings.json` to use your Python path if needed
+2. Restart Claude Code in that project
 
-3. Restart Claude Code in that project
+### How Hooks Work
 
-### What the Hook Does
+**SessionStart** (`session-init.py`):
+- Fires when a new session starts
+- Injects instructions telling Claude to load project context and query lessons
 
-At session start, the hook injects instructions telling Claude to:
-1. Load project context using `mcp__mgcp__get_project_context`
-2. Query relevant lessons using `mcp__mgcp__query_lessons`
+**UserPromptSubmit** (`git-reminder.py`):
+- Fires when user sends any message
+- Checks for git-related keywords (commit, push, git, pr, merge)
+- Injects reminder to query lessons before git operations
+- This is the key to making lessons **proactive** rather than passive
 
-This ensures Claude has relevant knowledge before you start working.
+**PostToolUse** (`mgcp-reminder.sh`):
+- Fires after Edit/Write tool calls
+- Short reminder to save lessons when learning something new
+
+**PreCompact** (`mgcp-precompact.sh`):
+- Fires before context window compression
+- Critical warning to save all lessons before context is lost
 
 ## MCP Server Configuration
 
@@ -51,6 +82,45 @@ Or using the installed command:
     "mgcp": {
       "command": "/path/to/venv/bin/mgcp"
     }
+  }
+}
+```
+
+## Writing Custom Hooks
+
+UserPromptSubmit hooks are powerful for keyword detection:
+
+```python
+#!/usr/bin/env python3
+import json
+import re
+import sys
+
+hook_input = json.load(sys.stdin)
+prompt = hook_input.get("prompt", "").lower()
+
+# Detect keywords
+if re.search(r"\bdeploy\b", prompt):
+    print("<reminder>Check deployment checklist before deploying</reminder>")
+
+sys.exit(0)
+```
+
+Register in `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/my-hook.py"
+          }
+        ]
+      }
+    ]
   }
 }
 ```

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **MGCP (Memory Graph Control Protocol)** is a Python MCP server providing persistent, graph-based memory for LLM interactions. The system stores lessons learned during LLM sessions in a graph structure, allowing semantic querying without loading full context histories.
 
-**Status**: v1.0.0 - Implemented and running as a Claude Code SessionStart hook. Phases 1-4 complete.
+**Status**: v1.1.0 - Alpha/Research project. Phases 1-5 complete, actively dogfooding.
 
 ## Documentation Preferences
 
@@ -165,11 +165,25 @@ Add to Claude Code settings (`~/.config/claude-code/settings.json`):
 
 Data is stored in `~/.mgcp/` by default.
 
+## Claude Code Hooks
+
+MGCP uses Claude Code hooks to make lessons proactive rather than passive:
+
+| Hook | Event | Purpose |
+|------|-------|---------|
+| `session-init.py` | SessionStart | Load project context, inject usage instructions |
+| `git-reminder.py` | UserPromptSubmit | Detect "commit/push/git" and remind to query lessons |
+| `catalogue-reminder.py` | UserPromptSubmit | Detect library/security/decision mentions, remind to catalogue |
+| `mgcp-reminder.sh` | PostToolUse (Edit/Write) | Remind to save lessons after code changes |
+| `mgcp-precompact.sh` | PreCompact | Critical reminder to save before context compression |
+
+The `UserPromptSubmit` hook is key - it inspects user messages for keywords and injects reminders, making the memory system automatic rather than relying on manual queries.
+
 ## Implementation Roadmap
 
 1. ~~Phase 1: Basic lesson storage and retrieval via MCP~~ Complete
 2. ~~Phase 2: Semantic search with embeddings~~ Complete
 3. ~~Phase 3: Graph traversal and hierarchical structure~~ Complete
 4. ~~Phase 4: Refinement, versioning, and learning loops~~ Complete
-5. Phase 5: Quality of Life (in progress) - Multi-client support, export/import, backup/restore
+5. ~~Phase 5: Quality of Life~~ Complete - Multi-client support, export/import, backup/restore, proactive hooks
 6. Phase 6: Proactive Intelligence (planned) - Auto-suggestions, feedback loops, git integration

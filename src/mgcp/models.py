@@ -164,6 +164,21 @@ class ErrorPattern(BaseModel):
     related_files: list[str] = Field(default_factory=list, description="Files where this error occurs")
 
 
+class GenericCatalogueItem(BaseModel):
+    """A flexible catalogue item for custom item types.
+
+    Allows users to create new catalogue item types without modifying the schema.
+    The item_type field defines the category (e.g., 'api_endpoint', 'env_var', 'migration').
+    """
+
+    item_type: str = Field(..., description="The type/category of this item (e.g., 'api_endpoint', 'env_var')")
+    title: str = Field(..., description="Short title for the item")
+    content: str = Field(..., description="Main content/description")
+    metadata: dict[str, str] = Field(default_factory=dict, description="Additional key-value metadata")
+    tags: list[str] = Field(default_factory=list, description="Tags for searchability")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class ProjectCatalogue(BaseModel):
     """Structured knowledge base for a project - the bootstrap guide."""
 
@@ -194,6 +209,9 @@ class ProjectCatalogue(BaseModel):
     file_couplings: list[FileCoupling] = Field(default_factory=list, description="Files that must change together")
     decisions: list[Decision] = Field(default_factory=list, description="Architectural decisions with rationale")
     error_patterns: list[ErrorPattern] = Field(default_factory=list, description="Common errors and solutions")
+
+    # Flexible custom items (extensible)
+    custom_items: list["GenericCatalogueItem"] = Field(default_factory=list, description="Custom catalogue items of any type")
 
 
 class ProjectContext(BaseModel):
@@ -305,5 +323,18 @@ class ProjectContext(BaseModel):
 
         if self.notes:
             lines.append(f"\n### Notes: {self.notes}")
+
+        # Custom catalogue items (grouped by type)
+        if cat.custom_items:
+            grouped = {}
+            for item in cat.custom_items:
+                if item.item_type not in grouped:
+                    grouped[item.item_type] = []
+                grouped[item.item_type].append(item)
+
+            for item_type, items in grouped.items():
+                lines.append(f"\n### 📦 {item_type.replace('_', ' ').title()}:")
+                for item in items[:5]:
+                    lines.append(f"  • **{item.title}**: {item.content[:80]}...")
 
         return "\n".join(lines)

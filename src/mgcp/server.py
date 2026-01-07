@@ -24,6 +24,7 @@ from .models import (
     ErrorPattern,
     Example,
     FileCoupling,
+    GenericCatalogueItem,
     Lesson,
     ProjectContext,
     ProjectTodo,
@@ -1074,6 +1075,60 @@ async def add_catalogue_error_pattern(
 
 
 @mcp.tool()
+async def add_catalogue_custom_item(
+    project_path: str,
+    item_type: str,
+    title: str,
+    content: str,
+    metadata: str = "",
+    tags: str = "",
+) -> str:
+    """Add a custom/flexible catalogue item to a project.
+
+    Use this for item types not covered by built-in types (arch, security, etc.).
+    Create any item type you need (e.g., 'api_endpoint', 'env_var', 'migration').
+
+    Args:
+        project_path: Absolute path to the project root directory
+        item_type: Custom type name (e.g., 'api_endpoint', 'env_var', 'feature_flag')
+        title: Short title for the item
+        content: Main content/description
+        metadata: Key-value pairs as 'key1=value1,key2=value2' (optional)
+        tags: Comma-separated tags for searchability (optional)
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    context = await _get_or_create_project_context(project_path)
+
+    # Parse metadata
+    metadata_dict = {}
+    if metadata:
+        for pair in metadata.split(","):
+            if "=" in pair:
+                key, value = pair.split("=", 1)
+                metadata_dict[key.strip()] = value.strip()
+
+    # Parse tags
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+
+    item = GenericCatalogueItem(
+        item_type=item_type,
+        title=title,
+        content=content,
+        metadata=metadata_dict,
+        tags=tag_list,
+    )
+
+    context.catalogue.custom_items.append(item)
+    await store.save_project_context(context)
+
+    # Index in vector store for searchability
+    catalogue_vector._add_custom_item(context.project_id, item)
+
+    return f"Added custom item [{item_type}]: {title}"
+
+
+@mcp.tool()
 async def remove_catalogue_item(
     project_path: str,
     item_type: str,
@@ -1131,8 +1186,18 @@ async def remove_catalogue_item(
         original_len = len(cat.error_patterns)
         cat.error_patterns = [e for e in cat.error_patterns if not e.error_signature.startswith(identifier)]
         removed = len(cat.error_patterns) < original_len
-    else:
-        return f"Unknown item type: {item_type}"
+    elif item_type == "custom" or item_type not in ("arch", "security", "framework", "library", "tool", "convention", "coupling", "decision", "error"):
+        # Handle custom items - identifier can be "type:title" or just "title"
+        if ":" in identifier:
+            custom_type, custom_title = identifier.split(":", 1)
+            original_len = len(cat.custom_items)
+            cat.custom_items = [i for i in cat.custom_items if not (i.item_type == custom_type and i.title == custom_title)]
+            removed = len(cat.custom_items) < original_len
+        else:
+            # Search by title only
+            original_len = len(cat.custom_items)
+            cat.custom_items = [i for i in cat.custom_items if i.title != identifier]
+            removed = len(cat.custom_items) < original_len
 
     if removed:
         await store.save_project_context(context)
@@ -1207,6 +1272,41 @@ async def get_catalogue_item(
 
 def main():
     """Run the MCP server with stdio transport."""
+    import sys
+
+    if len(sys.argv) > 1:
+        if sys.argv[1] in ("--help", "-h"):
+            print("""MGCP - Memory Graph Control Protocol Server
+
+Usage: mgcp [OPTIONS]
+
+The MGCP server runs as an MCP (Model Context Protocol) server using stdio
+transport. It is designed to be launched by MCP-compatible clients like
+Claude Code, Cursor, or other LLM tools.
+
+Options:
+  -h, --help     Show this help message
+  -V, --version  Show version number
+
+To configure your LLM client to use MGCP:
+  mgcp-init              Auto-detect and configure installed clients
+  mgcp-init --list       Show supported clients
+  mgcp-init --verify     Verify setup is working
+
+Other commands:
+  mgcp-bootstrap         Seed database with initial lessons
+  mgcp-dashboard         Start the web dashboard
+  mgcp-export            Export lessons to JSON
+  mgcp-import            Import lessons from JSON
+  mgcp-duplicates        Find duplicate lessons
+
+Data is stored in ~/.mgcp/ by default.
+""")
+            return
+        elif sys.argv[1] in ("--version", "-V"):
+            print("mgcp 1.0.0")
+            return
+
     mcp.run(transport="stdio")
 
 

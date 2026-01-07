@@ -14,6 +14,7 @@ from .models import (
     Dependency,
     ErrorPattern,
     FileCoupling,
+    GenericCatalogueItem,
     ProjectCatalogue,
     SecurityNote,
 )
@@ -95,6 +96,11 @@ class CatalogueVectorStore:
         # Index error patterns
         for err in catalogue.error_patterns:
             self._add_error_pattern(project_id, err)
+            count += 1
+
+        # Index custom items
+        for item in catalogue.custom_items:
+            self._add_custom_item(project_id, item)
             count += 1
 
         return count
@@ -209,6 +215,35 @@ class CatalogueVectorStore:
                 "related_files": ",".join(err.related_files),
             }],
         )
+
+    def _add_custom_item(self, project_id: str, item: GenericCatalogueItem) -> None:
+        """Add a custom/flexible catalogue item to the vector store."""
+        doc_id = self._make_id(project_id, item.item_type, item.title)
+        text = self._custom_item_to_text(item)
+
+        self.collection.upsert(
+            ids=[doc_id],
+            documents=[text],
+            metadatas=[{
+                "project_id": project_id,
+                "item_type": item.item_type,
+                "title": item.title,
+                "tags": ",".join(item.tags),
+            }],
+        )
+
+    def _custom_item_to_text(self, item: GenericCatalogueItem) -> str:
+        """Convert a custom catalogue item to searchable text."""
+        parts = [
+            f"Type: {item.item_type}",
+            f"Title: {item.title}",
+            f"Content: {item.content}",
+        ]
+        if item.tags:
+            parts.append(f"Tags: {', '.join(item.tags)}")
+        if item.metadata:
+            parts.append(f"Metadata: {', '.join(f'{k}={v}' for k, v in item.metadata.items())}")
+        return "\n".join(parts)
 
     def remove_item(self, project_id: str, item_type: ItemType, identifier: str) -> None:
         """Remove a single item from the vector store."""

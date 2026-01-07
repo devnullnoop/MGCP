@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS lesson_usage (
 CREATE TABLE IF NOT EXISTS project_contexts (
     project_id TEXT PRIMARY KEY,
     project_name TEXT NOT NULL,
-    project_path TEXT NOT NULL,
+    project_path TEXT NOT NULL UNIQUE,
     catalogue JSON NOT NULL DEFAULT '{}',
     todos JSON NOT NULL DEFAULT '[]',
     active_files JSON NOT NULL DEFAULT '[]',

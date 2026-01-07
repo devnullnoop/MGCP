@@ -233,16 +233,17 @@ python3 -m mgcp.web_server
 | Phase 2: Semantic Search | Complete |
 | Phase 3: Graph Traversal | Complete |
 | Phase 4: Refinement & Learning | Complete |
-| Phase 5: Quality of Life | In Progress |
+| Phase 5: Quality of Life | Complete |
 | Phase 6: Proactive Intelligence | Planned |
 
-### Phase 5 Features (In Progress)
+### Phase 5 Features (Complete)
 - [x] Multi-client support (8 clients: Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Continue, Cline, Cody)
 - [x] Export/import lessons (`mgcp-export`, `mgcp-import`)
 - [x] Duplicate lesson detection (`mgcp-duplicates`)
 - [x] Backup and restore (`mgcp-backup`, `mgcp-backup --restore`)
-- [ ] Auto-tagging suggestions
-- [ ] Lesson usage analytics dashboard
+- [x] Auto-tagging suggestions (`suggest_tags` in data_ops)
+- [x] Lesson usage analytics dashboard (heatmap visualization)
+- [x] Project deduplication migration (unique constraint on project_path)
 
 ### Phase 6 Features (Planned)
 - Auto-suggest lessons from conversations

@@ -26,6 +26,13 @@ def backup(output_path: Path | None = None, data_dir: Path = DEFAULT_DATA_DIR) -
     if output_path is None:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         output_path = Path.cwd() / f"mgcp-backup-{timestamp}"
+    else:
+        # Strip .tar.gz extension if provided, since make_archive adds it
+        output_str = str(output_path)
+        if output_str.endswith(".tar.gz"):
+            output_path = Path(output_str[:-7])
+        elif output_str.endswith(".tgz"):
+            output_path = Path(output_str[:-4])
 
     # Create archive
     archive_path = shutil.make_archive(

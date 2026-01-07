@@ -112,6 +112,180 @@ async def ensure_bidirectional_relationships(db_path: str = DEFAULT_DB_PATH) -> 
     return added_count
 
 
+async def deduplicate_project_contexts(db_path: str = DEFAULT_DB_PATH) -> int:
+    """
+    Deduplicate project contexts that have the same project_path but different project_ids.
+
+    When duplicates exist, merges data into a single record using the SHA256-based
+    project_id and keeps the most complete data (highest session count, most recent access).
+
+    Returns the number of duplicates removed.
+    """
+    import hashlib
+    import os
+
+    db_full_path = Path(os.path.expanduser(db_path))
+    if not db_full_path.exists():
+        return 0
+
+    async with aiosqlite.connect(db_full_path) as conn:
+        conn.row_factory = aiosqlite.Row
+
+        # Find all project_paths that have duplicates
+        cursor = await conn.execute("""
+            SELECT project_path, COUNT(*) as cnt
+            FROM project_contexts
+            GROUP BY project_path
+            HAVING COUNT(*) > 1
+        """)
+        duplicates = await cursor.fetchall()
+
+        removed_count = 0
+
+        for dup in duplicates:
+            project_path = dup["project_path"]
+            logger.info(f"Found duplicate projects for path: {project_path}")
+
+            # Get all records for this path
+            cursor = await conn.execute(
+                "SELECT * FROM project_contexts WHERE project_path = ? ORDER BY session_count DESC, last_accessed DESC",
+                (project_path,)
+            )
+            records = await cursor.fetchall()
+
+            # Generate the correct SHA256-based project_id
+            correct_id = hashlib.sha256(project_path.encode()).hexdigest()[:12]
+
+            # Find the best record to keep (highest session count, most recent)
+            best_record = records[0]
+
+            # Merge data from all records
+            merged_session_count = sum(r["session_count"] for r in records)
+            merged_decisions = []
+            for r in records:
+                decisions = json.loads(r["recent_decisions"]) if r["recent_decisions"] else []
+                merged_decisions.extend(decisions)
+            merged_decisions = merged_decisions[-10:]  # Keep last 10
+
+            # Delete all records for this path
+            await conn.execute(
+                "DELETE FROM project_contexts WHERE project_path = ?",
+                (project_path,)
+            )
+
+            # Insert the merged record with correct project_id
+            await conn.execute(
+                """
+                INSERT INTO project_contexts (
+                    project_id, project_name, project_path, catalogue, todos, active_files,
+                    recent_decisions, last_session_id, last_accessed, session_count, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    correct_id,
+                    best_record["project_name"],
+                    project_path,
+                    best_record["catalogue"],
+                    best_record["todos"],
+                    best_record["active_files"],
+                    json.dumps(merged_decisions),
+                    best_record["last_session_id"],
+                    best_record["last_accessed"],
+                    merged_session_count,
+                    best_record["notes"],
+                )
+            )
+
+            removed_count += len(records) - 1
+            logger.info(f"Merged {len(records)} records into one with id={correct_id}")
+
+        await conn.commit()
+
+    return removed_count
+
+
+async def ensure_unique_project_path(db_path: str = DEFAULT_DB_PATH) -> bool:
+    """
+    Ensure project_path has a UNIQUE constraint.
+
+    SQLite doesn't support adding constraints to existing tables, so we recreate
+    the table if needed. Only runs if duplicates have been removed first.
+
+    Returns True if migration was performed.
+    """
+    import os
+
+    db_full_path = Path(os.path.expanduser(db_path))
+    if not db_full_path.exists():
+        return False
+
+    async with aiosqlite.connect(db_full_path) as conn:
+        # Check if UNIQUE constraint already exists
+        cursor = await conn.execute("PRAGMA index_list(project_contexts)")
+        indexes = await cursor.fetchall()
+
+        has_unique = False
+        for idx in indexes:
+            if idx[2] == 1:  # unique flag
+                cursor = await conn.execute(f"PRAGMA index_info({idx[1]})")
+                columns = await cursor.fetchall()
+                for col in columns:
+                    if col[2] == "project_path":
+                        has_unique = True
+                        break
+
+        if has_unique:
+            logger.info("project_path already has UNIQUE constraint")
+            return False
+
+        # Check for duplicates first - don't add constraint if duplicates exist
+        cursor = await conn.execute("""
+            SELECT project_path, COUNT(*) as cnt
+            FROM project_contexts
+            GROUP BY project_path
+            HAVING COUNT(*) > 1
+        """)
+        if await cursor.fetchone():
+            logger.warning("Cannot add UNIQUE constraint - duplicates still exist. Run deduplicate_project_contexts first.")
+            return False
+
+        # Recreate table with UNIQUE constraint
+        logger.info("Recreating project_contexts table with UNIQUE constraint on project_path")
+
+        await conn.executescript("""
+            -- Create new table with UNIQUE constraint
+            CREATE TABLE project_contexts_new (
+                project_id TEXT PRIMARY KEY,
+                project_name TEXT NOT NULL,
+                project_path TEXT NOT NULL UNIQUE,
+                catalogue JSON NOT NULL DEFAULT '{}',
+                todos JSON NOT NULL DEFAULT '[]',
+                active_files JSON NOT NULL DEFAULT '[]',
+                recent_decisions JSON NOT NULL DEFAULT '[]',
+                last_session_id TEXT,
+                last_accessed TEXT NOT NULL,
+                session_count INTEGER DEFAULT 0,
+                notes TEXT
+            );
+
+            -- Copy data
+            INSERT INTO project_contexts_new SELECT * FROM project_contexts;
+
+            -- Drop old table
+            DROP TABLE project_contexts;
+
+            -- Rename new table
+            ALTER TABLE project_contexts_new RENAME TO project_contexts;
+
+            -- Recreate index
+            CREATE INDEX IF NOT EXISTS idx_project_path ON project_contexts(project_path);
+        """)
+
+        await conn.commit()
+        logger.info("Successfully added UNIQUE constraint to project_path")
+        return True
+
+
 async def run_all_migrations(db_path: str = DEFAULT_DB_PATH) -> dict:
     """Run all pending migrations."""
     results = {}
@@ -123,6 +297,12 @@ async def run_all_migrations(db_path: str = DEFAULT_DB_PATH) -> dict:
 
     # Migration 2: Ensure bidirectional relationships
     results["bidirectional_added"] = await ensure_bidirectional_relationships(db_path)
+
+    # Migration 3: Deduplicate project contexts
+    results["projects_deduplicated"] = await deduplicate_project_contexts(db_path)
+
+    # Migration 4: Ensure unique project_path constraint
+    results["unique_path_added"] = await ensure_unique_project_path(db_path)
 
     logger.info(f"Migrations complete: {results}")
     return results

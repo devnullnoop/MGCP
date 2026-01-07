@@ -627,3 +627,40 @@ class TestBackupRestore:
 
             # Original file should still exist
             assert (target_dir / "existing.txt").exists()
+
+    def test_backup_strips_tar_gz_extension(self):
+        """Backup handles .tar.gz extension in output path."""
+        from mgcp.backup import backup
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create fake data directory
+            data_dir = Path(tmpdir) / ".mgcp"
+            data_dir.mkdir()
+            (data_dir / "lessons.db").write_text("fake db content")
+
+            # Create backup with .tar.gz extension in name
+            output = Path(tmpdir) / "my-backup.tar.gz"
+            archive = backup(output, data_dir)
+
+            # Should NOT be my-backup.tar.gz.tar.gz
+            assert archive.name == "my-backup.tar.gz"
+            assert archive.exists()
+
+    def test_backup_strips_tgz_extension(self):
+        """Backup handles .tgz extension in output path."""
+        from mgcp.backup import backup
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create fake data directory
+            data_dir = Path(tmpdir) / ".mgcp"
+            data_dir.mkdir()
+            (data_dir / "lessons.db").write_text("fake db content")
+
+            # Create backup with .tgz extension in name
+            output = Path(tmpdir) / "my-backup.tgz"
+            archive = backup(output, data_dir)
+
+            # shutil.make_archive uses .tar.gz, but input was .tgz
+            # The fix strips .tgz, so result is my-backup.tar.gz
+            assert archive.name == "my-backup.tar.gz"
+            assert archive.exists()

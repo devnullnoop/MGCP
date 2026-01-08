@@ -1,6 +1,6 @@
 # MGCP - Memory Graph Control Protocol
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![License](https://img.shields.io/badge/License-O'Saasy-blue.svg)](https://osaasy.dev/)
 [![Python](https://img.shields.io/badge/Python-3.11%20|%203.12-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
@@ -45,6 +45,30 @@ MGCP provides **23 MCP tools** that let your LLM:
 - Store new lessons as they're discovered
 - Traverse related knowledge through the graph
 - Save and restore project-specific context between sessions
+
+## Why MGCP Instead of Custom Agents?
+
+Many developers try to solve the "LLM forgetting things" problem by building custom agents—specialized prompts with baked-in knowledge for specific tasks. A "code review agent" with review guidelines. A "debugging agent" with troubleshooting steps.
+
+**The insight: MGCP already does what custom agents would do—without the extra abstraction layer.**
+
+| Approach | Custom Agents | MGCP |
+|----------|--------------|------|
+| Task-specific guidance | Baked into agent prompt | Query lessons by task type |
+| Learning from mistakes | Manually update agent prompt | Add lesson, immediately available |
+| Cross-task knowledge | Duplicate across agents | Single lesson, surfaces everywhere |
+| Refinement | Edit prompt, redeploy | Refine lesson, instant update |
+| Complexity | Agent orchestration layer | Just queries |
+
+When you query `"code review best practices"`, you get code review lessons. Query `"debugging authentication"`, you get those lessons. The knowledge surfaces based on context, not agent selection.
+
+**The benefits:**
+- **No prompt engineering fragility** — Lessons are data, not delicate prompt text
+- **No synchronization problem** — One source of truth, not knowledge duplicated across agents
+- **Immediate learning** — Add a lesson now, it's available in 10 seconds
+- **Composable knowledge** — Lessons combine naturally; agents require explicit orchestration
+
+If you're spending time building custom agents to encode task-specific knowledge, consider whether MGCP's lesson system already solves your problem more simply.
 
 ## Screenshots
 
@@ -337,7 +361,7 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
-Apache 2.0 - See [LICENSE](LICENSE) for details.
+[O'Saasy License](https://osaasy.dev/) - Free to use, modify, and distribute. Commercial SaaS rights reserved by the copyright holder. See [LICENSE.md](LICENSE.md) for details.
 
 ---
 

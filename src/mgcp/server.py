@@ -1342,6 +1342,94 @@ async def list_workflows() -> str:
 
 
 @mcp.tool()
+async def query_workflows(task_description: str, min_relevance: float = 0.35) -> str:
+    """Semantically match a task description against available workflows.
+
+    Use this to determine which workflow (if any) applies to a given task.
+    Call this at the START of any coding task to activate the right workflow.
+
+    Args:
+        task_description: Brief description of what you're about to do
+        min_relevance: Minimum relevance score (0-1) to consider a match (default 0.35)
+
+    Returns:
+        Matching workflow(s) with relevance scores, or message if no match
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    workflows = await store.get_all_workflows()
+    if not workflows:
+        return "No workflows available."
+
+    # Get or create workflows collection
+    workflows_collection = vector_store.client.get_or_create_collection(
+        name="workflows",
+        metadata={"hnsw:space": "cosine"},
+    )
+
+    # Index/update workflows in collection
+    for wf in workflows:
+        # Combine name, description, and trigger for semantic matching
+        searchable_text = f"{wf.name}. {wf.description}. Keywords: {wf.trigger}"
+        workflows_collection.upsert(
+            ids=[wf.id],
+            documents=[searchable_text],
+            metadatas=[{
+                "name": wf.name,
+                "description": wf.description,
+                "trigger": wf.trigger,
+                "step_count": len(wf.steps),
+            }],
+        )
+
+    # Query for matching workflows
+    results = workflows_collection.query(
+        query_texts=[task_description],
+        n_results=len(workflows),
+        include=["documents", "metadatas", "distances"],
+    )
+
+    if not results["ids"] or not results["ids"][0]:
+        return "No workflows matched."
+
+    matches = []
+    for i, wf_id in enumerate(results["ids"][0]):
+        # ChromaDB returns distance, convert to similarity (1 - distance for cosine)
+        distance = results["distances"][0][i]
+        relevance = 1 - distance
+
+        if relevance >= min_relevance:
+            metadata = results["metadatas"][0][i]
+            matches.append({
+                "id": wf_id,
+                "name": metadata["name"],
+                "description": metadata["description"],
+                "relevance": relevance,
+                "step_count": metadata["step_count"],
+            })
+
+    if not matches:
+        return f"No workflows matched with relevance >= {min_relevance}. This may be a simple task that doesn't need a formal workflow, or try rephrasing the task description."
+
+    # Sort by relevance
+    matches.sort(key=lambda x: x["relevance"], reverse=True)
+
+    lines = [f"# Workflow Match for: \"{task_description}\"\n"]
+    for m in matches:
+        relevance_pct = int(m["relevance"] * 100)
+        lines.append(f"**{m['name']}** (`{m['id']}`) - {relevance_pct}% relevant")
+        lines.append(f"  {m['description']}")
+        lines.append(f"  {m['step_count']} steps")
+        lines.append("")
+
+    if matches[0]["relevance"] >= 0.5:
+        lines.append(f"**RECOMMENDED:** Activate `{matches[0]['id']}` workflow.")
+        lines.append(f"Call `get_workflow(\"{matches[0]['id']}\")` to load it, then create TodoWrite entries for each step.")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
 async def get_workflow(workflow_id: str) -> str:
     """Get a workflow with all its steps and linked lessons.
 

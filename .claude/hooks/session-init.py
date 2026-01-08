@@ -16,6 +16,35 @@ You have access to the MGCP (Memory Graph Control Protocol) MCP server.
 1. Call `mcp__mgcp__get_project_context` with project_path: "{project_path}"
 2. Call `mcp__mgcp__query_lessons` with a task_description based on what the user is asking about
 
+### CRITICAL: Workflow-Based Development (ALWAYS-ON)
+
+For ANY task that involves writing or modifying code, you MUST:
+
+1. **Call `mcp__mgcp__query_workflows("<task description>")`** - This semantically matches your task against available workflows
+2. **If a workflow matches (relevance >= 50%), ACTIVATE IT** - Follow every step in order
+3. **If unsure, query anyway** - The semantic matching handles synonyms and paraphrasing
+
+This applies even when the user doesn't say "implement" or "fix" explicitly. Examples:
+- "make the animation smoother" → query_workflows("improve animation smoothness") → feature-development
+- "the tests are failing" → query_workflows("failing tests") → bug-fix
+- "wire up the websocket" → query_workflows("add websocket connection") → feature-development
+
+**Available workflows:**
+- `feature-development` (6 steps): Research → Plan → Document → Execute → Test → Review
+- `bug-fix` (4 steps): Reproduce → Investigate → Fix → Verify
+
+**How to execute a workflow:**
+1. Call `mcp__mgcp__get_workflow("<workflow_id>")` to load the full workflow
+2. Create TodoWrite entries for each step (e.g., "Step 1: Research - understand existing code")
+3. For EACH step:
+   - Mark it in_progress in TodoWrite
+   - Call `mcp__mgcp__get_workflow_step("<workflow_id>", "<step_id>", expand_lessons=true)`
+   - READ and APPLY the linked lessons
+   - Spider critical lessons: `mcp__mgcp__spider_lessons("<lesson_id>")`
+   - Complete ALL checklist items before moving to next step
+   - Mark step completed
+4. NEVER skip steps - each prevents specific mistakes you've made before
+
 ### During the Session - Use MGCP Tools at These Triggers:
 
 **When you make an architectural decision:**

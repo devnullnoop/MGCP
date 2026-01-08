@@ -189,7 +189,7 @@ mgcp-dashboard
 
 ## MCP Tools Reference
 
-### Lesson Discovery & Retrieval
+### Lesson Discovery & Retrieval (5 tools)
 | Tool | Purpose |
 |------|---------|
 | `query_lessons` | Semantic search for relevant lessons |
@@ -198,14 +198,14 @@ mgcp-dashboard
 | `list_categories` | Browse top-level lesson categories |
 | `get_lessons_by_category` | Get lessons under a category |
 
-### Lesson Management
+### Lesson Management (3 tools)
 | Tool | Purpose |
 |------|---------|
 | `add_lesson` | Create a new lesson |
 | `refine_lesson` | Improve an existing lesson |
 | `link_lessons` | Create typed relationships between lessons |
 
-### Project Context
+### Project Context (5 tools)
 | Tool | Purpose |
 |------|---------|
 | `get_project_context` | Load saved context for a project |
@@ -214,7 +214,7 @@ mgcp-dashboard
 | `update_project_todo` | Update todo status |
 | `list_projects` | List all tracked projects |
 
-### Project Catalogue
+### Project Catalogue (11 tools)
 | Tool | Purpose |
 |------|---------|
 | `search_catalogue` | Semantic search across catalogue items |
@@ -225,8 +225,21 @@ mgcp-dashboard
 | `add_catalogue_coupling` | Record file dependencies |
 | `add_catalogue_decision` | Document decisions with rationale |
 | `add_catalogue_error_pattern` | Record error solutions |
+| `add_catalogue_custom_item` | Add flexible custom catalogue item |
 | `remove_catalogue_item` | Remove a catalogue item |
 | `get_catalogue_item` | Get full item details |
+
+### Workflows (8 tools)
+| Tool | Purpose |
+|------|---------|
+| `list_workflows` | List all available workflows |
+| `query_workflows` | Semantic match task to workflows |
+| `get_workflow` | Get workflow with all steps and linked lessons |
+| `get_workflow_step` | Get step details with expanded lessons |
+| `create_workflow` | Create a new workflow |
+| `update_workflow` | Update workflow metadata/triggers |
+| `add_workflow_step` | Add a step to a workflow |
+| `link_lesson_to_workflow_step` | Link lesson to workflow step |
 
 ## Web Dashboard
 

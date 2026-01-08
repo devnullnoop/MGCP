@@ -78,7 +78,7 @@ The system flows from Claude/LLM through MCP Protocol to the MGCP Server, which 
 
 All source files are in `src/mgcp/`:
 
-- `server.py` - MCP server with 23 tools
+- `server.py` - MCP server with 32 tools
 - `models.py` - Pydantic models (Lesson, ProjectContext, ProjectCatalogue, SecurityNote, Convention, etc.)
 - `graph.py` - NetworkX graph operations with typed relationships
 - `vector_store.py` - ChromaDB integration for lesson search
@@ -114,28 +114,28 @@ All source files are in `src/mgcp/`:
 - Decisions with rationale
 - Error patterns with solutions
 
-### MCP Tools (23 total)
+### MCP Tools (32 total)
 
-**Lesson Discovery & Retrieval:**
+**Lesson Discovery & Retrieval (5):**
 - `query_lessons` - Semantic search for relevant lessons
 - `get_lesson` - Get full lesson details by ID
 - `spider_lessons` - Traverse related lessons from a starting point
 - `list_categories` - Browse top-level lesson categories
 - `get_lessons_by_category` - Get lessons under a category
 
-**Lesson Management:**
+**Lesson Management (3):**
 - `add_lesson` - Create a new lesson
 - `refine_lesson` - Improve an existing lesson
 - `link_lessons` - Create typed relationships between lessons
 
-**Project Context:**
+**Project Context (5):**
 - `get_project_context` - Load saved context for a project
 - `save_project_context` - Persist context for next session
 - `add_project_todo` - Add a todo item
 - `update_project_todo` - Update todo status
 - `list_projects` - List all tracked projects
 
-**Project Catalogue:**
+**Project Catalogue (11):**
 - `search_catalogue` - Semantic search across catalogue items
 - `add_catalogue_arch_note` - Add architecture note/gotcha
 - `add_catalogue_security_note` - Add security consideration
@@ -144,8 +144,19 @@ All source files are in `src/mgcp/`:
 - `add_catalogue_coupling` - Record file dependencies
 - `add_catalogue_decision` - Document decisions with rationale
 - `add_catalogue_error_pattern` - Record error solutions
+- `add_catalogue_custom_item` - Add flexible custom catalogue item
 - `remove_catalogue_item` - Remove a catalogue item
 - `get_catalogue_item` - Get full item details
+
+**Workflows (8):**
+- `list_workflows` - List all available workflows
+- `query_workflows` - Semantic match task to workflows
+- `get_workflow` - Get workflow with all steps and linked lessons
+- `get_workflow_step` - Get step details with expanded lessons
+- `create_workflow` - Create a new workflow
+- `update_workflow` - Update workflow metadata/triggers
+- `add_workflow_step` - Add a step to a workflow
+- `link_lesson_to_workflow_step` - Link lesson to workflow step
 
 ## Claude Code Integration
 

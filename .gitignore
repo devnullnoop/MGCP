@@ -60,3 +60,9 @@ data/
 # NOTE: .claude/ is intentionally tracked as a working example
 # Users can copy this to their own projects
 # See examples/ for clean templates
+
+# Internal scripts (not for distribution)
+scripts/
+
+# Project-specific Claude instructions (users create their own)
+CLAUDE.md

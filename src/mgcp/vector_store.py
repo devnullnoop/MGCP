@@ -11,7 +11,16 @@ from .models import Lesson
 
 logger = logging.getLogger("mgcp.vector_store")
 
-DEFAULT_CHROMA_PATH = "~/.mgcp/chroma"
+
+def get_default_chroma_path() -> str:
+    """Get the default ChromaDB path, respecting MGCP_DATA_DIR env var."""
+    data_dir = os.environ.get("MGCP_DATA_DIR")
+    if data_dir:
+        return str(Path(data_dir) / "chroma")
+    return os.path.expanduser("~/.mgcp/chroma")
+
+
+DEFAULT_CHROMA_PATH = get_default_chroma_path()
 
 
 class VectorStore:

@@ -24,7 +24,16 @@ from .models import (
 
 logger = logging.getLogger("mgcp.persistence")
 
-DEFAULT_DB_PATH = "~/.mgcp/lessons.db"
+
+def get_default_db_path() -> str:
+    """Get the default database path, respecting MGCP_DATA_DIR env var."""
+    data_dir = os.environ.get("MGCP_DATA_DIR")
+    if data_dir:
+        return str(Path(data_dir) / "lessons.db")
+    return os.path.expanduser("~/.mgcp/lessons.db")
+
+
+DEFAULT_DB_PATH = get_default_db_path()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS lessons (

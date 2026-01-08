@@ -44,12 +44,17 @@ class LLMClient:
 
 def _claude_code_path() -> Path:
     """
-    Claude Code stores global MCP settings in ~/.claude/settings.json on all platforms.
+    Claude Code stores MCP settings in ~/.claude.json (user scope).
 
-    Note: Project-specific MCP configs are in ~/.claude.json under projects.<path>.mcpServers
-    but those are managed separately via configure_claude_code_project().
+    This is the same on all platforms:
+    - macOS/Linux: ~/.claude.json
+    - Windows: %USERPROFILE%\\.claude.json
+
+    The mcpServers key is at the root level for user-scope (global) config.
     """
-    return Path.home() / ".claude" / "settings.json"
+    if sys.platform == "win32":
+        return Path(os.environ.get("USERPROFILE", Path.home())) / ".claude.json"
+    return Path.home() / ".claude.json"
 
 
 def _cursor_path() -> Path:
@@ -209,16 +214,14 @@ output = {
 print(json.dumps(output))
 '''
 
-REMINDER_HOOK_SCRIPT = '''#!/bin/bash
-# PostToolUse hook - short reminder after code changes
-echo "[MGCP] Did you learn something worth saving? Use mcp__mgcp__add_lesson"
+REMINDER_HOOK_SCRIPT = '''#!/usr/bin/env python3
+"""PostToolUse hook - short reminder after code changes."""
+print("[MGCP] Did you learn something worth saving? Use mcp__mgcp__add_lesson")
 '''
 
-PRECOMPACT_HOOK_SCRIPT = '''#!/bin/bash
-# PreCompact hook - CRITICAL reminder before context compression
-
-cat << 'EOF'
-
+PRECOMPACT_HOOK_SCRIPT = '''#!/usr/bin/env python3
+"""PreCompact hook - CRITICAL reminder before context compression."""
+print("""
 ╔════════════════════════════════════════════════════════════════════╗
 ║  CONTEXT COMPRESSION IMMINENT - SAVE YOUR LESSONS NOW              ║
 ╠════════════════════════════════════════════════════════════════════╣
@@ -232,8 +235,7 @@ cat << 'EOF'
 ║                                                                    ║
 ║  If you learned ANYTHING worth remembering, add it NOW or lose it. ║
 ╚════════════════════════════════════════════════════════════════════╝
-
-EOF
+""")
 '''
 
 GIT_REMINDER_HOOK_SCRIPT = '''#!/usr/bin/env python3
@@ -347,7 +349,7 @@ HOOK_SETTINGS = {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/mgcp-reminder.sh"
+                        "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/mgcp-reminder.py"
                     }
                 ]
             }
@@ -357,7 +359,7 @@ HOOK_SETTINGS = {
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/mgcp-precompact.sh"
+                        "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/mgcp-precompact.py"
                     }
                 ]
             }
@@ -464,9 +466,11 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False) -> dict:
     - .claude/hooks/session-init.py       (SessionStart hook)
     - .claude/hooks/git-reminder.py       (UserPromptSubmit hook - git operations)
     - .claude/hooks/catalogue-reminder.py (UserPromptSubmit hook - catalogue prompts)
-    - .claude/hooks/mgcp-reminder.sh      (PostToolUse hook)
-    - .claude/hooks/mgcp-precompact.sh    (PreCompact hook)
+    - .claude/hooks/mgcp-reminder.py      (PostToolUse hook)
+    - .claude/hooks/mgcp-precompact.py    (PreCompact hook)
     - .claude/settings.json               (Hook configuration)
+
+    All hooks are Python for cross-platform Windows compatibility.
 
     Args:
         project_dir: The project directory to initialize
@@ -486,13 +490,13 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False) -> dict:
     hooks_dir = project_dir / ".claude" / "hooks"
     settings_file = project_dir / ".claude" / "settings.json"
 
-    # Define all hook files to create
+    # Define all hook files to create (all Python for cross-platform support)
     hook_files = [
         (hooks_dir / "session-init.py", HOOK_SCRIPT),
         (hooks_dir / "git-reminder.py", GIT_REMINDER_HOOK_SCRIPT),
         (hooks_dir / "catalogue-reminder.py", CATALOGUE_REMINDER_HOOK_SCRIPT),
-        (hooks_dir / "mgcp-reminder.sh", REMINDER_HOOK_SCRIPT),
-        (hooks_dir / "mgcp-precompact.sh", PRECOMPACT_HOOK_SCRIPT),
+        (hooks_dir / "mgcp-reminder.py", REMINDER_HOOK_SCRIPT),
+        (hooks_dir / "mgcp-precompact.py", PRECOMPACT_HOOK_SCRIPT),
     ]
 
     # Check/create .claude/hooks directory
@@ -617,47 +621,40 @@ def diagnose_claude_code() -> dict:
     """
     Diagnose Claude Code MGCP configuration issues.
 
-    Checks both global and project-specific configs for problems.
+    Checks ~/.claude.json for user-scope (global) and project-specific configs.
 
     Returns dict with diagnostic results.
     """
     results = {
-        "global_config": {"path": None, "status": None, "mgcp_configured": False},
+        "user_config": {"path": None, "status": None, "mgcp_configured": False},
         "project_configs": [],
         "issues": [],
         "suggestions": [],
     }
 
-    # Check global config
-    global_path = Path.home() / ".claude" / "settings.json"
-    results["global_config"]["path"] = str(global_path)
+    # Check user-scope config in ~/.claude.json
+    config_path = _claude_code_path()
+    results["user_config"]["path"] = str(config_path)
 
-    if global_path.exists():
+    if config_path.exists():
         try:
-            config = json.loads(global_path.read_text())
-            results["global_config"]["status"] = "ok"
+            config = json.loads(config_path.read_text())
+            results["user_config"]["status"] = "ok"
+
+            # Check root-level mcpServers (user scope)
             if "mcpServers" in config and "mgcp" in config["mcpServers"]:
-                results["global_config"]["mgcp_configured"] = True
+                results["user_config"]["mgcp_configured"] = True
                 # Validate the config
                 mgcp_cfg = config["mcpServers"]["mgcp"]
                 if "command" in mgcp_cfg:
                     cmd = mgcp_cfg["command"]
                     if not Path(cmd).exists():
-                        results["issues"].append(f"Global config: Python path does not exist: {cmd}")
+                        results["issues"].append(f"User config: Python path does not exist: {cmd}")
                         results["suggestions"].append("Run 'mgcp-init --client claude-code' to fix")
-        except json.JSONDecodeError:
-            results["global_config"]["status"] = "parse_error"
-            results["issues"].append("Could not parse ~/.claude/settings.json")
-    else:
-        results["global_config"]["status"] = "missing"
 
-    # Check project configs in ~/.claude.json
-    project_config_path = Path.home() / ".claude.json"
-    if project_config_path.exists():
-        try:
-            data = json.loads(project_config_path.read_text())
-            if "projects" in data:
-                for proj_path, proj_data in data["projects"].items():
+            # Also check project-specific configs
+            if "projects" in config:
+                for proj_path, proj_data in config["projects"].items():
                     proj_info = {
                         "path": proj_path,
                         "has_mgcp": False,
@@ -665,9 +662,9 @@ def diagnose_claude_code() -> dict:
                         "issues": [],
                     }
 
-                    if "mcpServers" in proj_data:
+                    if isinstance(proj_data, dict) and "mcpServers" in proj_data:
                         servers = proj_data["mcpServers"]
-                        if "mgcp" in servers:
+                        if isinstance(servers, dict) and "mgcp" in servers:
                             proj_info["has_mgcp"] = True
                             proj_info["config"] = servers["mgcp"]
 
@@ -678,12 +675,17 @@ def diagnose_claude_code() -> dict:
                                     proj_info["issues"].append(f"Python path does not exist: {cmd}")
 
                     results["project_configs"].append(proj_info)
+
         except json.JSONDecodeError:
+            results["user_config"]["status"] = "parse_error"
             results["issues"].append("Could not parse ~/.claude.json")
+    else:
+        results["user_config"]["status"] = "missing"
+        results["issues"].append("~/.claude.json not found - Claude Code may not have been used yet")
 
     # Generate suggestions
-    if not results["global_config"]["mgcp_configured"]:
-        results["suggestions"].append("Run 'mgcp-init --client claude-code' to configure globally")
+    if not results["user_config"]["mgcp_configured"]:
+        results["suggestions"].append("Run 'mgcp-init --client claude-code' to configure")
 
     return results
 
@@ -781,8 +783,8 @@ For Claude Code users, this also creates project hooks:
   .claude/hooks/session-init.py       # Loads MGCP context on session start
   .claude/hooks/git-reminder.py       # Reminds to query lessons before git ops
   .claude/hooks/catalogue-reminder.py # Prompts to catalogue libraries/decisions
-  .claude/hooks/mgcp-reminder.sh      # Reminds to save lessons after edits
-  .claude/hooks/mgcp-precompact.sh    # Critical reminder before context compression
+  .claude/hooks/mgcp-reminder.py      # Reminds to save lessons after edits
+  .claude/hooks/mgcp-precompact.py    # Critical reminder before context compression
   .claude/settings.json               # Enables all hooks
         """,
     )
@@ -850,14 +852,14 @@ For Claude Code users, this also creates project hooks:
         print("\n  Diagnosing Claude Code MGCP configuration...\n")
         results = diagnose_claude_code()
 
-        # Global config
-        print("  Global config:")
-        g = results["global_config"]
+        # User-scope config
+        print("  User config (~/.claude.json):")
+        g = results["user_config"]
         if g["status"] == "ok":
             status = "✓ configured" if g["mgcp_configured"] else "✗ MGCP not found"
             print(f"    {status}")
         elif g["status"] == "missing":
-            print("    ✗ ~/.claude/settings.json not found")
+            print("    ✗ ~/.claude.json not found")
         else:
             print(f"    ! {g['status']}")
         print(f"      {g['path']}")
@@ -884,7 +886,7 @@ For Claude Code users, this also creates project hooks:
             for suggestion in results["suggestions"]:
                 print(f"    → {suggestion}")
 
-        if not results["issues"] and results["global_config"]["mgcp_configured"]:
+        if not results["issues"] and results["user_config"]["mgcp_configured"]:
             print("\n  Status: Configuration looks good!\n")
         else:
             print("\n  Status: Issues found - see above\n")

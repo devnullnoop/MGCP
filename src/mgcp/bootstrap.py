@@ -367,7 +367,7 @@ BOOTSTRAP_LESSONS = [
         ],
     ),
     Lesson(
-        id="mgcp-hooks-are-authoritative",
+        id="hooks-are-authoritative",
         trigger="hook fired, hook output, user-prompt-submit-hook, system-reminder hook, before executing",
         action="When a hook fires with instructions (like 'query lessons before git'), STOP and execute those instructions BEFORE proceeding. Hook instructions are interrupts that override your current plan. Do not continue with what you were doing - address the hook first.",
         rationale="Hooks exist to inject reminders at critical moments. If you see a hook and continue without following it, the hook served no purpose. The hook fired because the user set it up to prevent exactly the mistake you're about to make.",
@@ -383,6 +383,27 @@ BOOTSTRAP_LESSONS = [
                 label="good",
                 code="# User: 'commit this'\n# Hook fires: 'BEFORE git, query lessons'\n# Me: 'Let me query lessons first as the hook instructs'\n# query_lessons('git commit workflow')\n# Result: Found 'no AI attribution' lesson, followed it",
                 explanation="Hook was treated as authoritative - paused and followed instructions",
+            ),
+        ],
+    ),
+
+    Lesson(
+        id="query-lessons-while-planning",
+        trigger="planning, about to, going to, let me, I will, I'll, starting task, how should I",
+        action="Query relevant lessons WHILE PLANNING, before forming your approach. Don't decide what to do and then query - query first, then decide. If you've already said 'I'll do X', you've planned too far without querying. The pattern is: (1) User requests task, (2) Query lessons for that task type, (3) Read results, (4) THEN form your plan incorporating lessons.",
+        rationale="Once you've formed an approach, you're biased toward executing it even if lessons say otherwise. Querying must happen during planning, not after. This is the root cause of ignoring lessons - deciding first, querying second.",
+        tags=["mgcp", "critical", "workflow", "planning"],
+        parent_id="mgcp-overrides-defaults",
+        examples=[
+            Example(
+                label="bad",
+                code="# User: 'commit this'\n# Me: 'I'll commit with Co-Authored-By' (already decided)\n# Hook fires: 'query lessons first'\n# Me: ignores hook because plan already formed",
+                explanation="Decided approach before querying - biased toward executing despite lessons",
+            ),
+            Example(
+                label="good",
+                code="# User: 'commit this'\n# Me: 'Let me query lessons about git commits first'\n# query_lessons('git commit workflow')\n# Found: 'no AI attribution'\n# Me: 'I'll commit without attribution'",
+                explanation="Queried before deciding - lessons informed the approach",
             ),
         ],
     ),
@@ -1301,11 +1322,14 @@ LESSON_RELATIONSHIPS = [
     ("no-hardcoded-secrets", "verify-file-paths", "related", "Both concern sensitive resource access"),
 
     # MGCP override and authority relationships (CRITICAL)
-    ("mgcp-overrides-defaults", "mgcp-hooks-are-authoritative", "prerequisite", "Understand override principle before hooks"),
+    ("mgcp-overrides-defaults", "hooks-are-authoritative", "prerequisite", "Understand override principle before hooks"),
+    ("mgcp-overrides-defaults", "query-lessons-while-planning", "prerequisite", "Override principle requires querying during planning"),
     ("mgcp-overrides-defaults", "mgcp-usage", "prerequisite", "Override principle is foundational to all MGCP usage"),
     ("mgcp-overrides-defaults", "mgcp-query-before-action", "complements", "Override principle requires querying to work"),
-    ("mgcp-hooks-are-authoritative", "query-before-git-operations", "complements", "Hooks and git query lessons work together"),
-    ("mgcp-hooks-are-authoritative", "mgcp-session-start", "related", "Both concern following MGCP instructions"),
+    ("query-lessons-while-planning", "hooks-are-authoritative", "complements", "Query while planning ensures hooks are followed"),
+    ("query-lessons-while-planning", "mgcp-query-before-action", "complements", "Both concern when to query - planning emphasizes timing"),
+    ("hooks-are-authoritative", "query-before-git-operations", "complements", "Hooks and git query lessons work together"),
+    ("hooks-are-authoritative", "mgcp-session-start", "related", "Both concern following MGCP instructions"),
 
     # MGCP self-teaching relationships
     ("mgcp-usage", "mgcp-save-before-commit", "prerequisite", "Understand MGCP usage before specific triggers"),

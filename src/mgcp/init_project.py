@@ -317,6 +317,60 @@ if __name__ == "__main__":
     main()
 '''
 
+TASK_START_HOOK_SCRIPT = '''#!/usr/bin/env python3
+"""UserPromptSubmit hook that detects task-start phrases and reminds to query lessons."""
+import json
+import re
+import sys
+
+# Patterns that indicate a new task is starting
+TASK_START_PATTERNS = [
+    r"\\b(fix|fixing|debug|debugging)\\b.{0,30}\\b(bug|issue|error|problem)\\b",
+    r"\\b(implement|implementing|add|adding|create|creating|build|building)\\b.{0,30}\\b(feature|function|method|class|component|endpoint|api)\\b",
+    r"\\b(refactor|refactoring|restructure|reorganize|clean up)\\b",
+    r"\\b(update|updating|change|changing|modify|modifying)\\b.{0,20}\\b(the|this|that)\\b",
+    r"\\blet'?s\\s+(fix|implement|add|create|build|refactor|update|change|work on)\\b",
+    r"\\b(can you|could you|please|i need you to)\\b.{0,20}\\b(fix|implement|add|create|build|refactor|update)\\b",
+    r"\\b(work on|working on|tackle|tackling|handle|handling)\\b",
+    r"\\b(set up|setting up|configure|configuring|install|installing)\\b",
+]
+
+# Don't trigger on these (already handled by other hooks or too trivial)
+IGNORE_PATTERNS = [
+    r"\\b(commit|push|pull|merge|git)\\b",  # Handled by git-reminder
+    r"\\b(library|package|framework|security|convention)\\b",  # Handled by catalogue-reminder
+]
+
+def main():
+    try:
+        hook_input = json.load(sys.stdin)
+    except json.JSONDecodeError:
+        sys.exit(0)
+
+    prompt = hook_input.get("prompt", "").lower()
+
+    # Skip if handled by other hooks
+    for pattern in IGNORE_PATTERNS:
+        if re.search(pattern, prompt, re.IGNORECASE):
+            sys.exit(0)
+
+    # Check for task-start patterns
+    for pattern in TASK_START_PATTERNS:
+        if re.search(pattern, prompt, re.IGNORECASE):
+            print("""<user-prompt-submit-hook>
+BEFORE starting this task:
+1. Call mcp__mgcp__query_lessons with a brief description of the task
+2. Call mcp__mgcp__get_workflow to check if bug-fix or feature-development workflow applies
+3. Use TodoWrite to plan the steps, informed by the lessons and workflow
+</user-prompt-submit-hook>""")
+            sys.exit(0)
+
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main()
+'''
+
 HOOK_SETTINGS = {
     "hooks": {
         "UserPromptSubmit": [
@@ -329,6 +383,10 @@ HOOK_SETTINGS = {
                     {
                         "type": "command",
                         "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/catalogue-reminder.py"
+                    },
+                    {
+                        "type": "command",
+                        "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/task-start-reminder.py"
                     }
                 ]
             }
@@ -463,12 +521,13 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False) -> dict:
     Initialize Claude Code hooks in a project directory.
 
     Creates:
-    - .claude/hooks/session-init.py       (SessionStart hook)
-    - .claude/hooks/git-reminder.py       (UserPromptSubmit hook - git operations)
-    - .claude/hooks/catalogue-reminder.py (UserPromptSubmit hook - catalogue prompts)
-    - .claude/hooks/mgcp-reminder.py      (PostToolUse hook)
-    - .claude/hooks/mgcp-precompact.py    (PreCompact hook)
-    - .claude/settings.json               (Hook configuration)
+    - .claude/hooks/session-init.py        (SessionStart hook)
+    - .claude/hooks/git-reminder.py        (UserPromptSubmit hook - git operations)
+    - .claude/hooks/catalogue-reminder.py  (UserPromptSubmit hook - catalogue prompts)
+    - .claude/hooks/task-start-reminder.py (UserPromptSubmit hook - task start detection)
+    - .claude/hooks/mgcp-reminder.py       (PostToolUse hook)
+    - .claude/hooks/mgcp-precompact.py     (PreCompact hook)
+    - .claude/settings.json                (Hook configuration)
 
     All hooks are Python for cross-platform Windows compatibility.
 
@@ -495,6 +554,7 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False) -> dict:
         (hooks_dir / "session-init.py", HOOK_SCRIPT),
         (hooks_dir / "git-reminder.py", GIT_REMINDER_HOOK_SCRIPT),
         (hooks_dir / "catalogue-reminder.py", CATALOGUE_REMINDER_HOOK_SCRIPT),
+        (hooks_dir / "task-start-reminder.py", TASK_START_HOOK_SCRIPT),
         (hooks_dir / "mgcp-reminder.py", REMINDER_HOOK_SCRIPT),
         (hooks_dir / "mgcp-precompact.py", PRECOMPACT_HOOK_SCRIPT),
     ]
@@ -780,12 +840,13 @@ Examples:
   mgcp-init --detect                 # Show which clients are installed
 
 For Claude Code users, this also creates project hooks:
-  .claude/hooks/session-init.py       # Loads MGCP context on session start
-  .claude/hooks/git-reminder.py       # Reminds to query lessons before git ops
-  .claude/hooks/catalogue-reminder.py # Prompts to catalogue libraries/decisions
-  .claude/hooks/mgcp-reminder.py      # Reminds to save lessons after edits
-  .claude/hooks/mgcp-precompact.py    # Critical reminder before context compression
-  .claude/settings.json               # Enables all hooks
+  .claude/hooks/session-init.py        # Loads MGCP context on session start
+  .claude/hooks/git-reminder.py        # Reminds to query lessons before git ops
+  .claude/hooks/catalogue-reminder.py  # Prompts to catalogue libraries/decisions
+  .claude/hooks/task-start-reminder.py # Reminds to query lessons before tasks
+  .claude/hooks/mgcp-reminder.py       # Reminds to save lessons after edits
+  .claude/hooks/mgcp-precompact.py     # Critical reminder before context compression
+  .claude/settings.json                # Enables all hooks
         """,
     )
 

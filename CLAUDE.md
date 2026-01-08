@@ -174,6 +174,7 @@ MGCP uses Claude Code hooks to make lessons proactive rather than passive:
 | `session-init.py` | SessionStart | Load project context, inject usage instructions |
 | `git-reminder.py` | UserPromptSubmit | Detect "commit/push/git" and remind to query lessons |
 | `catalogue-reminder.py` | UserPromptSubmit | Detect library/security/decision mentions, remind to catalogue |
+| `task-start-reminder.py` | UserPromptSubmit | Detect "fix/implement/work on" and remind to query lessons + workflows |
 | `mgcp-reminder.py` | PostToolUse (Edit/Write) | Remind to save lessons after code changes |
 | `mgcp-precompact.py` | PreCompact | Critical reminder to save before context compression |
 

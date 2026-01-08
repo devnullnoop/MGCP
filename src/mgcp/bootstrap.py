@@ -778,7 +778,7 @@ BOOTSTRAP_LESSONS = [
     ),
     Lesson(
         id="mgcp-post-task-retrospective",
-        trigger="task complete, finished, done, completed task, wrapped up, task done",
+        trigger="task complete, finished, done, completed task, wrapped up, task done, you got it, that works, great, fixed, perfect, nice, looks good, working now, solved",
         action="After completing any non-trivial task, ask: (1) What went well that should be repeated? (2) What went wrong that should be avoided? (3) What knowledge should be captured as a lesson or catalogue item? (4) Did we follow the workflow, and if not, why? Spend 1-2 minutes on this reflection.",
         rationale="Most learning happens at task completion when context is fresh. Without explicit retrospective, insights fade and the next similar task starts from scratch.",
         parent_id="mgcp-feedback-loops",

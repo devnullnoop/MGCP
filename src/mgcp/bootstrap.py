@@ -342,6 +342,532 @@ BOOTSTRAP_LESSONS = [
     ),
 
     # =========================================================================
+    # OWASP SECURE CODING PRACTICES
+    # Based on OWASP Secure Coding Practices Quick Reference Guide
+    # https://owasp.org/www-project-secure-coding-practices-quick-reference-guide/
+    # =========================================================================
+
+    # --- OWASP: INPUT VALIDATION ---
+    Lesson(
+        id="owasp-input-validation",
+        trigger="input, validate, sanitize, user input, form data, request, parameter, OWASP",
+        action="Validate ALL input server-side using allowlists, not blocklists. Reject invalid input completely - don't attempt to sanitize and use it.",
+        rationale="Client-side validation is bypassable. Blocklists miss edge cases. Attempting to sanitize malicious input often fails. Rejection is safer than transformation.",
+        parent_id="security",
+        tags=["security", "owasp", "input-validation"],
+        examples=[
+            Example(
+                label="bad",
+                code="# Blocklist approach - will miss edge cases\nif '<script>' not in user_input:\n    process(user_input)",
+                explanation="Blocklist misses <SCRIPT>, <scr<script>ipt>, and countless other bypasses",
+            ),
+            Example(
+                label="good",
+                code="# Allowlist approach - only accept known-good patterns\nimport re\nif re.match(r'^[a-zA-Z0-9_-]+$', username):\n    process(username)\nelse:\n    raise ValueError('Invalid username format')",
+                explanation="Allowlist defines exactly what's acceptable, rejects everything else",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-centralized-validation",
+        trigger="validation, input handling, form processing, request handling, middleware",
+        action="Create centralized input validation routines shared across the application. Don't duplicate validation logic in multiple places.",
+        rationale="Duplicated validation leads to inconsistencies where one path validates and another doesn't. Centralized validation ensures consistent security controls.",
+        parent_id="owasp-input-validation",
+        tags=["security", "owasp", "input-validation", "architecture"],
+    ),
+    Lesson(
+        id="owasp-canonicalize-before-validate",
+        trigger="encoding, unicode, UTF-8, character set, canonicalization, normalize",
+        action="Canonicalize input to a common character set (UTF-8) BEFORE validation. Decode all encoded input before checking.",
+        rationale="Attackers use encoding tricks (%2e%2e/, Unicode normalization) to bypass validation. Canonicalize first, then validate the normalized form.",
+        parent_id="owasp-input-validation",
+        tags=["security", "owasp", "input-validation", "encoding"],
+        examples=[
+            Example(
+                label="bad",
+                code="# Validates before decoding - bypassable\nif '../' not in path:\n    read_file(urllib.parse.unquote(path))  # %2e%2e%2f bypasses check",
+                explanation="Validation happens on encoded form, but decoded form is used",
+            ),
+            Example(
+                label="good",
+                code="# Decode first, then validate\ndecoded_path = urllib.parse.unquote(path)\nif '../' in decoded_path or not decoded_path.startswith('/safe/'):\n    raise ValueError('Invalid path')\nread_file(decoded_path)",
+                explanation="Decode first, then validate the actual value that will be used",
+            ),
+        ],
+    ),
+
+    # --- OWASP: OUTPUT ENCODING ---
+    Lesson(
+        id="owasp-contextual-output-encoding",
+        trigger="output, encode, escape, render, template, HTML, JavaScript, URL, CSS, XSS",
+        action="Encode output based on the CONTEXT where it appears: HTML body, HTML attribute, JavaScript, URL, CSS. Each context requires different encoding.",
+        rationale="HTML encoding doesn't protect JavaScript contexts. URL encoding doesn't protect HTML. Wrong encoding = XSS vulnerability.",
+        parent_id="security",
+        tags=["security", "owasp", "output-encoding", "xss"],
+        examples=[
+            Example(
+                label="bad",
+                code="# HTML encoding doesn't protect JS context\nreturn f'<script>var name = \"{html.escape(user_name)}\";</script>'",
+                explanation="HTML escaping doesn't prevent JS injection via quotes or backslashes",
+            ),
+            Example(
+                label="good",
+                code="# Use JSON encoding for JS context\nimport json\nreturn f'<script>var name = {json.dumps(user_name)};</script>'",
+                explanation="JSON encoding properly escapes for JavaScript string context",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-encode-all-untrusted",
+        trigger="untrusted data, user data, external data, third-party, API response",
+        action="Treat ALL data from outside your trust boundary as untrusted and encode it before output. This includes database data, API responses, and file contents - not just direct user input.",
+        rationale="Stored XSS occurs when previously-stored malicious data is rendered without encoding. Data from databases and APIs can contain injection payloads.",
+        parent_id="owasp-contextual-output-encoding",
+        tags=["security", "owasp", "output-encoding", "xss"],
+    ),
+
+    # --- OWASP: AUTHENTICATION ---
+    Lesson(
+        id="owasp-authentication-fundamentals",
+        trigger="authentication, login, password, credential, sign in, auth, OWASP",
+        action="Use standard, tested authentication libraries. Never implement your own password hashing or session management from scratch.",
+        rationale="Authentication is security-critical and easy to get wrong. Battle-tested libraries handle edge cases like timing attacks, secure comparisons, and proper hashing.",
+        parent_id="security",
+        tags=["security", "owasp", "authentication"],
+        examples=[
+            Example(
+                label="bad",
+                code="# Rolling your own password check\nif hashlib.md5(password).hexdigest() == stored_hash:\n    login(user)",
+                explanation="MD5 is broken, no salt, vulnerable to timing attacks",
+            ),
+            Example(
+                label="good",
+                code="# Use a proper library\nfrom passlib.hash import argon2\nif argon2.verify(password, stored_hash):\n    login(user)",
+                explanation="Argon2 is current best practice, library handles timing-safe comparison",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-password-storage",
+        trigger="password, hash, store password, bcrypt, argon2, scrypt, pbkdf2",
+        action="Store passwords using Argon2id, bcrypt, scrypt, or PBKDF2 with high work factors. Never store plaintext, MD5, SHA1, or unsalted hashes.",
+        rationale="Modern password hashing algorithms are intentionally slow and use salts to prevent rainbow table attacks. MD5/SHA1 are too fast and enable bulk cracking.",
+        parent_id="owasp-authentication-fundamentals",
+        tags=["security", "owasp", "authentication", "passwords"],
+        examples=[
+            Example(
+                label="good",
+                code="# Argon2id with appropriate parameters\nfrom argon2 import PasswordHasher\nph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4)\nhash = ph.hash(password)",
+                explanation="Argon2id with memory-hard parameters resists GPU/ASIC attacks",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-auth-fail-securely",
+        trigger="login failed, authentication error, invalid credentials, wrong password",
+        action="Authentication failures must not reveal which part failed. Use generic messages like 'Invalid credentials' - never 'User not found' or 'Wrong password'.",
+        rationale="Specific error messages enable username enumeration. Attackers can harvest valid usernames, then focus password attacks on confirmed accounts.",
+        parent_id="owasp-authentication-fundamentals",
+        tags=["security", "owasp", "authentication", "enumeration"],
+        examples=[
+            Example(
+                label="bad",
+                code="if not user_exists(username):\n    return 'User not found'\nif not check_password(password):\n    return 'Incorrect password'",
+                explanation="Reveals whether username exists - enables enumeration",
+            ),
+            Example(
+                label="good",
+                code="if not authenticate(username, password):\n    return 'Invalid credentials'\n# Same message regardless of failure reason",
+                explanation="Generic message prevents username enumeration",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-account-lockout",
+        trigger="brute force, rate limit, lockout, login attempts, failed attempts",
+        action="Implement account lockout or progressive delays after failed login attempts. Log all authentication failures for monitoring.",
+        rationale="Without lockout, attackers can brute-force passwords indefinitely. Progressive delays or lockouts make brute-force impractical.",
+        parent_id="owasp-authentication-fundamentals",
+        tags=["security", "owasp", "authentication", "brute-force"],
+    ),
+    Lesson(
+        id="owasp-mfa",
+        trigger="multi-factor, MFA, 2FA, two-factor, TOTP, authenticator, sensitive account",
+        action="Implement multi-factor authentication for sensitive accounts and operations. Require re-authentication for critical actions like password changes or financial transactions.",
+        rationale="Passwords alone are insufficient. MFA ensures account compromise requires multiple attack vectors. Re-auth for sensitive ops prevents session hijacking abuse.",
+        parent_id="owasp-authentication-fundamentals",
+        tags=["security", "owasp", "authentication", "mfa"],
+    ),
+
+    # --- OWASP: SESSION MANAGEMENT ---
+    Lesson(
+        id="owasp-session-management",
+        trigger="session, cookie, session ID, token, JSESSIONID, session fixation, OWASP",
+        action="Use framework-provided session management. Generate cryptographically random session IDs (≥128 bits entropy). Regenerate session ID after login.",
+        rationale="Weak session IDs are guessable. Session fixation attacks exploit pre-login session IDs. Framework implementations handle these edge cases.",
+        parent_id="security",
+        tags=["security", "owasp", "session"],
+        examples=[
+            Example(
+                label="bad",
+                code="# Predictable session ID\nsession_id = f'user_{user_id}_{timestamp}'",
+                explanation="Predictable pattern - attacker can guess other sessions",
+            ),
+            Example(
+                label="good",
+                code="import secrets\nsession_id = secrets.token_urlsafe(32)  # 256 bits\n# Regenerate after login to prevent fixation\nrequest.session.regenerate()",
+                explanation="Cryptographically random, regenerated after auth state change",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-cookie-security",
+        trigger="cookie, Set-Cookie, HttpOnly, Secure, SameSite, cookie attributes",
+        action="Set ALL security attributes on session cookies: Secure (HTTPS only), HttpOnly (no JS access), SameSite=Strict or Lax (CSRF protection), and appropriate Domain/Path restrictions.",
+        rationale="Missing Secure flag allows cookie theft via MITM. Missing HttpOnly enables XSS cookie theft. Missing SameSite enables CSRF attacks.",
+        parent_id="owasp-session-management",
+        tags=["security", "owasp", "session", "cookies"],
+        examples=[
+            Example(
+                label="bad",
+                code="response.set_cookie('session', token)",
+                explanation="No security attributes - vulnerable to XSS, MITM, CSRF",
+            ),
+            Example(
+                label="good",
+                code="response.set_cookie(\n    'session', token,\n    secure=True,      # HTTPS only\n    httponly=True,    # No JS access\n    samesite='Lax',   # CSRF protection\n    max_age=3600      # 1 hour expiry\n)",
+                explanation="All security attributes set",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-session-timeout",
+        trigger="session timeout, idle timeout, expiry, session expiration, logout",
+        action="Implement both idle timeout (inactivity) and absolute timeout (max session lifetime). Terminate sessions completely on logout - invalidate server-side, not just client.",
+        rationale="Long-lived sessions increase window for session hijacking. Client-only logout leaves session valid for stolen tokens.",
+        parent_id="owasp-session-management",
+        tags=["security", "owasp", "session", "timeout"],
+    ),
+    Lesson(
+        id="owasp-session-id-exposure",
+        trigger="session ID, URL, logs, error, exposure, leak",
+        action="NEVER expose session IDs in URLs, error messages, or logs. Use POST for transmitting session data when cookies aren't possible.",
+        rationale="Session IDs in URLs appear in browser history, referrer headers, and server logs - all accessible to attackers.",
+        parent_id="owasp-session-management",
+        tags=["security", "owasp", "session", "exposure"],
+    ),
+
+    # --- OWASP: ACCESS CONTROL ---
+    Lesson(
+        id="owasp-access-control",
+        trigger="authorization, access control, permission, role, privilege, RBAC, ABAC, OWASP",
+        action="Enforce authorization on EVERY request server-side. Use a centralized access control component. Default to DENY - explicitly grant access, never implicitly allow.",
+        rationale="Client-side authorization is bypassable. Scattered authorization logic leads to gaps. Implicit allow creates security holes when new resources are added.",
+        parent_id="security",
+        tags=["security", "owasp", "access-control", "authorization"],
+        examples=[
+            Example(
+                label="bad",
+                code="# Authorization only on some endpoints\n@app.route('/admin')\ndef admin():\n    if not is_admin(): abort(403)\n    ...\n\n@app.route('/admin/users')  # Forgot auth check!\ndef admin_users():\n    return get_all_users()",
+                explanation="Scattered auth checks - easy to forget on new endpoints",
+            ),
+            Example(
+                label="good",
+                code="# Centralized middleware\n@app.before_request\ndef check_auth():\n    if request.path.startswith('/admin'):\n        if not is_admin():\n            abort(403)",
+                explanation="Centralized check applies to all matching routes",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-idor-prevention",
+        trigger="IDOR, direct object reference, resource ID, user ID, document ID, authorization bypass",
+        action="Always verify the requesting user is authorized to access the specific resource, not just the resource type. Check ownership or explicit permission grants.",
+        rationale="IDOR vulnerabilities allow accessing other users' data by changing IDs in requests. Verifying 'user can access documents' isn't enough - verify 'user can access THIS document'.",
+        parent_id="owasp-access-control",
+        tags=["security", "owasp", "access-control", "idor"],
+        examples=[
+            Example(
+                label="bad",
+                code="@app.route('/documents/<doc_id>')\ndef get_document(doc_id):\n    return Document.query.get(doc_id)  # No ownership check!",
+                explanation="Any authenticated user can access any document by ID",
+            ),
+            Example(
+                label="good",
+                code="@app.route('/documents/<doc_id>')\ndef get_document(doc_id):\n    doc = Document.query.get(doc_id)\n    if doc.owner_id != current_user.id:\n        abort(403)\n    return doc",
+                explanation="Verify user owns or has explicit access to this specific document",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-privilege-escalation",
+        trigger="privilege escalation, admin, role, elevation, permission change",
+        action="Never trust client-provided role or permission claims. Verify authorization server-side. Prevent users from modifying their own privilege level.",
+        rationale="Attackers modify hidden form fields, cookies, or API parameters claiming admin roles. Server must be authoritative on permissions.",
+        parent_id="owasp-access-control",
+        tags=["security", "owasp", "access-control", "privilege"],
+        examples=[
+            Example(
+                label="bad",
+                code="# Trusting client-provided role\nuser_role = request.form.get('role', 'user')\nif user_role == 'admin':\n    grant_admin_access()",
+                explanation="Attacker adds role=admin to form submission",
+            ),
+            Example(
+                label="good",
+                code="# Server-side role lookup\nuser_role = get_role_from_database(current_user.id)\nif user_role == 'admin':\n    grant_admin_access()",
+                explanation="Role comes from trusted server-side source",
+            ),
+        ],
+    ),
+
+    # --- OWASP: CRYPTOGRAPHIC PRACTICES ---
+    Lesson(
+        id="owasp-cryptography",
+        trigger="encryption, cryptography, crypto, AES, RSA, hash, OWASP, cipher",
+        action="Use well-established cryptographic libraries and algorithms. Never implement your own cryptography. Use AES-256-GCM for symmetric, RSA-2048+/ECDSA P-256+ for asymmetric.",
+        rationale="Cryptography is extremely easy to get wrong. Subtle implementation flaws (padding oracles, timing attacks) completely break security. Use vetted libraries.",
+        parent_id="security",
+        tags=["security", "owasp", "cryptography"],
+        examples=[
+            Example(
+                label="bad",
+                code="# Rolling your own XOR 'encryption'\ndef encrypt(data, key):\n    return bytes(a ^ b for a, b in zip(data, cycle(key)))",
+                explanation="XOR cipher is trivially breakable, no authentication",
+            ),
+            Example(
+                label="good",
+                code="from cryptography.fernet import Fernet\nkey = Fernet.generate_key()\nf = Fernet(key)\nencrypted = f.encrypt(data)",
+                explanation="Established library with authenticated encryption",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-key-management",
+        trigger="key management, encryption key, secret key, key rotation, key storage",
+        action="Store cryptographic keys in secure key management systems (KMS, HSM, or secure vaults), not in code or config files. Implement key rotation procedures.",
+        rationale="Keys in code are exposed in version control. Keys in config files are exposed in backups and logs. Proper key management limits blast radius of compromise.",
+        parent_id="owasp-cryptography",
+        tags=["security", "owasp", "cryptography", "key-management"],
+    ),
+    Lesson(
+        id="owasp-random-generation",
+        trigger="random, token, nonce, salt, UUID, session ID, CSPRNG",
+        action="Use cryptographically secure random number generators (CSPRNG) for all security-sensitive values: tokens, session IDs, nonces, salts. Never use math.random() or similar.",
+        rationale="Non-cryptographic RNGs are predictable. Attackers can predict future values or reconstruct internal state. Use secrets module (Python), crypto.randomBytes (Node), etc.",
+        parent_id="owasp-cryptography",
+        tags=["security", "owasp", "cryptography", "random"],
+        examples=[
+            Example(
+                label="bad",
+                code="import random\ntoken = ''.join(random.choices('abcdef0123456789', k=32))",
+                explanation="random module is predictable - not suitable for security",
+            ),
+            Example(
+                label="good",
+                code="import secrets\ntoken = secrets.token_hex(32)  # 256 bits of entropy",
+                explanation="secrets module uses OS CSPRNG",
+            ),
+        ],
+    ),
+
+    # --- OWASP: DATA PROTECTION ---
+    Lesson(
+        id="owasp-data-protection",
+        trigger="data protection, sensitive data, PII, personal data, encryption at rest, OWASP",
+        action="Classify data by sensitivity. Encrypt sensitive data at rest and in transit. Implement data retention policies - delete when no longer needed.",
+        rationale="Breaches happen. Encryption limits damage. Unnecessary data retention increases exposure. Classification enables appropriate controls.",
+        parent_id="security",
+        tags=["security", "owasp", "data-protection"],
+    ),
+    Lesson(
+        id="owasp-sensitive-data-exposure",
+        trigger="sensitive data, logs, cache, URL, GET parameter, browser history",
+        action="Never put sensitive data in URLs (GET parameters), logs, error messages, or client-side caches. Use POST for sensitive submissions. Disable autocomplete on sensitive forms.",
+        rationale="GET parameters appear in browser history, server logs, and referrer headers. Logs and caches are often less protected than primary data stores.",
+        parent_id="owasp-data-protection",
+        tags=["security", "owasp", "data-protection", "exposure"],
+        examples=[
+            Example(
+                label="bad",
+                code="# Password in URL - appears in logs, history\nredirect(f'/reset?token={token}&email={email}')",
+                explanation="Sensitive data in URL is logged and cached everywhere",
+            ),
+            Example(
+                label="good",
+                code="# Use POST or store in session\nsession['reset_token'] = token\nredirect('/reset')",
+                explanation="Sensitive data not exposed in URL",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-https-everywhere",
+        trigger="HTTPS, TLS, SSL, certificate, transport security, encryption in transit",
+        action="Use HTTPS for ALL traffic, not just authentication. Validate TLS certificates properly. Use TLS 1.2+ with strong cipher suites. Implement HSTS.",
+        rationale="HTTP traffic is readable by anyone on the network path. Partial HTTPS (login only) exposes session cookies on other pages. HSTS prevents downgrade attacks.",
+        parent_id="owasp-data-protection",
+        tags=["security", "owasp", "data-protection", "transport"],
+    ),
+
+    # --- OWASP: DATABASE SECURITY ---
+    Lesson(
+        id="owasp-sql-injection",
+        trigger="SQL, query, database, injection, SQLi, parameterized, prepared statement, OWASP",
+        action="ALWAYS use parameterized queries or prepared statements. NEVER concatenate user input into SQL strings. Use ORM methods that parameterize automatically.",
+        rationale="SQL injection is consistently in OWASP Top 10. String concatenation allows attackers to modify query logic, extract data, or destroy databases.",
+        parent_id="security",
+        tags=["security", "owasp", "database", "injection"],
+        examples=[
+            Example(
+                label="bad",
+                code="query = f\"SELECT * FROM users WHERE id = {user_id}\"\ncursor.execute(query)",
+                explanation="String formatting - attacker can inject: 1 OR 1=1",
+            ),
+            Example(
+                label="good",
+                code="query = \"SELECT * FROM users WHERE id = %s\"\ncursor.execute(query, (user_id,))",
+                explanation="Parameterized query - input is escaped automatically",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-database-least-privilege",
+        trigger="database connection, database user, database privileges, connection string",
+        action="Use database accounts with minimum required privileges. Read-only operations should use read-only connections. Never use admin/root accounts for application access.",
+        rationale="If SQL injection occurs, limited database privileges limit damage. A read-only connection can't DROP TABLES even if exploited.",
+        parent_id="owasp-sql-injection",
+        tags=["security", "owasp", "database", "least-privilege"],
+    ),
+    Lesson(
+        id="owasp-stored-procedures",
+        trigger="stored procedure, database abstraction, database API",
+        action="Consider using stored procedures to abstract data access. This adds a layer between the application and base tables, limiting what queries can do.",
+        rationale="Stored procedures can enforce business rules at the database level and limit the SQL that can be executed, reducing injection impact.",
+        parent_id="owasp-sql-injection",
+        tags=["security", "owasp", "database", "architecture"],
+    ),
+
+    # --- OWASP: FILE MANAGEMENT ---
+    Lesson(
+        id="owasp-file-upload",
+        trigger="file upload, upload, multipart, file type, MIME, extension, OWASP",
+        action="Validate uploaded files by content (magic bytes), not just extension. Restrict allowed types to business-necessary formats. Store uploads outside web root. Rename files to prevent path traversal.",
+        rationale="Extension checks are bypassable (.php.jpg). Uploads in web root can be executed. User-controlled filenames enable path traversal.",
+        parent_id="security",
+        tags=["security", "owasp", "files", "upload"],
+        examples=[
+            Example(
+                label="bad",
+                code="if filename.endswith('.jpg'):\n    path = f'/uploads/{filename}'  # Path traversal: ../../../etc/passwd.jpg\n    file.save(path)",
+                explanation="Extension check only, user-controlled path",
+            ),
+            Example(
+                label="good",
+                code="import magic\nimport uuid\n\nmime = magic.from_buffer(file.read(1024), mime=True)\nif mime not in ['image/jpeg', 'image/png']:\n    abort(400)\nsafe_name = f'{uuid.uuid4()}.{mime.split(\"/\")[1]}'\npath = os.path.join(UPLOAD_DIR, safe_name)  # Outside web root\nfile.save(path)",
+                explanation="Content validation, random filename, safe directory",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-path-traversal",
+        trigger="path traversal, directory traversal, LFI, local file inclusion, ../, dot dot slash",
+        action="Never pass user input directly to file system operations. Use allowlists of permitted files, or map user input to indices. Validate paths are within expected directory after canonicalization.",
+        rationale="Path traversal (../) allows reading arbitrary files including /etc/passwd, source code, and config files with secrets.",
+        parent_id="security",
+        tags=["security", "owasp", "files", "traversal"],
+        examples=[
+            Example(
+                label="bad",
+                code="template = request.args.get('template')\nreturn render_template(f'templates/{template}')\n# Attacker: ?template=../../../etc/passwd",
+                explanation="User controls path - can escape intended directory",
+            ),
+            Example(
+                label="good",
+                code="ALLOWED_TEMPLATES = {'home': 'home.html', 'about': 'about.html'}\ntemplate_key = request.args.get('template')\nif template_key not in ALLOWED_TEMPLATES:\n    abort(404)\nreturn render_template(f'templates/{ALLOWED_TEMPLATES[template_key]}')",
+                explanation="Allowlist maps user input to known-safe values",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-file-execution",
+        trigger="file execution, upload directory, executable, script execution",
+        action="Disable script execution in upload directories. Configure web server to serve uploads as static files only. Never store uploads in code directories.",
+        rationale="If attackers can upload and execute code (PHP, JSP, ASPX), they gain full server control. Treating uploads as static prevents execution.",
+        parent_id="owasp-file-upload",
+        tags=["security", "owasp", "files", "execution"],
+    ),
+
+    # --- OWASP: ERROR HANDLING & LOGGING ---
+    Lesson(
+        id="owasp-error-handling",
+        trigger="error handling, exception, stack trace, debug mode, verbose errors, OWASP",
+        action="Display generic error messages to users. Log detailed errors server-side only. NEVER expose stack traces, SQL errors, or system paths in production.",
+        rationale="Detailed errors reveal system internals - database structure, file paths, library versions - that help attackers plan exploits.",
+        parent_id="security",
+        tags=["security", "owasp", "errors"],
+        examples=[
+            Example(
+                label="bad",
+                code="try:\n    query_database()\nexcept Exception as e:\n    return f'Database error: {e}'  # Reveals DB details",
+                explanation="Error details exposed to user",
+            ),
+            Example(
+                label="good",
+                code="try:\n    query_database()\nexcept Exception as e:\n    logger.exception('Database query failed')  # Full details in log\n    return 'An error occurred. Please try again.'  # Generic to user",
+                explanation="Detailed logging, generic user message",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-security-logging",
+        trigger="security logging, audit log, authentication log, access log, security event",
+        action="Log all security-relevant events: authentication attempts (success AND failure), access control failures, input validation failures, and administrative actions. Include timestamp, user, IP, and action.",
+        rationale="Security logs enable incident detection and forensics. Without them, breaches go undetected and uninvestigated.",
+        parent_id="security",
+        tags=["security", "owasp", "logging", "audit"],
+        examples=[
+            Example(
+                label="good",
+                code="logger.info(\n    'auth_event',\n    extra={\n        'event_type': 'login_failed',\n        'username': username,\n        'ip': request.remote_addr,\n        'reason': 'invalid_password',\n        'timestamp': datetime.utcnow().isoformat()\n    }\n)",
+                explanation="Structured security event with all relevant context",
+            ),
+        ],
+    ),
+    Lesson(
+        id="owasp-log-injection",
+        trigger="log injection, log forging, log tampering, CRLF injection",
+        action="Sanitize user input before logging. Prevent newline injection that could forge log entries. Use structured logging formats (JSON) rather than string concatenation.",
+        rationale="Attackers can inject fake log entries to hide their tracks or frame others. Newlines in usernames can create misleading log entries.",
+        parent_id="owasp-security-logging",
+        tags=["security", "owasp", "logging", "injection"],
+    ),
+
+    # --- OWASP: SECURE CODE REVIEW CHECKLIST ITEMS ---
+    Lesson(
+        id="owasp-code-review-auth",
+        trigger="code review, security review, review checklist, authentication review",
+        action="During code review, verify: passwords use strong hashing (Argon2/bcrypt), session tokens have sufficient entropy (≥128 bits), re-auth required for sensitive operations, account lockout implemented.",
+        rationale="Authentication flaws enable account takeover. Code review is the last line of defense before production.",
+        parent_id="security",
+        tags=["security", "owasp", "code-review", "authentication"],
+    ),
+    Lesson(
+        id="owasp-code-review-authz",
+        trigger="code review, authorization review, access control review",
+        action="During code review, verify: every endpoint has authorization checks, authorization is enforced server-side, default is deny, no IDOR vulnerabilities (ownership verified for each resource).",
+        rationale="Authorization bypass is a critical vulnerability class. Missing checks on even one endpoint can expose all data.",
+        parent_id="security",
+        tags=["security", "owasp", "code-review", "authorization"],
+    ),
+    Lesson(
+        id="owasp-code-review-crypto",
+        trigger="code review, cryptography review, encryption review",
+        action="During code review, verify: modern algorithms (AES-256, RSA-2048+), proper key management, no hardcoded keys, CSPRNG for all random values, TLS configured correctly.",
+        rationale="Cryptographic weaknesses may not cause immediate failures but completely compromise security. Review catches weak algorithms.",
+        parent_id="security",
+        tags=["security", "owasp", "code-review", "cryptography"],
+    ),
+
+    # =========================================================================
     # MGCP SELF-TEACHING LESSONS
     # These lessons teach how to use MGCP itself effectively
     # =========================================================================
@@ -1272,7 +1798,322 @@ BUG_FIX_WORKFLOW = Workflow(
     ],
 )
 
-DEFAULT_WORKFLOWS = [FEATURE_DEVELOPMENT_WORKFLOW, BUG_FIX_WORKFLOW]
+SECURE_CODE_REVIEW_WORKFLOW = Workflow(
+    id="secure-code-review",
+    name="Secure Code Review",
+    description="Use when performing a security-focused code review. Based on OWASP Code Review Guide. Ensures systematic coverage of security vulnerabilities.",
+    trigger="security review, code review, security audit, vulnerability check, pen test prep, OWASP review, secure code",
+    tags=["security", "review", "owasp"],
+    steps=[
+        WorkflowStep(
+            id="input-validation",
+            name="Input Validation Review",
+            description="Check all input handling for injection vulnerabilities, encoding issues, and validation gaps.",
+            order=1,
+            guidance="Look for user input that flows into SQL, system commands, file paths, or HTML. Check for allowlists vs blocklists. Verify validation happens server-side.",
+            checklist=[
+                "All user inputs validated server-side",
+                "Using allowlists, not blocklists",
+                "Input canonicalized before validation",
+                "SQL uses parameterized queries",
+                "No command injection paths",
+                "File paths validated against traversal",
+            ],
+            outputs=["input validation findings", "injection vulnerability list"],
+            lessons=[
+                WorkflowStepLesson(
+                    lesson_id="owasp-input-validation",
+                    relevance="Core input validation principles - allowlists, server-side, rejection over sanitization",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-sql-injection",
+                    relevance="Check all database queries for parameterization",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-path-traversal",
+                    relevance="Check file operations for traversal vulnerabilities",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-canonicalize-before-validate",
+                    relevance="Check encoding handling before validation",
+                    priority=2,
+                ),
+            ],
+        ),
+        WorkflowStep(
+            id="output-encoding",
+            name="Output Encoding Review",
+            description="Check all output contexts for proper encoding to prevent XSS and injection.",
+            order=2,
+            guidance="Trace untrusted data to output points. Verify context-appropriate encoding (HTML, JS, URL, CSS). Check for stored XSS via database data.",
+            checklist=[
+                "HTML output properly escaped",
+                "JavaScript contexts use JSON encoding",
+                "URL parameters properly encoded",
+                "Database data treated as untrusted",
+                "Template engine auto-escaping enabled",
+                "No raw HTML rendering of user data",
+            ],
+            outputs=["XSS vulnerability findings", "encoding gaps"],
+            lessons=[
+                WorkflowStepLesson(
+                    lesson_id="owasp-contextual-output-encoding",
+                    relevance="Different contexts need different encoding",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-encode-all-untrusted",
+                    relevance="DB and API data is also untrusted - stored XSS",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="escape-output",
+                    relevance="Basic output escaping principles",
+                    priority=2,
+                ),
+            ],
+        ),
+        WorkflowStep(
+            id="authentication",
+            name="Authentication Review",
+            description="Review authentication mechanisms for weaknesses in password handling, session creation, and failure modes.",
+            order=3,
+            guidance="Check password storage algorithms, session ID generation, login failure messages, brute force protection, and credential transmission.",
+            checklist=[
+                "Passwords use Argon2/bcrypt/scrypt",
+                "Session IDs cryptographically random (≥128 bits)",
+                "Session regenerated after login",
+                "Generic error messages (no enumeration)",
+                "Account lockout or rate limiting",
+                "MFA available for sensitive accounts",
+                "Credentials transmitted over HTTPS only",
+            ],
+            outputs=["authentication weaknesses", "password storage findings"],
+            lessons=[
+                WorkflowStepLesson(
+                    lesson_id="owasp-authentication-fundamentals",
+                    relevance="Use tested libraries, not custom implementations",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-password-storage",
+                    relevance="Verify password hashing algorithm and parameters",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-auth-fail-securely",
+                    relevance="Check error messages don't leak user existence",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-account-lockout",
+                    relevance="Verify brute force protection exists",
+                    priority=2,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-session-management",
+                    relevance="Check session ID generation and regeneration",
+                    priority=1,
+                ),
+            ],
+        ),
+        WorkflowStep(
+            id="authorization",
+            name="Authorization Review",
+            description="Review access control for bypasses, privilege escalation, and IDOR vulnerabilities.",
+            order=4,
+            guidance="Check every endpoint for authorization. Look for IDOR by tracing resource IDs. Verify server-side enforcement. Check default deny.",
+            checklist=[
+                "Every endpoint has authorization check",
+                "Authorization enforced server-side",
+                "Default is DENY, not ALLOW",
+                "Resource ownership verified (IDOR check)",
+                "No client-provided role/permission trust",
+                "Privilege changes require re-auth",
+                "Admin functions properly protected",
+            ],
+            outputs=["authorization bypasses", "IDOR vulnerabilities", "privilege escalation paths"],
+            lessons=[
+                WorkflowStepLesson(
+                    lesson_id="owasp-access-control",
+                    relevance="Centralized, server-side, default deny",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-idor-prevention",
+                    relevance="Verify ownership for each resource access",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-privilege-escalation",
+                    relevance="Don't trust client-provided roles",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="least-privilege",
+                    relevance="Minimum permissions needed",
+                    priority=2,
+                ),
+            ],
+        ),
+        WorkflowStep(
+            id="cryptography",
+            name="Cryptography Review",
+            description="Review cryptographic implementations for weak algorithms, poor key management, and random number generation.",
+            order=5,
+            guidance="Check for weak algorithms (MD5, SHA1, DES). Verify key storage (not in code). Check random generation uses CSPRNG.",
+            checklist=[
+                "Modern algorithms (AES-256, RSA-2048+)",
+                "No MD5/SHA1 for security purposes",
+                "Keys not hardcoded in source",
+                "Keys stored in KMS/vault/env vars",
+                "CSPRNG for all security random values",
+                "TLS 1.2+ with strong ciphers",
+                "Proper key rotation procedures",
+            ],
+            outputs=["weak crypto findings", "key management issues"],
+            lessons=[
+                WorkflowStepLesson(
+                    lesson_id="owasp-cryptography",
+                    relevance="Use established libraries, not custom crypto",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-key-management",
+                    relevance="Keys in KMS/vault, not code",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-random-generation",
+                    relevance="CSPRNG for all security values",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="no-hardcoded-secrets",
+                    relevance="No secrets in source code",
+                    priority=1,
+                ),
+            ],
+        ),
+        WorkflowStep(
+            id="data-protection",
+            name="Data Protection Review",
+            description="Review handling of sensitive data including storage, transmission, logging, and exposure.",
+            order=6,
+            guidance="Identify sensitive data flows. Check encryption at rest and in transit. Look for sensitive data in logs, URLs, and error messages.",
+            checklist=[
+                "Sensitive data classified and identified",
+                "Encrypted at rest",
+                "HTTPS for all transmission",
+                "Not in URLs or GET parameters",
+                "Not in logs or error messages",
+                "Proper data retention/deletion",
+                "HSTS header set",
+            ],
+            outputs=["data exposure findings", "encryption gaps"],
+            lessons=[
+                WorkflowStepLesson(
+                    lesson_id="owasp-data-protection",
+                    relevance="Classify, encrypt, minimize retention",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-sensitive-data-exposure",
+                    relevance="No sensitive data in URLs, logs, errors",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-https-everywhere",
+                    relevance="HTTPS for all traffic, not just auth",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-cookie-security",
+                    relevance="Secure, HttpOnly, SameSite on cookies",
+                    priority=2,
+                ),
+            ],
+        ),
+        WorkflowStep(
+            id="error-logging",
+            name="Error Handling & Logging Review",
+            description="Review error handling for information disclosure and logging for security event coverage.",
+            order=7,
+            guidance="Check error messages shown to users. Verify security events are logged. Check for log injection vulnerabilities.",
+            checklist=[
+                "Generic errors to users",
+                "Detailed errors logged server-side",
+                "No stack traces in production",
+                "Auth failures logged with IP/user",
+                "Access control failures logged",
+                "Log injection prevented",
+                "Structured logging format",
+            ],
+            outputs=["error disclosure findings", "logging gaps"],
+            lessons=[
+                WorkflowStepLesson(
+                    lesson_id="owasp-error-handling",
+                    relevance="Generic to users, detailed in logs",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-security-logging",
+                    relevance="Log all security-relevant events",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-log-injection",
+                    relevance="Sanitize before logging, use structured format",
+                    priority=2,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="secure-error-messages",
+                    relevance="Don't expose internals",
+                    priority=2,
+                ),
+            ],
+        ),
+        WorkflowStep(
+            id="file-handling",
+            name="File Handling Review",
+            description="Review file uploads, downloads, and filesystem access for security vulnerabilities.",
+            order=8,
+            guidance="Check file upload validation (content, not just extension). Verify upload storage is outside web root. Check for path traversal in all file operations.",
+            checklist=[
+                "Upload content validated (magic bytes)",
+                "Uploads stored outside web root",
+                "Files renamed (no user-controlled names)",
+                "No script execution in upload dirs",
+                "Path traversal prevented",
+                "File type restrictions enforced",
+                "Download authorization checked",
+            ],
+            outputs=["file handling vulnerabilities", "upload security findings"],
+            lessons=[
+                WorkflowStepLesson(
+                    lesson_id="owasp-file-upload",
+                    relevance="Validate content, safe storage, rename files",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-path-traversal",
+                    relevance="No user input in file paths",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-file-execution",
+                    relevance="No script execution in upload directories",
+                    priority=2,
+                ),
+            ],
+        ),
+    ],
+)
+
+DEFAULT_WORKFLOWS = [FEATURE_DEVELOPMENT_WORKFLOW, BUG_FIX_WORKFLOW, SECURE_CODE_REVIEW_WORKFLOW]
 
 
 # =============================================================================
@@ -1433,6 +2274,98 @@ LESSON_RELATIONSHIPS = [
     ("mgcp-workflow-feedback", "mgcp-create-custom-workflows", "related", "Both concern workflow improvement"),
     ("mgcp-continuous-improvement", "mgcp-check-before-adding", "complements", "Quality review and duplicate checking"),
     ("mgcp-continuous-improvement", "mgcp-refine-not-duplicate", "related", "Both concern knowledge quality"),
+
+    # =========================================================================
+    # OWASP SECURE CODING RELATIONSHIPS
+    # Connecting the OWASP-based security lessons
+    # =========================================================================
+
+    # OWASP Input Validation hierarchy
+    ("security", "owasp-input-validation", "prerequisite", "Understand security before OWASP input validation"),
+    ("owasp-input-validation", "owasp-centralized-validation", "prerequisite", "Understand input validation before centralization"),
+    ("owasp-input-validation", "owasp-canonicalize-before-validate", "prerequisite", "Understand validation before canonicalization"),
+    ("validate-input", "owasp-input-validation", "complements", "Both concern input validation from different angles"),
+    ("owasp-input-validation", "owasp-sql-injection", "complements", "Input validation prevents SQL injection"),
+
+    # OWASP Output Encoding hierarchy
+    ("security", "owasp-contextual-output-encoding", "prerequisite", "Understand security before output encoding"),
+    ("owasp-contextual-output-encoding", "owasp-encode-all-untrusted", "prerequisite", "Understand encoding before scope of untrusted data"),
+    ("escape-output", "owasp-contextual-output-encoding", "complements", "Both concern output encoding"),
+    ("owasp-input-validation", "owasp-contextual-output-encoding", "complements", "Input validation and output encoding work together"),
+
+    # OWASP Authentication hierarchy
+    ("security", "owasp-authentication-fundamentals", "prerequisite", "Understand security before authentication"),
+    ("owasp-authentication-fundamentals", "owasp-password-storage", "prerequisite", "Understand auth before password storage"),
+    ("owasp-authentication-fundamentals", "owasp-auth-fail-securely", "prerequisite", "Understand auth before failure handling"),
+    ("owasp-authentication-fundamentals", "owasp-account-lockout", "prerequisite", "Understand auth before lockout"),
+    ("owasp-authentication-fundamentals", "owasp-mfa", "prerequisite", "Understand auth before MFA"),
+    ("owasp-password-storage", "owasp-auth-fail-securely", "complements", "Storage and failure handling work together"),
+    ("owasp-account-lockout", "owasp-auth-fail-securely", "complements", "Lockout responds to auth failures"),
+
+    # OWASP Session Management hierarchy
+    ("security", "owasp-session-management", "prerequisite", "Understand security before session management"),
+    ("owasp-session-management", "owasp-cookie-security", "prerequisite", "Understand sessions before cookie security"),
+    ("owasp-session-management", "owasp-session-timeout", "prerequisite", "Understand sessions before timeouts"),
+    ("owasp-session-management", "owasp-session-id-exposure", "prerequisite", "Understand sessions before exposure prevention"),
+    ("owasp-cookie-security", "owasp-session-id-exposure", "complements", "Cookie security prevents session exposure"),
+    ("owasp-authentication-fundamentals", "owasp-session-management", "sequence_next", "After authentication, manage sessions"),
+
+    # OWASP Access Control hierarchy
+    ("security", "owasp-access-control", "prerequisite", "Understand security before access control"),
+    ("owasp-access-control", "owasp-idor-prevention", "prerequisite", "Understand access control before IDOR prevention"),
+    ("owasp-access-control", "owasp-privilege-escalation", "prerequisite", "Understand access control before privilege escalation"),
+    ("least-privilege", "owasp-access-control", "complements", "Both concern access control principles"),
+    ("owasp-idor-prevention", "owasp-privilege-escalation", "complements", "Both are authorization bypass vulnerabilities"),
+    ("owasp-authentication-fundamentals", "owasp-access-control", "sequence_next", "After authentication, check authorization"),
+
+    # OWASP Cryptography hierarchy
+    ("security", "owasp-cryptography", "prerequisite", "Understand security before cryptography"),
+    ("owasp-cryptography", "owasp-key-management", "prerequisite", "Understand crypto before key management"),
+    ("owasp-cryptography", "owasp-random-generation", "prerequisite", "Understand crypto before random generation"),
+    ("no-hardcoded-secrets", "owasp-key-management", "complements", "Both concern secret/key management"),
+    ("owasp-random-generation", "owasp-session-management", "complements", "Random generation needed for session IDs"),
+    ("owasp-password-storage", "owasp-cryptography", "related", "Password hashing is a crypto operation"),
+
+    # OWASP Data Protection hierarchy
+    ("security", "owasp-data-protection", "prerequisite", "Understand security before data protection"),
+    ("owasp-data-protection", "owasp-sensitive-data-exposure", "prerequisite", "Understand data protection before exposure prevention"),
+    ("owasp-data-protection", "owasp-https-everywhere", "prerequisite", "Understand data protection before transport security"),
+    ("owasp-session-id-exposure", "owasp-sensitive-data-exposure", "complements", "Session IDs are sensitive data"),
+    ("owasp-https-everywhere", "owasp-cookie-security", "complements", "HTTPS needed for Secure cookie flag"),
+
+    # OWASP Database Security hierarchy
+    ("security", "owasp-sql-injection", "prerequisite", "Understand security before SQL injection prevention"),
+    ("owasp-sql-injection", "owasp-database-least-privilege", "prerequisite", "Understand injection before DB privileges"),
+    ("owasp-sql-injection", "owasp-stored-procedures", "prerequisite", "Understand injection before stored procedures"),
+    ("validate-input", "owasp-sql-injection", "complements", "Input validation prevents SQL injection"),
+    ("owasp-database-least-privilege", "least-privilege", "related", "Both concern least privilege principle"),
+
+    # OWASP File Management hierarchy
+    ("security", "owasp-file-upload", "prerequisite", "Understand security before file upload security"),
+    ("security", "owasp-path-traversal", "prerequisite", "Understand security before path traversal prevention"),
+    ("owasp-file-upload", "owasp-file-execution", "prerequisite", "Understand uploads before execution prevention"),
+    ("owasp-path-traversal", "verify-file-paths", "complements", "Both concern file path security"),
+    ("owasp-input-validation", "owasp-path-traversal", "complements", "Input validation prevents path traversal"),
+    ("owasp-input-validation", "owasp-file-upload", "complements", "Input validation for file content"),
+
+    # OWASP Error Handling hierarchy
+    ("security", "owasp-error-handling", "prerequisite", "Understand security before error handling"),
+    ("security", "owasp-security-logging", "prerequisite", "Understand security before security logging"),
+    ("owasp-security-logging", "owasp-log-injection", "prerequisite", "Understand logging before log injection"),
+    ("secure-error-messages", "owasp-error-handling", "complements", "Both concern secure error messages"),
+    ("error-handling", "owasp-error-handling", "related", "Both concern error handling"),
+    ("owasp-auth-fail-securely", "owasp-security-logging", "complements", "Log authentication failures"),
+    ("owasp-input-validation", "owasp-log-injection", "related", "Input validation prevents log injection"),
+
+    # OWASP Code Review lessons
+    ("security", "owasp-code-review-auth", "prerequisite", "Understand security before auth code review"),
+    ("security", "owasp-code-review-authz", "prerequisite", "Understand security before authz code review"),
+    ("security", "owasp-code-review-crypto", "prerequisite", "Understand security before crypto code review"),
+    ("owasp-authentication-fundamentals", "owasp-code-review-auth", "related", "Auth fundamentals inform auth review"),
+    ("owasp-access-control", "owasp-code-review-authz", "related", "Access control informs authz review"),
+    ("owasp-cryptography", "owasp-code-review-crypto", "related", "Crypto fundamentals inform crypto review"),
+    ("owasp-code-review-auth", "owasp-code-review-authz", "sequence_next", "Review auth before authz"),
+    ("owasp-code-review-authz", "owasp-code-review-crypto", "sequence_next", "Review authz before crypto"),
 ]
 
 

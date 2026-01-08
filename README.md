@@ -166,6 +166,46 @@ mgcp-dashboard
 - **File Couplings**: Know which files typically change together
 - **Error Patterns**: Common errors and their solutions
 
+## Beyond Software Development
+
+**MGCP's architecture is domain-agnostic.** The bootstrap lessons we ship focus on software development because that's our primary use case, but the underlying system works for any domain where an LLM benefits from persistent, contextual memory.
+
+The core primitives are universal:
+- **Lessons**: Knowledge with triggers ("when X") and actions ("do Y") - works for any domain
+- **Workflows**: Step-by-step processes with contextual guidance - works for any process
+- **Catalogue**: Context-specific knowledge - works for any bounded context
+- **Relationships**: Connected knowledge that surfaces together - works for any knowledge graph
+
+### Alternative Bootstrap Examples
+
+| Domain | Bootstrap Focus |
+|--------|-----------------|
+| **Customer Service** | Escalation triggers, issue resolution patterns, customer preference learning |
+| **Personal Assistant** | User preferences, scheduling patterns, communication style, recurring tasks |
+| **Medical Triage** | Symptom assessment workflows, urgency classification, follow-up protocols |
+| **Sales** | Objection handling, customer profiling, deal stage guidance, competitive intelligence |
+| **Education** | Learning style adaptation, concept explanation strategies, progress tracking |
+| **Legal** | Document review workflows, clause risk patterns, precedent lookup |
+| **Research** | Literature review workflows, methodology checklists, citation patterns |
+
+### Building Your Own Bootstrap
+
+To create a domain-specific MGCP deployment:
+
+1. **Fork the bootstrap**: Copy `src/mgcp/bootstrap.py` and replace the lessons
+2. **Define your lessons**: Create lessons with domain-specific triggers and actions
+3. **Build workflows**: Encode your domain's common processes as workflows
+4. **Link knowledge**: Create relationships between related concepts
+
+The same `query_lessons`, `get_workflow`, and `save_project_context` tools work regardless of domain. The semantic search finds relevant knowledge based on the query, not based on hard-coded assumptions about what you're doing.
+
+**Example: A chatbot personalization bootstrap might include:**
+- Lessons about conversation style preferences ("When user prefers formal language, avoid slang and contractions")
+- Workflows for onboarding new users ("Introduce features gradually, not all at once")
+- Catalogue items for user-specific facts ("User's timezone is PST, prefers morning scheduling")
+
+This flexibility means MGCP can serve as the memory backbone for any LLM application that benefits from learning over time.
+
 ## Commands
 
 | Command | Description |

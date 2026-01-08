@@ -1601,6 +1601,62 @@ async def create_workflow(
 
 
 @mcp.tool()
+async def update_workflow(
+    workflow_id: str,
+    trigger: str = "",
+    name: str = "",
+    description: str = "",
+    tags: str = "",
+) -> str:
+    """Update an existing workflow's metadata.
+
+    Use this to refine workflow triggers based on task descriptions that should
+    have matched but didn't. This enables iterative learning of working language.
+
+    Args:
+        workflow_id: The workflow to update
+        trigger: New trigger keywords (replaces existing if provided)
+        name: New name (optional)
+        description: New description (optional)
+        tags: New comma-separated tags (replaces existing if provided)
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    workflow = await store.get_workflow(workflow_id)
+    if not workflow:
+        return f"Workflow not found: {workflow_id}"
+
+    updates = []
+
+    if trigger:
+        old_trigger = workflow.trigger
+        workflow.trigger = trigger
+        updates.append(f"trigger: '{old_trigger}' → '{trigger}'")
+
+    if name:
+        old_name = workflow.name
+        workflow.name = name
+        updates.append(f"name: '{old_name}' → '{name}'")
+
+    if description:
+        old_desc = workflow.description
+        workflow.description = description
+        updates.append(f"description updated")
+
+    if tags:
+        workflow.tags = [t.strip() for t in tags.split(",") if t.strip()]
+        updates.append(f"tags: {workflow.tags}")
+
+    if not updates:
+        return f"No updates provided for workflow '{workflow_id}'."
+
+    workflow.version += 1
+    await store.save_workflow(workflow)
+
+    return f"Updated workflow '{workflow_id}' (v{workflow.version}):\n" + "\n".join(f"  • {u}" for u in updates)
+
+
+@mcp.tool()
 async def add_workflow_step(
     workflow_id: str,
     step_id: str,

@@ -1409,7 +1409,11 @@ async def query_workflows(task_description: str, min_relevance: float = 0.35) ->
             })
 
     if not matches:
-        return f"No workflows matched with relevance >= {min_relevance}. This may be a simple task that doesn't need a formal workflow, or try rephrasing the task description."
+        return (
+            f"No workflows matched with relevance >= {min_relevance}. "
+            "This may be a simple task that doesn't need a formal workflow, "
+            "or try rephrasing the task description."
+        )
 
     # Sort by relevance
     matches.sort(key=lambda x: x["relevance"], reverse=True)
@@ -1424,7 +1428,10 @@ async def query_workflows(task_description: str, min_relevance: float = 0.35) ->
 
     if matches[0]["relevance"] >= 0.5:
         lines.append(f"**RECOMMENDED:** Activate `{matches[0]['id']}` workflow.")
-        lines.append(f"Call `get_workflow(\"{matches[0]['id']}\")` to load it, then create TodoWrite entries for each step.")
+        lines.append(
+            f"Call `get_workflow(\"{matches[0]['id']}\")` to load it, "
+            "then create TodoWrite entries for each step."
+        )
 
     return "\n".join(lines)
 
@@ -1639,9 +1646,8 @@ async def update_workflow(
         updates.append(f"name: '{old_name}' → '{name}'")
 
     if description:
-        old_desc = workflow.description
         workflow.description = description
-        updates.append(f"description updated")
+        updates.append("description updated")
 
     if tags:
         workflow.tags = [t.strip() for t in tags.split(",") if t.strip()]

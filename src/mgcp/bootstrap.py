@@ -603,6 +603,167 @@ BOOTSTRAP_LESSONS = [
         parent_id="mgcp-usage",
         tags=["mgcp", "catalogue", "dependencies"],
     ),
+
+    # =========================================================================
+    # GIT WORKFLOW LESSONS
+    # =========================================================================
+    Lesson(
+        id="git-practices",
+        trigger="git, commit, push, pull, branch, merge, version control",
+        action="Follow consistent git practices: atomic commits, descriptive messages, verify changes before committing",
+        rationale="Good git hygiene makes collaboration easier and debugging simpler. Bad commits pollute history and make bisecting difficult.",
+        tags=["meta", "git", "workflow"],
+    ),
+    Lesson(
+        id="query-before-git-operations",
+        trigger="commit, push, git commit, git push, let's commit, ready to commit, PR, pull request",
+        action="BEFORE performing any git operation (commit, push, PR), call query_lessons with 'git commit' or 'git workflow' to surface project-specific preferences like attribution rules, commit message formats, or branch conventions.",
+        rationale="Different projects have different git conventions. Querying first surfaces any project-specific rules that override defaults.",
+        parent_id="git-practices",
+        tags=["git", "workflow", "proactive"],
+    ),
+    Lesson(
+        id="lint-before-commit",
+        trigger="commit, write code, implement, edit files, fix bugs, code changes",
+        action="Run linting (ruff check, eslint, etc.) BEFORE committing code changes, not after CI fails. Catch issues while the code is fresh in context rather than debugging lint failures later.",
+        rationale="Lint errors discovered in CI require context switching back to code you've already mentally moved on from. Running linter locally catches issues immediately when they're trivial to fix.",
+        parent_id="git-practices",
+        tags=["git", "linting", "code-quality", "ci"],
+        examples=[
+            Example(
+                label="bad",
+                code="# Write code, commit, push\n# CI fails with lint errors\n# Now have to context-switch back",
+                explanation="Delayed feedback loop wastes time and mental energy",
+            ),
+            Example(
+                label="good",
+                code="# Write code\n# Run: ruff check src/\n# Fix any issues immediately\n# Commit clean code",
+                explanation="Immediate feedback, issues fixed while context is fresh",
+            ),
+        ],
+    ),
+    Lesson(
+        id="verify-before-push",
+        trigger="push, git push, about to push, ready to push",
+        action="Before pushing: (1) run tests locally, (2) run linter, (3) check git diff for debug code or secrets, (4) verify you're pushing to the correct branch. Pushing broken code blocks others.",
+        rationale="Pushing untested code to shared branches breaks CI and blocks teammates. A few minutes of local verification saves hours of team disruption.",
+        parent_id="git-practices",
+        tags=["git", "verification", "ci"],
+    ),
+
+    # =========================================================================
+    # WORKFLOW MANAGEMENT LESSONS
+    # =========================================================================
+    Lesson(
+        id="mgcp-workflow-management",
+        trigger="workflow, create workflow, new workflow, custom workflow, process, checklist",
+        action="Use MGCP workflows to encode repeatable processes. Workflows surface the right lessons at the right time by linking lessons to specific steps.",
+        rationale="Workflows turn scattered lessons into structured guidance. Instead of hoping the right lesson is queried, workflows guarantee it's surfaced at the right step.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "workflows", "process"],
+    ),
+    Lesson(
+        id="mgcp-query-workflows-first",
+        trigger="implement, fix, add feature, debug, refactor, work on, build, create",
+        action="At the START of any coding task, call query_workflows with a description of the task. If a workflow matches (>50% relevance), activate it by calling get_workflow and following each step. If no match, proceed without a workflow.",
+        rationale="Workflows encode hard-won knowledge about what goes wrong. Following a workflow prevents common mistakes. Not all tasks need workflows - simple changes can proceed directly.",
+        parent_id="mgcp-workflow-management",
+        tags=["mgcp", "workflows", "proactive"],
+        examples=[
+            Example(
+                label="good",
+                code="# User: 'Add user authentication'\nquery_workflows('implementing authentication')\n# Returns feature-development at 65% relevance\nget_workflow('feature-development')\n# Now follow Research -> Plan -> Document -> Execute -> Test -> Review",
+                explanation="Workflow guides you through proven steps with relevant lessons at each",
+            ),
+        ],
+    ),
+    Lesson(
+        id="mgcp-create-custom-workflows",
+        trigger="new workflow, create workflow, repetitive task, same steps, process template, checklist",
+        action="When you find yourself repeating the same process across tasks, create a custom workflow: (1) create_workflow with id, name, description, trigger keywords, (2) add_workflow_step for each step with checklist items, (3) link_lesson_to_workflow_step to attach relevant lessons. This codifies your process for reuse.",
+        rationale="Workflows capture process knowledge that's otherwise tribal. A workflow for 'database migrations' or 'API endpoint additions' ensures consistency and surfaces relevant lessons automatically.",
+        parent_id="mgcp-workflow-management",
+        tags=["mgcp", "workflows", "process", "customization"],
+    ),
+    Lesson(
+        id="mgcp-update-workflow-triggers",
+        trigger="workflow didn't match, wrong workflow, should have matched, update trigger, refine workflow",
+        action="When a task description SHOULD have matched a workflow but didn't (or matched the wrong one), use update_workflow to refine the trigger keywords. Add the words that should have matched. This is iterative learning - workflows improve over time.",
+        rationale="Semantic matching isn't perfect. When it fails, updating triggers teaches the system your vocabulary. Over time, workflows match more reliably.",
+        parent_id="mgcp-workflow-management",
+        tags=["mgcp", "workflows", "refinement", "learning"],
+        examples=[
+            Example(
+                label="good",
+                code="# Task: 'modernize the button styles'\n# query_workflows returns no match\n# But this IS feature development!\nupdate_workflow(\n    workflow_id='feature-development',\n    trigger='new feature, implement, add, build, create, modernize, improve, style, UI'\n)\n# Now 'modernize' and 'style' will match",
+                explanation="Updating triggers teaches the system your vocabulary",
+            ),
+        ],
+    ),
+
+    # =========================================================================
+    # CLARIFICATION AND QUALITY LESSONS
+    # =========================================================================
+    Lesson(
+        id="mgcp-clarify-before-storing",
+        trigger="unclear, ambiguous, not sure, might be, could be, depends on, maybe, what kind of",
+        action="Before storing knowledge (lessons, catalogue items, workflows), clarify ambiguities. Ask questions to understand: (1) Is this universal or project-specific? (2) What exactly triggers this? (3) What's the precise action? Vague knowledge pollutes the graph.",
+        rationale="Ambiguous lessons surface at wrong times and give unclear guidance. Spending a moment to clarify before storing saves future confusion and keeps the knowledge graph clean.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "quality", "clarification"],
+        examples=[
+            Example(
+                label="bad",
+                code="add_lesson(id='handle-errors', trigger='errors', action='Handle errors properly')",
+                explanation="Too vague - when does it apply? What's 'properly'?",
+            ),
+            Example(
+                label="good",
+                code="# First clarify: What kind of errors? What's the context?\n# Then store specific, actionable knowledge\nadd_lesson(id='handle-api-errors', trigger='API, request, response, error', action='Catch specific HTTP error codes (4xx client errors, 5xx server errors) and provide actionable error messages to users')",
+                explanation="Specific trigger, specific action, clear guidance",
+            ),
+        ],
+    ),
+    Lesson(
+        id="mgcp-actionable-triggers",
+        trigger="trigger, when to apply, activate, surface lesson, keyword",
+        action="Write triggers as comma-separated keywords that would appear when the lesson is relevant. Include synonyms and related terms. Test by asking: 'If someone searches these words, should this lesson surface?'",
+        rationale="Triggers determine when lessons are found. Too narrow misses relevant queries. Too broad pollutes results. Good triggers balance precision and recall.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "lessons", "quality", "triggers"],
+        examples=[
+            Example(
+                label="bad",
+                code="trigger='authentication'  # Too narrow",
+                explanation="Misses 'login', 'auth', 'sign in', 'credentials'",
+            ),
+            Example(
+                label="good",
+                code="trigger='authentication, login, auth, sign in, credentials, session, JWT, OAuth'",
+                explanation="Includes synonyms and related concepts",
+            ),
+        ],
+    ),
+    Lesson(
+        id="mgcp-imperative-actions",
+        trigger="action, what to do, instruction, lesson action, guidance",
+        action="Write lesson actions as imperative commands starting with a verb: 'Validate...', 'Check...', 'Use...', 'Avoid...'. NOT observations like 'X is important' or 'Consider X'. Actions should be directly executable.",
+        rationale="Lessons are instructions, not observations. 'Validate input before processing' is actionable. 'Input validation is important' is not. Imperative actions tell you exactly what to do.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "lessons", "quality", "actions"],
+        examples=[
+            Example(
+                label="bad",
+                code="action='Error handling is important for good user experience'",
+                explanation="Observation, not instruction - doesn't tell you what to DO",
+            ),
+            Example(
+                label="good",
+                code="action='Catch specific exceptions and return user-friendly error messages with actionable next steps'",
+                explanation="Imperative - tells you exactly what to do",
+            ),
+        ],
+    ),
 ]
 
 
@@ -1058,6 +1219,35 @@ LESSON_RELATIONSHIPS = [
     ("mgcp-record-security-notes", "mgcp-record-gotchas", "related", "Both document important project knowledge"),
     ("mgcp-record-conventions", "mgcp-record-gotchas", "related", "Conventions and gotchas both guide behavior"),
     ("mgcp-record-error-patterns", "mgcp-record-gotchas", "related", "Error patterns often capture gotchas"),
+
+    # Git workflow relationships
+    ("git-practices", "query-before-git-operations", "prerequisite", "Understand git practices before specific git triggers"),
+    ("git-practices", "lint-before-commit", "prerequisite", "Understand git practices before linting workflow"),
+    ("git-practices", "verify-before-push", "prerequisite", "Understand git practices before push verification"),
+    ("query-before-git-operations", "mgcp-save-before-commit", "complements", "Query lessons and save context both happen before commit"),
+    ("lint-before-commit", "verify-before-push", "sequence_next", "Lint before commit, verify before push"),
+    ("lint-before-commit", "testing", "related", "Both concern code quality verification"),
+    ("verify-before-push", "testing", "related", "Both concern verifying code before sharing"),
+
+    # Workflow management relationships
+    ("mgcp-usage", "mgcp-workflow-management", "prerequisite", "Understand MGCP before workflow management"),
+    ("mgcp-workflow-management", "mgcp-query-workflows-first", "prerequisite", "Understand workflows before querying them"),
+    ("mgcp-workflow-management", "mgcp-create-custom-workflows", "prerequisite", "Understand workflows before creating them"),
+    ("mgcp-workflow-management", "mgcp-update-workflow-triggers", "prerequisite", "Understand workflows before updating triggers"),
+    ("mgcp-query-workflows-first", "mgcp-query-before-action", "complements", "Query workflows and query lessons both happen before action"),
+    ("mgcp-create-custom-workflows", "mgcp-update-workflow-triggers", "sequence_next", "Create workflow, then refine triggers over time"),
+    ("mgcp-update-workflow-triggers", "mgcp-refine-not-duplicate", "related", "Both concern iterative improvement of existing knowledge"),
+    ("workflow-links-for-process-guidance", "mgcp-create-custom-workflows", "related", "Both concern workflow structure and guidance"),
+
+    # Clarification and quality relationships
+    ("mgcp-usage", "mgcp-clarify-before-storing", "prerequisite", "Understand MGCP before quality guidelines"),
+    ("mgcp-usage", "mgcp-actionable-triggers", "prerequisite", "Understand MGCP before trigger quality"),
+    ("mgcp-usage", "mgcp-imperative-actions", "prerequisite", "Understand MGCP before action quality"),
+    ("mgcp-clarify-before-storing", "lessons-are-generic-knowledge", "complements", "Clarify before storing, then choose correct storage"),
+    ("mgcp-clarify-before-storing", "mgcp-check-before-adding", "sequence_next", "Clarify first, then check for duplicates"),
+    ("mgcp-actionable-triggers", "mgcp-imperative-actions", "complements", "Good triggers and good actions make good lessons"),
+    ("mgcp-actionable-triggers", "mgcp-add-reusable-lessons", "related", "Trigger quality is key to lesson utility"),
+    ("mgcp-imperative-actions", "mgcp-add-reusable-lessons", "related", "Action quality is key to lesson utility"),
 ]
 
 

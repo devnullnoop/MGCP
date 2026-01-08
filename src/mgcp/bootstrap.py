@@ -764,6 +764,99 @@ BOOTSTRAP_LESSONS = [
             ),
         ],
     ),
+
+    # =========================================================================
+    # FEEDBACK AND RETROSPECTIVE LESSONS
+    # =========================================================================
+    Lesson(
+        id="mgcp-feedback-loops",
+        trigger="feedback, retrospective, review, reflect, what worked, what didn't, lessons learned",
+        action="Use MGCP's feedback mechanisms to continuously improve: (1) After tasks, reflect on what worked/didn't, (2) Turn mistakes into lessons, (3) Capture successful patterns, (4) Refine workflows based on experience.",
+        rationale="Knowledge systems only improve through feedback loops. Without systematic reflection, the same mistakes repeat and successful patterns are forgotten.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "feedback", "learning", "meta"],
+    ),
+    Lesson(
+        id="mgcp-post-task-retrospective",
+        trigger="task complete, finished, done, completed task, wrapped up, task done",
+        action="After completing any non-trivial task, ask: (1) What went well that should be repeated? (2) What went wrong that should be avoided? (3) What knowledge should be captured as a lesson or catalogue item? (4) Did we follow the workflow, and if not, why? Spend 1-2 minutes on this reflection.",
+        rationale="Most learning happens at task completion when context is fresh. Without explicit retrospective, insights fade and the next similar task starts from scratch.",
+        parent_id="mgcp-feedback-loops",
+        tags=["mgcp", "feedback", "retrospective", "learning"],
+        examples=[
+            Example(
+                label="good",
+                code="# Task: Implement user authentication - COMPLETE\n# Retrospective:\n# - What worked: Following feature-development workflow caught missing edge cases\n# - What didn't: Forgot to check for existing auth patterns in codebase first\n# - Capture: Add lesson about checking existing patterns before implementing new features\nadd_lesson(id='check-existing-patterns', ...)",
+                explanation="Explicit reflection surfaces actionable improvements",
+            ),
+        ],
+    ),
+    Lesson(
+        id="mgcp-learn-from-mistakes",
+        trigger="mistake, error, failed, broke, bug introduced, wrong, messed up, shouldn't have",
+        action="When something goes wrong: (1) Identify the root cause (not just the symptom), (2) Ask 'What trigger should have surfaced a lesson to prevent this?', (3) Create a lesson with that trigger and the corrective action, (4) Link it to related existing lessons. Turn every mistake into knowledge that prevents recurrence.",
+        rationale="Mistakes are expensive learning opportunities. Without capturing them as lessons, the same mistakes repeat across sessions. The pain of a mistake should buy permanent prevention.",
+        parent_id="mgcp-feedback-loops",
+        tags=["mgcp", "feedback", "mistakes", "learning"],
+        examples=[
+            Example(
+                label="bad",
+                code="# Made a mistake, fixed it, moved on\n# Next session: same mistake happens again",
+                explanation="Mistake forgotten, destined to repeat",
+            ),
+            Example(
+                label="good",
+                code="# Made a mistake: forgot to run linter before commit\n# Root cause: eagerness to commit, no pre-commit check habit\n# Trigger that should have helped: 'commit', 'git commit'\nadd_lesson(\n    id='lint-before-commit',\n    trigger='commit, git commit, code changes',\n    action='Run linter before committing',\n    rationale='CI failures from lint errors waste time'\n)",
+                explanation="Mistake converted to lesson that prevents recurrence",
+            ),
+        ],
+    ),
+    Lesson(
+        id="mgcp-learn-from-success",
+        trigger="worked well, success, nailed it, smooth, efficient, good pattern, this approach worked",
+        action="When something works particularly well: (1) Identify WHY it worked (the pattern, not just the outcome), (2) Ask 'Is this pattern reusable across projects?', (3) If yes, create a lesson capturing the approach, (4) If project-specific, add to catalogue as an arch note or decision.",
+        rationale="Success patterns are as valuable as failure patterns but often go uncaptured because there's no pain to trigger reflection. Explicitly capturing what works builds a library of proven approaches.",
+        parent_id="mgcp-feedback-loops",
+        tags=["mgcp", "feedback", "success", "learning"],
+        examples=[
+            Example(
+                label="good",
+                code="# The workflow-first approach worked great for this feature\n# Why: It forced research before coding, caught issues early\n# Reusable? Yes, this applies to any feature development\nrefine_lesson(\n    lesson_id='mgcp-query-workflows-first',\n    refinement='Especially valuable for unfamiliar codebases - the research step prevents wrong assumptions'\n)",
+                explanation="Success analyzed and captured for future benefit",
+            ),
+        ],
+    ),
+    Lesson(
+        id="mgcp-session-end-review",
+        trigger="end session, signing off, done for today, wrapping up, goodbye, that's all for now",
+        action="Before ending a session: (1) Review what was accomplished, (2) Ask 'Did I learn anything that should be a lesson?', (3) Ask 'Did I make any mistakes worth capturing?', (4) Ask 'Did any workflow steps help or hinder?', (5) Call save_project_context with comprehensive notes. This 2-minute review compounds into significant knowledge over time.",
+        rationale="Session boundaries are natural reflection points. Knowledge not captured at session end is often lost forever. The small investment in end-of-session review pays dividends across all future sessions.",
+        parent_id="mgcp-feedback-loops",
+        tags=["mgcp", "feedback", "session", "learning"],
+    ),
+    Lesson(
+        id="mgcp-workflow-feedback",
+        trigger="workflow helped, workflow didn't help, skipped workflow, wrong workflow, workflow missing step",
+        action="After using (or skipping) a workflow, provide feedback: (1) If it helped, note which steps were most valuable, (2) If steps were missing, use add_workflow_step to add them, (3) If triggers didn't match, use update_workflow to improve triggers, (4) If you skipped it, add a lesson about why you skipped and how to prevent that.",
+        rationale="Workflows improve through use. Each task is an opportunity to refine triggers, add missing steps, or link new lessons. Workflows that aren't refined become stale and ignored.",
+        parent_id="mgcp-feedback-loops",
+        tags=["mgcp", "feedback", "workflows", "refinement"],
+        examples=[
+            Example(
+                label="good",
+                code="# Skipped feature-development workflow for 'modernize UI'\n# Why: Didn't think of it as 'feature development'\n# Fix: Update trigger to include UI/styling terms\nupdate_workflow(\n    workflow_id='feature-development',\n    trigger='...existing..., modernize, style, UI, UX'\n)\n# Also add lesson about skipping\nadd_lesson(id='workflow-skip-failure-mode', ...)",
+                explanation="Workflow miss converted into trigger improvement",
+            ),
+        ],
+    ),
+    Lesson(
+        id="mgcp-continuous-improvement",
+        trigger="improve mgcp, better lessons, knowledge quality, lesson effectiveness, stale lessons",
+        action="Periodically review lesson quality: (1) Use mgcp-duplicates to find and merge similar lessons, (2) Review low-usage lessons - are triggers wrong or is the lesson not useful?, (3) Check if lessons are too vague or too specific, (4) Ensure lessons have good rationale explaining WHY. Quality over quantity.",
+        rationale="Knowledge bases degrade without maintenance. Duplicate lessons fragment retrieval. Vague lessons don't help. Lessons without rationale get ignored. Regular grooming keeps the system valuable.",
+        parent_id="mgcp-feedback-loops",
+        tags=["mgcp", "feedback", "maintenance", "quality"],
+    ),
 ]
 
 
@@ -1248,6 +1341,25 @@ LESSON_RELATIONSHIPS = [
     ("mgcp-actionable-triggers", "mgcp-imperative-actions", "complements", "Good triggers and good actions make good lessons"),
     ("mgcp-actionable-triggers", "mgcp-add-reusable-lessons", "related", "Trigger quality is key to lesson utility"),
     ("mgcp-imperative-actions", "mgcp-add-reusable-lessons", "related", "Action quality is key to lesson utility"),
+
+    # Feedback and retrospective relationships
+    ("mgcp-usage", "mgcp-feedback-loops", "prerequisite", "Understand MGCP before feedback mechanisms"),
+    ("mgcp-feedback-loops", "mgcp-post-task-retrospective", "prerequisite", "Understand feedback before retrospectives"),
+    ("mgcp-feedback-loops", "mgcp-learn-from-mistakes", "prerequisite", "Understand feedback before mistake learning"),
+    ("mgcp-feedback-loops", "mgcp-learn-from-success", "prerequisite", "Understand feedback before success learning"),
+    ("mgcp-feedback-loops", "mgcp-session-end-review", "prerequisite", "Understand feedback before session review"),
+    ("mgcp-feedback-loops", "mgcp-workflow-feedback", "prerequisite", "Understand feedback before workflow feedback"),
+    ("mgcp-feedback-loops", "mgcp-continuous-improvement", "prerequisite", "Understand feedback before continuous improvement"),
+    ("mgcp-post-task-retrospective", "mgcp-learn-from-mistakes", "complements", "Retrospective surfaces mistakes to capture"),
+    ("mgcp-post-task-retrospective", "mgcp-learn-from-success", "complements", "Retrospective surfaces successes to capture"),
+    ("mgcp-learn-from-mistakes", "mgcp-add-reusable-lessons", "sequence_next", "After identifying mistake, create lesson"),
+    ("mgcp-learn-from-success", "mgcp-add-reusable-lessons", "sequence_next", "After identifying success pattern, create lesson"),
+    ("mgcp-session-end-review", "mgcp-save-on-shutdown", "complements", "Review and save both happen at session end"),
+    ("mgcp-session-end-review", "mgcp-post-task-retrospective", "related", "Both are reflection practices"),
+    ("mgcp-workflow-feedback", "mgcp-update-workflow-triggers", "sequence_next", "Workflow feedback leads to trigger updates"),
+    ("mgcp-workflow-feedback", "mgcp-create-custom-workflows", "related", "Both concern workflow improvement"),
+    ("mgcp-continuous-improvement", "mgcp-check-before-adding", "complements", "Quality review and duplicate checking"),
+    ("mgcp-continuous-improvement", "mgcp-refine-not-duplicate", "related", "Both concern knowledge quality"),
 ]
 
 

@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -28,10 +29,69 @@ catalogue_vector = None  # CatalogueVectorStore, initialized lazily
 graph: LessonGraph | None = None
 
 
+# Background task for polling telemetry DB
+_poll_task: asyncio.Task | None = None
+_last_event_timestamp: str | None = None
+
+
+async def poll_telemetry_events():
+    """Poll the telemetry DB for new events and broadcast to WebSocket clients."""
+    global _last_event_timestamp
+
+    while True:
+        try:
+            if telemetry and manager.active_connections:
+                # Query for events newer than last seen
+                conn = await telemetry._get_conn()
+                try:
+                    if _last_event_timestamp:
+                        cursor = await conn.execute(
+                            """
+                            SELECT * FROM events
+                            WHERE timestamp > ?
+                            ORDER BY timestamp ASC
+                            LIMIT 50
+                            """,
+                            (_last_event_timestamp,),
+                        )
+                    else:
+                        # First poll - just get the latest timestamp to start from
+                        cursor = await conn.execute(
+                            "SELECT MAX(timestamp) as ts FROM events"
+                        )
+                        row = await cursor.fetchone()
+                        if row and row["ts"]:
+                            _last_event_timestamp = row["ts"]
+                        await cursor.close()
+                        await conn.close()
+                        await asyncio.sleep(0.5)
+                        continue
+
+                    rows = await cursor.fetchall()
+                    for row in rows:
+                        event_data = {
+                            "id": row["id"],
+                            "timestamp": row["timestamp"],
+                            "type": row["event_type"],
+                            "session_id": row["session_id"],
+                            "payload": json.loads(row["payload"]),
+                        }
+                        await manager.broadcast(event_data)
+                        _last_event_timestamp = row["timestamp"]
+
+                finally:
+                    await conn.close()
+
+        except Exception as e:
+            logger.error(f"Error polling telemetry: {e}")
+
+        await asyncio.sleep(0.5)  # Poll every 500ms
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize stores on startup."""
-    global telemetry, store, vector_store, graph
+    global telemetry, store, vector_store, graph, _poll_task
 
     telemetry = TelemetryLogger()
     store = LessonStore()
@@ -43,9 +103,19 @@ async def lifespan(app: FastAPI):
     for lesson in lessons:
         graph.add_lesson(lesson)
 
-    logger.info(f"Web server initialized with {len(lessons)} lessons")
+    # Start background polling task
+    _poll_task = asyncio.create_task(poll_telemetry_events())
+    logger.info(f"Web server initialized with {len(lessons)} lessons, telemetry polling started")
+
     yield
 
+    # Cancel polling task
+    if _poll_task:
+        _poll_task.cancel()
+        try:
+            await _poll_task
+        except asyncio.CancelledError:
+            pass
     logger.info("Shutting down web server")
 
 

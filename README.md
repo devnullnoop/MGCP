@@ -40,7 +40,7 @@ Without persistent memory, LLMs:
                               └───────────┘ └───────────┘ └─────────────┘
 ```
 
-MGCP provides **23 MCP tools** that let your LLM:
+MGCP provides **32 MCP tools** that let your LLM:
 - Query relevant lessons semantically before starting any task
 - Store new lessons as they're discovered
 - Traverse related knowledge through the graph

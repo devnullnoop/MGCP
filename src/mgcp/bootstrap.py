@@ -1651,6 +1651,32 @@ FEATURE_DEVELOPMENT_WORKFLOW = Workflow(
                     relevance="Don't leak sensitive info in error messages shown to users",
                     priority=2,
                 ),
+                # Detailed OWASP lessons for internet-exposed code
+                WorkflowStepLesson(
+                    lesson_id="owasp-sql-injection",
+                    relevance="ALWAYS use parameterized queries - SQL injection is OWASP Top 10 #1",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-input-validation",
+                    relevance="Validate ALL input server-side using allowlists, not blocklists",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-contextual-output-encoding",
+                    relevance="Encode output based on context (HTML/JS/URL/CSS) to prevent XSS",
+                    priority=1,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-authentication-fundamentals",
+                    relevance="If implementing auth: use secure password storage, fail securely",
+                    priority=2,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-access-control",
+                    relevance="Check authorization on EVERY endpoint - default deny, not allow",
+                    priority=2,
+                ),
             ],
         ),
         WorkflowStep(
@@ -1824,6 +1850,22 @@ BUG_FIX_WORKFLOW = Workflow(
                 WorkflowStepLesson(
                     lesson_id="verify-before-assert",
                     relevance="Add verification for the condition that caused the bug",
+                    priority=2,
+                ),
+                # Security lessons - bug fixes can introduce vulnerabilities
+                WorkflowStepLesson(
+                    lesson_id="validate-input",
+                    relevance="If fix involves input, ensure validation is correct",
+                    priority=2,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="owasp-sql-injection",
+                    relevance="If fix involves database queries, use parameterized queries",
+                    priority=2,
+                ),
+                WorkflowStepLesson(
+                    lesson_id="secure-error-messages",
+                    relevance="Don't expose sensitive details in error messages",
                     priority=2,
                 ),
             ],

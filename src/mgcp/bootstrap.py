@@ -1252,6 +1252,26 @@ BOOTSTRAP_LESSONS = [
         tags=["mgcp", "workflows", "process"],
     ),
     Lesson(
+        id="mandatory-workflow-selection",
+        trigger="implement, fix, add, modify, edit, update, refactor, create, build, change, write code, touch code, code changes, before coding",
+        action="BEFORE writing or modifying ANY code, you MUST select a workflow: (1) Call list_workflows to see available options, (2) Choose the workflow that best fits your task, (3) If no workflow fits, explicitly state 'No workflow applies because [specific reason]'. This is not optional - code changes without workflow selection are prohibited. The workflow ensures you don't skip critical steps like research, testing, and review.",
+        rationale="Semantic matching of user phrases to workflows is unreliable (colloquial phrases don't embed well against keyword lists). Making workflow selection mandatory shifts the burden to LLM intent classification, which is far more reliable. This ensures workflows are followed consistently regardless of how the user phrases their request.",
+        parent_id="mgcp-workflow-management",
+        tags=["mgcp", "workflow", "mandatory", "enforcement", "critical"],
+        examples=[
+            Example(
+                label="bad",
+                code="# User: 'clean up the auth code'\n# Immediately start refactoring without workflow\nedit_file('auth.py', ...)",
+                explanation="Skipped workflow selection - no research, no plan, no review",
+            ),
+            Example(
+                label="good",
+                code="# User: 'clean up the auth code'\nlist_workflows()  # See options\n# This is refactoring -> feature-development workflow\nget_workflow('feature-development')\n# Create todos for each step, follow in order",
+                explanation="Explicit workflow selection ensures proper process",
+            ),
+        ],
+    ),
+    Lesson(
         id="mgcp-query-workflows-first",
         trigger="implement, fix, add feature, debug, refactor, work on, build, create",
         action="At the START of any coding task, call query_workflows with a description of the task. If a workflow matches (>50% relevance), activate it by calling get_workflow and following each step. If no match, proceed without a workflow.",
@@ -1458,7 +1478,27 @@ FEATURE_DEVELOPMENT_WORKFLOW = Workflow(
     id="feature-development",
     name="Feature Development",
     description="Use when implementing a new feature or significant change. Ensures research, planning, documentation, and testing.",
-    trigger="new feature, implement, add functionality, build, create",
+    # Comprehensive triggers covering natural phrasings users employ
+    trigger=(
+        # Core verbs
+        "implement, add, build, create, develop, make, write, set up, wire up, connect, "
+        # Feature-related
+        "new feature, add feature, add functionality, add capability, add support for, "
+        # Enhancement/improvement
+        "enhance, improve, optimize, upgrade, modernize, update, redesign, rework, "
+        # Refactoring
+        "refactor, restructure, reorganize, clean up, simplify, "
+        # UI/UX
+        "style, styling, UI, UX, interface, design, layout, component, view, screen, page, "
+        # Performance
+        "make it faster, speed up, performance, optimize queries, "
+        # Integration
+        "integrate, integration, hook up, plug in, "
+        # Generic development
+        "build out, build the, create a, create new, develop the, work on, "
+        # Colloquial
+        "put together, get working, set this up"
+    ),
     tags=["development", "feature", "standard"],
     steps=[
         WorkflowStep(
@@ -1691,7 +1731,26 @@ BUG_FIX_WORKFLOW = Workflow(
     id="bug-fix",
     name="Bug Fix",
     description="Use when fixing a bug. Ensures understanding the root cause before applying a fix.",
-    trigger="bug, fix, issue, broken, not working, error, crash",
+    # Comprehensive triggers covering natural phrasings users employ
+    trigger=(
+        # Core bug terms
+        "bug, fix, debug, issue, problem, defect, flaw, "
+        # Broken/not working states
+        "broken, not working, doesn't work, stopped working, fails, failing, failed, "
+        # Error-related
+        "error, exception, crash, crashed, crashing, throws, throwing, "
+        # Investigation terms
+        "investigate, troubleshoot, diagnose, figure out, track down, "
+        # Problem descriptions
+        "wrong, incorrect, unexpected, weird, strange, "
+        # Colloquial phrasings
+        "something's broken, it's broken, not right, acting up, "
+        "what's wrong, having a problem, there's an issue, "
+        # Repair terms
+        "repair, resolve, address, correct, patch, "
+        # Symptom descriptions
+        "regression, behavior changed, used to work"
+    ),
     tags=["development", "bugfix", "debugging"],
     steps=[
         WorkflowStep(

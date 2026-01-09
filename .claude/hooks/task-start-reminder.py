@@ -149,6 +149,54 @@ For EACH workflow step:
 </user-prompt-submit-hook>""")
             sys.exit(0)
 
+    # FALLBACK: Generic code modification detection
+    # If the prompt suggests code changes but didn't match a specific workflow,
+    # require explicit workflow selection
+    CODE_MODIFICATION_PATTERNS = [
+        r"\b(change|modify|update|edit|refactor|rewrite|improve|optimize|enhance|clean up)\b.{0,30}\b(code|file|function|class|method|component)\b",
+        r"\b(make|write|add)\b.{0,20}\b(changes?|edits?|modifications?)\b",
+        r"\b(the|this|that)\s+(code|function|method|class)\s+(should|needs to|must)\b",
+        r"\brename\b.{0,20}\b(function|method|variable|class|file)\b",
+        r"\b(move|extract|inline|split)\b.{0,20}\b(function|method|class|code)\b",
+        r"\bclean\s*up\b",
+        r"\brefactor\b",
+        r"\b(simplify|streamline|reorganize)\b",
+    ]
+
+    for pattern in CODE_MODIFICATION_PATTERNS:
+        if re.search(pattern, prompt, re.IGNORECASE):
+            print("""<user-prompt-submit-hook>
+═══════════════════════════════════════════════════════════════════════════════
+⚠️  MANDATORY WORKFLOW SELECTION REQUIRED
+═══════════════════════════════════════════════════════════════════════════════
+
+This task involves CODE MODIFICATIONS. Before writing ANY code, you MUST:
+
+1. Call `mcp__mgcp__list_workflows()` to see available workflows
+2. SELECT a workflow that fits this task:
+   - `feature-development` - For new features, enhancements, refactoring
+   - `bug-fix` - For fixing broken functionality
+   - `secure-code-review` - For security-focused changes
+
+3. If a workflow applies:
+   - Call `mcp__mgcp__get_workflow("<workflow_id>")`
+   - Create TodoWrite entries for each step
+   - Follow ALL steps in order
+
+4. If NO workflow applies, you MUST state:
+   "No workflow applies because: [specific reason]"
+   Example reasons:
+   - "This is a single-line typo fix with no behavior change"
+   - "This is a documentation-only change"
+   - "This is reverting a previous change"
+
+**THIS IS NOT OPTIONAL.** Code changes without workflow selection are prohibited.
+The workflow ensures research, planning, testing, and review are not skipped.
+
+═══════════════════════════════════════════════════════════════════════════════
+</user-prompt-submit-hook>""")
+            sys.exit(0)
+
     sys.exit(0)
 
 if __name__ == "__main__":

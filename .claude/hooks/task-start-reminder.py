@@ -186,7 +186,9 @@ This task involves CODE MODIFICATIONS. Before writing ANY code, you MUST:
 3. If a workflow applies:
    - Call `mcp__mgcp__get_workflow("<workflow_id>")`
    - Create TodoWrite entries for each step
-   - Follow ALL steps in order
+   - At EACH step, call `get_workflow_step(workflow_id, step_id, expand_lessons=true)`
+   - READ the linked lessons - this is where OWASP and critical guidance surfaces
+   - Complete ALL checklist items before moving to next step
 
 4. If NO workflow applies, you MUST state:
    "No workflow applies because: [specific reason]"

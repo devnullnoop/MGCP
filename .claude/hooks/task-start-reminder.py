@@ -6,12 +6,17 @@ import sys
 
 # Feature development triggers - substantial new work
 FEATURE_PATTERNS = [
-    r"\b(implement|implementing|add|adding|create|creating|build|building)\b.{0,40}\b(feature|function|method|class|component|endpoint|api|system|visualization|dashboard|ui)\b",
+    # Specific implementation patterns with known nouns
+    r"\b(implement|implementing|add|adding|create|creating|build|building)\b.{0,40}\b(feature|function|method|class|component|endpoint|api|system|visualization|dashboard|ui|service|module|handler|controller|model|view|page|screen|form|button|modal|dialog|widget|panel|sidebar|navbar|header|footer)\b",
+    # Common domain-specific patterns
+    r"\b(implement|implementing|add|adding|create|creating|build|building)\b.{0,40}\b(authentication|authorization|login|logout|signup|registration|validation|verification|notification|email|messaging|payment|checkout|cart|search|filter|sort|pagination|upload|download|export|import|sync|cache|logging|monitoring|analytics|tracking)\b",
     r"\bnew\s+(feature|functionality|component|system|endpoint|api)\b",
     r"\blet'?s\s+(implement|add|create|build|work on)\b",
     r"\b(can you|could you|please|i need you to|help me)\b.{0,20}\b(implement|add|create|build)\b",
     r"\b(set up|setting up|configure|configuring)\b.{0,20}\b(new|the)\b",
     r"\bwork on\b.{0,30}\b(feature|implementation|adding)\b",
+    # Broad catch-all for implement/add/build/create with substantive object
+    r"\b(implement|add|build|create)\s+\w+\s+\w+",  # "implement user authentication", "add error handling"
 ]
 
 # Bug fix triggers - fixing existing broken things

@@ -17,15 +17,15 @@ BOOTSTRAP_LESSONS = [
     Lesson(
         id="security",
         trigger="security, secure, vulnerability, attack, exploit, injection, xss, csrf",
-        action="Apply security best practices at every step of development",
-        rationale="Security vulnerabilities are expensive to fix after deployment. Build security in from the start.",
+        action="Validate all input. Escape all output. Use parameterized queries. Encrypt secrets at rest. Trust nothing from outside your system boundary.",
+        rationale="Security flaws compound. A single SQL injection exposes your entire database. A single XSS enables session hijacking. Cost to fix post-breach: reputation, legal liability, user trust—all unrecoverable.",
         tags=["meta", "security", "quality"],
     ),
     Lesson(
         id="verification",
         trigger="verify, check, validate, confirm, ensure, test",
-        action="Always verify assumptions before acting on them",
-        rationale="Many bugs come from acting on assumptions that turn out to be false",
+        action="Log and inspect actual values before processing. Check types and nullability. Validate preconditions explicitly. Trust nothing implicitly.",
+        rationale="Assumptions that fail silently produce corrupt data that propagates. By the time symptoms appear, the root cause is buried. Verify at the boundary, not after the damage.",
         tags=["meta", "verification", "quality"],
         examples=[
             Example(
@@ -43,22 +43,22 @@ BOOTSTRAP_LESSONS = [
     Lesson(
         id="api-research",
         trigger="API, library, package, dependency, import, install",
-        action="Research APIs and libraries before using them",
-        rationale="Documentation, versions, and behavior change. Verify current state.",
+        action="Read official docs for the CURRENT version before writing code. Verify example code actually runs. Check changelogs for breaking changes in recent releases.",
+        rationale="Stack Overflow answers rot. APIs break between versions. Copying outdated examples embeds vulnerabilities and deprecated patterns that break later.",
         tags=["meta", "research", "apis"],
     ),
     Lesson(
         id="testing",
         trigger="test, debug, verify, check, validate",
-        action="Test with known inputs before integrating",
-        rationale="Catch errors early when the problem space is small",
+        action="Write tests with explicit expected outputs BEFORE integrating. Run tests after every change. Red test = stop and fix immediately.",
+        rationale="Bugs discovered during integration require debugging across boundaries. Bugs discovered in isolation have one-line fixes. Test early or debug late—the choice costs 10x either way.",
         tags=["meta", "testing", "quality"],
     ),
     Lesson(
         id="error-handling",
         trigger="error, exception, fail, crash, bug, handle",
-        action="Handle errors gracefully with informative messages",
-        rationale="Good error handling aids debugging and user experience",
+        action="Catch specific exceptions by type. Include context in messages: what failed, which value, where to look. Log stack traces internally. Return generic messages externally.",
+        rationale="'Error occurred' is useless. 'User 4521 not found in auth_db during login' is actionable. The difference is hours of debugging vs. minutes.",
         tags=["meta", "errors", "quality"],
     ),
 
@@ -937,8 +937,8 @@ BOOTSTRAP_LESSONS = [
     Lesson(
         id="mgcp-usage",
         trigger="mgcp, memory, lessons, context, catalogue, save context",
-        action="Use MGCP tools throughout the session to capture knowledge, not just at start/end",
-        rationale="MGCP is most valuable when knowledge is captured as it's discovered, not reconstructed later",
+        action="Call get_project_context at session start. Call add_catalogue_* immediately when you discover gotchas, make decisions, or notice conventions. Call save_project_context before commits and session end. Query lessons before acting, not after.",
+        rationale="Knowledge decays. A gotcha discovered at 2pm is forgotten by 4pm if not recorded. Reconstructing context from memory produces incomplete, inaccurate lessons. Capture in the moment or lose the detail.",
         tags=["meta", "mgcp", "workflow"],
     ),
     Lesson(
@@ -1199,8 +1199,8 @@ BOOTSTRAP_LESSONS = [
     Lesson(
         id="git-practices",
         trigger="git, commit, push, pull, branch, merge, version control",
-        action="Follow consistent git practices: atomic commits, descriptive messages, verify changes before committing",
-        rationale="Good git hygiene makes collaboration easier and debugging simpler. Bad commits pollute history and make bisecting difficult.",
+        action="One logical change per commit. Write messages that explain WHY, not WHAT. Run git diff before commit to catch debug code and secrets. Never force-push shared branches.",
+        rationale="Atomic commits enable git bisect to pinpoint bugs. 'Fixed bug' is useless; 'Fix null check in auth middleware causing 500 on expired tokens' is searchable. Force-pushing shared branches rewrites history others depend on.",
         tags=["meta", "git", "workflow"],
     ),
     Lesson(

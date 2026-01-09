@@ -23,6 +23,18 @@ BUG_FIX_PATTERNS = [
     r"\bsomething'?s\s+wrong\b",
 ]
 
+# Security review triggers - code review with security focus
+SECURITY_REVIEW_PATTERNS = [
+    r"\b(security|secure)\s+(review|audit|check|scan)\b",
+    r"\b(review|audit|check).{0,20}(security|vulnerabilit|owasp)",
+    r"\b(pen\s*test|penetration\s*test|security\s*test)\b",
+    r"\bcheck\s+(for\s+)?(vulnerabilit|injection|xss|csrf|sql)",
+    r"\b(owasp|cve|vulnerabilit)\w*\s+(review|check|audit|scan)\b",
+    r"\bis\s+(this|it|the\s+code)\s+secure\b",
+    r"\bsecurity\s+of\s+(this|the)\b",
+    r"\b(audit|analyze).{0,15}security\b",
+]
+
 # Don't trigger workflows on these
 IGNORE_PATTERNS = [
     r"\b(commit|push|pull|merge|git)\b",  # Handled by git-reminder
@@ -98,6 +110,40 @@ For EACH workflow step (Reproduce → Investigate → Fix → Verify):
 6. Mark the step as completed
 
 **CRITICAL:** Understand the root cause BEFORE applying a fix. Do NOT guess.
+
+═══════════════════════════════════════════════════════════════════════════════
+</user-prompt-submit-hook>""")
+            sys.exit(0)
+
+    # Check for security review patterns
+    for pattern in SECURITY_REVIEW_PATTERNS:
+        if re.search(pattern, prompt, re.IGNORECASE):
+            print("""<user-prompt-submit-hook>
+═══════════════════════════════════════════════════════════════════════════════
+WORKFLOW ACTIVATION: secure-code-review
+═══════════════════════════════════════════════════════════════════════════════
+
+This task requires the SECURE CODE REVIEW workflow (OWASP-based). Execute these steps IN ORDER:
+
+**STEP 0 - ACTIVATE WORKFLOW (do this NOW):**
+1. Call `mcp__mgcp__get_workflow("secure-code-review")` to load the full workflow
+2. Call `TodoWrite` to create todos for each of the 8 workflow steps
+
+**THEN EXECUTE EACH STEP:**
+
+For EACH workflow step:
+  Input Validation → Output Encoding → Authentication → Authorization →
+  Cryptography → Data Protection → Error Handling & Logging → File Handling
+
+1. Mark the step as in_progress in TodoWrite
+2. Call `mcp__mgcp__get_workflow_step("secure-code-review", "<step_id>", expand_lessons=true)`
+3. READ the linked OWASP lessons - they contain specific vulnerability checks
+4. For critical lessons, call `mcp__mgcp__spider_lessons("<lesson_id>")` to get related security knowledge
+5. Complete ALL checklist items before moving to the next step
+6. Document any findings with `mcp__mgcp__add_catalogue_security_note`
+7. Mark the step as completed
+
+**CRITICAL:** This is a systematic security audit. Do NOT skip steps. Each step covers different vulnerability classes.
 
 ═══════════════════════════════════════════════════════════════════════════════
 </user-prompt-submit-hook>""")

@@ -45,6 +45,7 @@ This applies even when the user doesn't say "implement" or "fix" explicitly. Exa
 **Available workflows:**
 - `feature-development` (6 steps): Research → Plan → Document → Execute → Test → Review
 - `bug-fix` (4 steps): Reproduce → Investigate → Fix → Verify
+- `secure-code-review` (8 steps): Input Validation → Output Encoding → Authentication → Authorization → Cryptography → Data Protection → Error Handling → File Handling
 
 **How to execute a workflow:**
 1. Call `mcp__mgcp__get_workflow("<workflow_id>")` to load the full workflow

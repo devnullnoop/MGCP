@@ -136,4 +136,4 @@ Open an issue with the "question" label or start a discussion.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the Apache 2.0 License.
+By contributing, you agree that your contributions will be licensed under the [O'Saasy License](LICENSE.md).

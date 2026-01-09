@@ -26,15 +26,11 @@ Without persistent memory, LLMs:
 
 ## The Solution
 
-<a href="docs/architecture.html">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/architecture-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/architecture-light.png">
-    <img alt="MGCP Architecture" src="docs/screenshots/architecture-dark.png" width="700">
-  </picture>
-</a>
-
-*Click to view the [interactive architecture diagram](docs/architecture.html).*
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/architecture-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/architecture-light.png">
+  <img alt="MGCP Architecture" src="docs/screenshots/architecture-dark.png" width="700">
+</picture>
 
 MGCP provides **32 MCP tools** that let your LLM:
 - Query relevant lessons semantically before starting any task
@@ -301,7 +297,7 @@ Data is stored in `~/.mgcp/` by default:
 - `lessons.db` - Lessons, project contexts, and usage telemetry
 - `chroma/` - Vector embeddings for semantic search
 
-See [docs/architecture.html](docs/architecture.html) for the full architecture diagram.
+See `docs/architecture.html` for the full architecture diagram (viewable locally or via the web dashboard).
 
 ## Development
 

@@ -28,6 +28,23 @@ you're biased toward executing it even if lessons say otherwise.
 ### At Session Start (DO THIS NOW):
 1. Call `mcp__mgcp__get_project_context` with project_path: "{project_path}"
 2. Call `mcp__mgcp__query_lessons` with a task_description based on what the user is asking about
+3. **OUTPUT a brief project status to the user** before addressing their message:
+
+Example format:
+```
+📍 **Project Name** | Session #N | Last: date
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 **Pending:**
+- Todo item 1
+- Todo item 2
+
+📝 **Notes:** Summary of where things left off
+
+⚠️ **Watch out for:** Any gotchas or blockers
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Only show sections that have content. Keep it concise. Then address the user's message.
 
 ### CRITICAL: Workflow-Based Development (ALWAYS-ON)
 

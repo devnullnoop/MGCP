@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/mgcp-reminder.sh"
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/mgcp-reminder.py"
           }
         ]
       }
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/mgcp-precompact.sh"
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/mgcp-precompact.py"
           }
         ]
       }

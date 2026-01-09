@@ -18,6 +18,8 @@ CATALOGUE_PATTERNS = [
     # Architectural decisions
     (r"\b(decided|choosing|picked|went with)\b.{0,20}\b(over|instead of|rather than)\b", "decision"),
     (r"\b(architecture|design|pattern|approach)\b.{0,20}\b(decision|choice)\b", "decision"),
+    # References to PRIOR decisions (critical - these should be catalogued if not already)
+    (r"\b(didn't we|did we not|we determined|we decided|we agreed|as we discussed|remember when we)\b", "prior_decision"),
 
     # Gotchas and quirks
     (r"\b(gotcha|quirk|caveat|watch out|careful|tricky|bug)\b", "arch_note"),
@@ -37,6 +39,7 @@ REMINDER_TEMPLATES = {
     "arch_note": "Consider adding an architecture note with mcp__mgcp__add_catalogue_arch_note (title, description, category)",
     "convention": "Consider documenting this convention with mcp__mgcp__add_catalogue_convention (title, rule, category)",
     "coupling": "Consider recording this file coupling with mcp__mgcp__add_catalogue_coupling (files, reason)",
+    "prior_decision": "⚠️ User is referencing a PRIOR decision. If not already catalogued, add it NOW with add_catalogue_decision or add_catalogue_convention. Do NOT just fix the issue - capture the underlying rule.",
 }
 
 def main():

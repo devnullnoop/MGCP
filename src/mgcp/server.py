@@ -578,6 +578,8 @@ async def save_project_context(
 
     if context:
         # Update existing
+        if project_name:
+            context.project_name = project_name
         if notes:
             context.notes = notes
         if active_files:

@@ -278,7 +278,7 @@ This flexibility means MGCP can serve as the memory backbone for any LLM applica
 ### Reminder Control (2 tools)
 | Tool | Purpose |
 |------|---------|
-| `set_reminder_boundary` | LLM-controlled suppression of hook reminders |
+| `schedule_reminder` | Schedule self-directed reminders for workflow continuity |
 | `reset_reminder_state` | Reset reminder state to defaults |
 
 ## Web Dashboard
@@ -305,7 +305,7 @@ Data is stored in `~/.mgcp/` by default:
 - `lessons.db` - Lessons, project contexts, and usage telemetry
 - `chroma/` - Vector embeddings for semantic search
 
-See `docs/architecture.html` for the full architecture diagram (viewable locally or via the web dashboard).
+See the architecture diagram at http://localhost:8765/static/architecture.html (when dashboard is running).
 
 ## Development
 

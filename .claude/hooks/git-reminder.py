@@ -32,7 +32,12 @@ def main():
 BEFORE executing any git operation (commit, push, PR):
 1. Call mcp__mgcp__query_lessons with "git commit workflow"
 2. Follow any project-specific git lessons (like attribution rules)
-3. Then proceed with the git operation
+3. **MANDATORY DOC REVIEW** - If ANY .md files or docs changed:
+   - grep for stale file paths (e.g., 'docs/' references that should be 'src/mgcp/static/')
+   - Verify all counts match reality (tool counts, step counts, etc.)
+   - Check all tool/function names against actual source code
+   - Run `git diff` on docs and verify EVERY change is accurate
+4. Then proceed with the git operation
 </user-prompt-submit-hook>""")
             sys.exit(0)
 

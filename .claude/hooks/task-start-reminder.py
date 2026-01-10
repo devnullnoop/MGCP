@@ -15,15 +15,16 @@ from pathlib import Path
 STATE_FILE = Path.home() / ".mgcp" / "reminder_state.json"
 
 
-def check_suppression() -> tuple[bool, str]:
+def check_suppression() -> tuple[bool, str, dict | None]:
     """Check if reminders should be suppressed and increment counter.
 
     Returns:
-        Tuple of (should_suppress: bool, reason: str)
+        Tuple of (should_suppress: bool, reason: str, pending_reminder: dict | None)
+        If suppression just expired and there's a pending reminder, returns the reminder data.
     """
     try:
         if not STATE_FILE.exists():
-            return False, "No state file"
+            return False, "No state file", None
 
         with open(STATE_FILE) as f:
             state = json.load(f)
@@ -43,21 +44,67 @@ def check_suppression() -> tuple[bool, str]:
             current = state["current_call_count"]
             if current < suppress_until:
                 remaining = suppress_until - current
-                return True, f"Suppressed ({remaining} calls remaining)"
-            return False, "Counter expired"
+                return True, f"Suppressed ({remaining} calls remaining)", None
+            # Suppression expired - check for pending reminder
+            reminder = _check_and_consume_reminder()
+            return False, "Counter expired", reminder
 
         elif mode == "timer":
             suppress_until = state.get("suppress_until_time", 0)
             now = time.time()
             if now < suppress_until:
                 remaining_mins = int((suppress_until - now) / 60)
-                return True, f"Suppressed ({remaining_mins} minutes remaining)"
-            return False, "Timer expired"
+                return True, f"Suppressed ({remaining_mins} minutes remaining)", None
+            # Suppression expired - check for pending reminder
+            reminder = _check_and_consume_reminder()
+            return False, "Timer expired", reminder
 
     except (json.JSONDecodeError, IOError, OSError, KeyError):
         pass
 
-    return False, "State check failed"
+    return False, "State check failed", None
+
+
+def _check_and_consume_reminder() -> dict | None:
+    """Check if there's a pending LLM-directed reminder and consume it.
+
+    Returns reminder data dict if present, None otherwise.
+    """
+    try:
+        if not STATE_FILE.exists():
+            return None
+
+        with open(STATE_FILE) as f:
+            state = json.load(f)
+
+        # Check if there's any reminder data
+        message = state.get("reminder_message", "")
+        lesson_ids = state.get("lesson_ids", [])
+        workflow_step = state.get("workflow_step", "")
+
+        if not message and not lesson_ids and not workflow_step:
+            return None
+
+        # Build reminder data
+        reminder = {
+            "message": message,
+            "lesson_ids": lesson_ids,
+            "workflow_step": workflow_step,
+            "task_note": state.get("task_note", ""),
+        }
+
+        # Clear the reminder data (consume it)
+        state["reminder_message"] = ""
+        state["lesson_ids"] = []
+        state["workflow_step"] = ""
+
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f, indent=2)
+
+        return reminder
+
+    except (json.JSONDecodeError, IOError, OSError, KeyError):
+        return None
 
 
 # Feature development triggers - substantial new work
@@ -103,6 +150,51 @@ IGNORE_PATTERNS = [
     r"\b(read|show|display|list|check)\b.{0,10}$",  # Simple queries
 ]
 
+def format_self_directed_reminder(reminder: dict) -> str:
+    """Format an LLM-directed reminder for injection."""
+    lines = [
+        "<user-prompt-submit-hook>",
+        "═══════════════════════════════════════════════════════════════════════════════",
+        "🔔 SELF-DIRECTED REMINDER",
+        "═══════════════════════════════════════════════════════════════════════════════",
+        "",
+    ]
+
+    if reminder.get("message"):
+        lines.append(f"**Message:** {reminder['message']}")
+        lines.append("")
+
+    if reminder.get("workflow_step"):
+        workflow_id, step_id = reminder["workflow_step"].split("/", 1) if "/" in reminder["workflow_step"] else (reminder["workflow_step"], "")
+        lines.append("**Workflow Step to Execute:**")
+        if step_id:
+            lines.append(f"  Call `mcp__mgcp__get_workflow_step(\"{workflow_id}\", \"{step_id}\", expand_lessons=true)`")
+        else:
+            lines.append(f"  Call `mcp__mgcp__get_workflow(\"{workflow_id}\")`")
+        lines.append("")
+
+    if reminder.get("lesson_ids"):
+        lesson_ids = reminder["lesson_ids"]
+        if isinstance(lesson_ids, str):
+            lesson_ids = [lid.strip() for lid in lesson_ids.split(",") if lid.strip()]
+        lines.append("**Lessons to Surface:**")
+        for lid in lesson_ids:
+            lines.append(f"  - Call `mcp__mgcp__get_lesson(\"{lid}\")`")
+        lines.append("")
+
+    if reminder.get("task_note"):
+        lines.append(f"**Task Context:** {reminder['task_note']}")
+        lines.append("")
+
+    lines.append("This reminder was scheduled by you via `set_reminder_boundary`.")
+    lines.append("Take the specified action, then set a new reminder for your next step if needed.")
+    lines.append("")
+    lines.append("═══════════════════════════════════════════════════════════════════════════════")
+    lines.append("</user-prompt-submit-hook>")
+
+    return "\n".join(lines)
+
+
 def main():
     try:
         hook_input = json.load(sys.stdin)
@@ -110,9 +202,15 @@ def main():
         sys.exit(0)
 
     # Check if reminders are suppressed (LLM-controlled via set_reminder_boundary)
-    suppressed, reason = check_suppression()
+    suppressed, reason, pending_reminder = check_suppression()
     if suppressed:
         # Exit silently - LLM has indicated it doesn't need reminders right now
+        sys.exit(0)
+
+    # If there's a pending self-directed reminder, inject it and exit
+    # This takes priority over pattern matching
+    if pending_reminder:
+        print(format_self_directed_reminder(pending_reminder))
         sys.exit(0)
 
     prompt = hook_input.get("prompt", "").lower().strip()

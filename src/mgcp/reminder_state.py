@@ -43,6 +43,10 @@ def load_state() -> dict:
         "current_call_count": 0,
         "task_note": "",
         "last_updated": datetime.now(UTC).isoformat(),
+        # LLM-directed reminder fields
+        "reminder_message": "",  # Custom message to inject when boundary expires
+        "lesson_ids": [],  # Lesson IDs to surface
+        "workflow_step": "",  # Workflow/step to load (e.g., "bug-fix/investigate")
     }
 
     try:
@@ -76,13 +80,19 @@ def set_boundary(
     suppress_for_calls: int | None = None,
     suppress_for_minutes: int | None = None,
     note: str = "",
+    message: str = "",
+    lesson_ids: list[str] | None = None,
+    workflow_step: str = "",
 ) -> dict:
-    """Set a reminder suppression boundary.
+    """Set a reminder suppression boundary with optional LLM-directed reminder.
 
     Args:
         suppress_for_calls: Suppress reminders for N hook checks (counter mode)
         suppress_for_minutes: Suppress reminders for N minutes (timer mode)
         note: Optional note about what task is being worked on
+        message: Custom message to inject when boundary expires
+        lesson_ids: List of lesson IDs to surface when boundary expires
+        workflow_step: Workflow/step to load (e.g., "bug-fix/investigate")
 
     Returns:
         Updated state dict with confirmation of what was set
@@ -101,6 +111,14 @@ def set_boundary(
 
     if note:
         state["task_note"] = note
+
+    # LLM-directed reminder fields
+    if message:
+        state["reminder_message"] = message
+    if lesson_ids is not None:
+        state["lesson_ids"] = lesson_ids
+    if workflow_step:
+        state["workflow_step"] = workflow_step
 
     save_state(state)
     return state
@@ -168,6 +186,44 @@ def get_status() -> dict:
     return status
 
 
+def check_and_consume_reminder() -> dict | None:
+    """Check if an LLM-directed reminder should fire and consume it.
+
+    Called by hooks when suppression has expired. If there's a pending
+    custom reminder (message, lesson_ids, or workflow_step), returns the
+    reminder data and clears it so it only fires once.
+
+    Returns:
+        dict with reminder data if a reminder should fire, None otherwise.
+        Keys: message, lesson_ids, workflow_step, task_note
+    """
+    state = load_state()
+
+    # Check if there's any reminder data to consume
+    message = state.get("reminder_message", "")
+    lesson_ids = state.get("lesson_ids", [])
+    workflow_step = state.get("workflow_step", "")
+
+    if not message and not lesson_ids and not workflow_step:
+        return None
+
+    # Build reminder data
+    reminder = {
+        "message": message,
+        "lesson_ids": lesson_ids,
+        "workflow_step": workflow_step,
+        "task_note": state.get("task_note", ""),
+    }
+
+    # Clear the reminder data (consume it)
+    state["reminder_message"] = ""
+    state["lesson_ids"] = []
+    state["workflow_step"] = ""
+    save_state(state)
+
+    return reminder
+
+
 def reset_state() -> dict:
     """Reset state to defaults. Useful for testing or clearing stuck state."""
     state = {
@@ -177,6 +233,9 @@ def reset_state() -> dict:
         "current_call_count": 0,
         "task_note": "",
         "last_updated": datetime.now(UTC).isoformat(),
+        "reminder_message": "",
+        "lesson_ids": [],
+        "workflow_step": "",
     }
     save_state(state)
     return state

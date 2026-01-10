@@ -1723,21 +1723,44 @@ async def set_reminder_boundary(
     suppress_for_calls: int | None = None,
     suppress_for_minutes: int | None = None,
     note: str = "",
+    message: str = "",
+    lesson_ids: str = "",
+    workflow_step: str = "",
 ) -> str:
-    """Set when the reminder system should check back in.
+    """Set when the reminder system should check back in, with optional self-directed reminder.
 
-    Call this after loading context at task start to suppress repetitive
-    reminder hooks for the duration of focused work.
+    Call this to schedule a future reminder for yourself. When the boundary expires,
+    your custom message and specified lessons/workflow step will be injected back to you.
+
+    This enables self-directed workflow execution: set a reminder for your next step,
+    and the system will surface the relevant knowledge when it's time.
 
     Args:
-        suppress_for_calls: Suppress reminders for N hook checks (counter mode)
-        suppress_for_minutes: Suppress reminders for N minutes (timer mode)
+        suppress_for_calls: Remind after N hook checks (counter mode)
+        suppress_for_minutes: Remind after N minutes (timer mode)
         note: Optional note about what task is being worked on
+        message: Custom reminder message to inject when boundary expires
+        lesson_ids: Comma-separated lesson IDs to surface (e.g., "root-cause-analysis,error-context")
+        workflow_step: Workflow/step to load (e.g., "bug-fix/investigate")
 
     Examples:
-        Small fix: set_reminder_boundary(suppress_for_calls=5)
-        Large feature: set_reminder_boundary(suppress_for_calls=40, note="implementing auth")
-        Time-based: set_reminder_boundary(suppress_for_minutes=30)
+        # Simple suppression (old behavior)
+        set_reminder_boundary(suppress_for_calls=5)
+
+        # Self-directed workflow reminder
+        set_reminder_boundary(
+            suppress_for_calls=2,
+            message="Execute step 2: Investigate root cause",
+            lesson_ids="root-cause-analysis,error-context",
+            workflow_step="bug-fix/investigate"
+        )
+
+        # Time-based reminder with next step
+        set_reminder_boundary(
+            suppress_for_minutes=5,
+            message="Check test results and move to Review step",
+            workflow_step="feature-development/review"
+        )
 
     A/B Testing:
         Set MGCP_REMINDER_MODE=counter or MGCP_REMINDER_MODE=timer to test modes.
@@ -1769,29 +1792,42 @@ async def set_reminder_boundary(
             else:
                 return f"Reminder status: ACTIVE (timer mode)"
 
-    # Set new boundary
+    # Parse lesson_ids string to list
+    lesson_id_list = [lid.strip() for lid in lesson_ids.split(",") if lid.strip()] if lesson_ids else None
+
+    # Set new boundary with all parameters
     state = set_boundary(
         suppress_for_calls=suppress_for_calls,
         suppress_for_minutes=suppress_for_minutes,
         note=note,
+        message=message,
+        lesson_ids=lesson_id_list,
+        workflow_step=workflow_step,
     )
 
     mode = state["mode"]
+    lines = []
+
     if mode == "counter":
         remaining = state["suppress_until_call"] - state["current_call_count"]
-        return (
-            f"Reminder boundary set (counter mode)\n"
-            f"Will suppress for {remaining} hook checks\n"
-            f"Task: {note or '(none)'}"
-        )
+        lines.append(f"Reminder scheduled (counter mode)")
+        lines.append(f"Will fire after {remaining} hook checks")
     else:
         import time
         remaining_mins = int((state["suppress_until_time"] - time.time()) / 60)
-        return (
-            f"Reminder boundary set (timer mode)\n"
-            f"Will suppress for ~{remaining_mins} minutes\n"
-            f"Task: {note or '(none)'}"
-        )
+        lines.append(f"Reminder scheduled (timer mode)")
+        lines.append(f"Will fire after ~{remaining_mins} minutes")
+
+    if note:
+        lines.append(f"Task: {note}")
+    if message:
+        lines.append(f"Message: {message}")
+    if lesson_id_list:
+        lines.append(f"Lessons to surface: {', '.join(lesson_id_list)}")
+    if workflow_step:
+        lines.append(f"Workflow step: {workflow_step}")
+
+    return "\n".join(lines)
 
 
 @mcp.tool()

@@ -29,7 +29,7 @@ async def export_lessons(output_path: Path | None = None, include_usage: bool = 
     lessons = await store.get_all_lessons()
 
     export_data = {
-        "mgcp_version": "1.0.0",
+        "mgcp_version": "1.1.0",
         "export_date": datetime.now(UTC).isoformat(),
         "lesson_count": len(lessons),
         "lessons": []
@@ -181,7 +181,7 @@ async def export_projects(output_path: Path | None = None) -> dict:
     contexts = await store.get_all_project_contexts()
 
     export_data = {
-        "mgcp_version": "1.0.0",
+        "mgcp_version": "1.1.0",
         "export_date": datetime.now(UTC).isoformat(),
         "project_count": len(contexts),
         "projects": []

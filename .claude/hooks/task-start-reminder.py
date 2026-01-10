@@ -1,8 +1,64 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook that detects task-start phrases and activates mandatory workflows."""
+"""UserPromptSubmit hook that detects task-start phrases and activates mandatory workflows.
+
+Supports LLM-controlled suppression via set_reminder_boundary MCP tool.
+When suppressed, this hook exits silently to avoid repetitive reminders.
+"""
 import json
+import os
 import re
 import sys
+import time
+from pathlib import Path
+
+# Reminder state file location (shared with MCP tool)
+STATE_FILE = Path.home() / ".mgcp" / "reminder_state.json"
+
+
+def check_suppression() -> tuple[bool, str]:
+    """Check if reminders should be suppressed and increment counter.
+
+    Returns:
+        Tuple of (should_suppress: bool, reason: str)
+    """
+    try:
+        if not STATE_FILE.exists():
+            return False, "No state file"
+
+        with open(STATE_FILE) as f:
+            state = json.load(f)
+
+        mode = state.get("mode", "counter")
+
+        # Increment call counter
+        state["current_call_count"] = state.get("current_call_count", 0) + 1
+
+        # Save updated counter
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f, indent=2)
+
+        if mode == "counter":
+            suppress_until = state.get("suppress_until_call", 0)
+            current = state["current_call_count"]
+            if current < suppress_until:
+                remaining = suppress_until - current
+                return True, f"Suppressed ({remaining} calls remaining)"
+            return False, "Counter expired"
+
+        elif mode == "timer":
+            suppress_until = state.get("suppress_until_time", 0)
+            now = time.time()
+            if now < suppress_until:
+                remaining_mins = int((suppress_until - now) / 60)
+                return True, f"Suppressed ({remaining_mins} minutes remaining)"
+            return False, "Timer expired"
+
+    except (json.JSONDecodeError, IOError, OSError, KeyError):
+        pass
+
+    return False, "State check failed"
+
 
 # Feature development triggers - substantial new work
 FEATURE_PATTERNS = [
@@ -51,6 +107,12 @@ def main():
     try:
         hook_input = json.load(sys.stdin)
     except json.JSONDecodeError:
+        sys.exit(0)
+
+    # Check if reminders are suppressed (LLM-controlled via set_reminder_boundary)
+    suppressed, reason = check_suppression()
+    if suppressed:
+        # Exit silently - LLM has indicated it doesn't need reminders right now
         sys.exit(0)
 
     prompt = hook_input.get("prompt", "").lower().strip()

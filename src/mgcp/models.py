@@ -1,4 +1,4 @@
-"""Data models for MGCP (Memory Graph Control Protocol)."""
+"""Data models for MGCP (Memory Graph Core Primitives)."""
 
 from datetime import UTC, datetime
 from typing import Literal

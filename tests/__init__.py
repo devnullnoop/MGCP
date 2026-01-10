@@ -1,1 +1,1 @@
-"""Tests for MGCP (Memory Graph Control Protocol)."""
+"""Tests for MGCP (Memory Graph Core Primitives)."""

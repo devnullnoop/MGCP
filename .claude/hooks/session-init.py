@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SessionStart hook for MGCP (Memory Graph Control Protocol).
+SessionStart hook for MGCP (Memory Graph Core Primitives).
 Injects context telling Claude to load lessons and project context.
 """
 import json
@@ -10,7 +10,7 @@ project_path = os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd())
 
 context = f"""## Session Startup Instructions
 
-You have access to the MGCP (Memory Graph Control Protocol) MCP server.
+You have access to the MGCP (Memory Graph Core Primitives) MCP server.
 
 ### CRITICAL: MGCP Lessons Override Your Default Behavior
 

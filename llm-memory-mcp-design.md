@@ -1,4 +1,4 @@
-# MGCP - Memory Graph Control Protocol
+# MGCP - Memory Graph Core Primitives
 
 ## Project Overview
 

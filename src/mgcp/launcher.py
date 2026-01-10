@@ -44,7 +44,7 @@ def open_dashboard(port: int, delay: float = 2.0):
 def main():
     """Main entry point for the launcher."""
     parser = argparse.ArgumentParser(
-        description="MGCP - Memory Graph Control Protocol Launcher",
+        description="MGCP - Memory Graph Core Primitives Launcher",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Commands:

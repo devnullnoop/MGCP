@@ -1081,7 +1081,7 @@ class TestHookScriptContent:
     def test_hook_script_mentions_mgcp(self):
         """Hook script should mention MGCP."""
         assert "MGCP" in HOOK_SCRIPT
-        assert "Memory Graph Control Protocol" in HOOK_SCRIPT
+        assert "Memory Graph Core Primitives" in HOOK_SCRIPT
 
     def test_hook_script_mentions_tools(self):
         """Hook script should mention MCP tools to call."""

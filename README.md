@@ -1,4 +1,4 @@
-# MGCP - Memory Graph Control Protocol
+# LLMprint - Memory Graph Core Primitives (MGCP)
 
 [![License](https://img.shields.io/badge/License-O'Saasy-blue.svg)](https://osaasy.dev/)
 [![Python](https://img.shields.io/badge/Python-3.11%20|%203.12-blue.svg)](https://www.python.org/downloads/)

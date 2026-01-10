@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0] - 2026-01-06
 
 ### Added
-- Initial public release of MGCP (Memory Graph Control Protocol)
+- Initial public release of MGCP (Memory Graph Core Primitives)
 - 23 MCP tools for lesson and project management
 - Semantic search using ChromaDB and sentence-transformers
 - Graph-based lesson relationships using NetworkX

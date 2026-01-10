@@ -1,6 +1,6 @@
-"""MGCP - Memory Graph Control Protocol.
+"""MGCP - Memory Graph Core Primitives.
 
 Persistent graph-based memory for LLM interactions via MCP.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"

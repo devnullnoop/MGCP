@@ -1,4 +1,4 @@
-"""Telemetry and analytics for MGCP (Memory Graph Control Protocol)."""
+"""Telemetry and analytics for MGCP (Memory Graph Core Primitives)."""
 
 import asyncio
 import json

@@ -1,4 +1,4 @@
-"""Database migrations for MGCP (Memory Graph Control Protocol)."""
+"""Database migrations for MGCP (Memory Graph Core Primitives)."""
 
 import asyncio
 import json

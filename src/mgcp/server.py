@@ -1,4 +1,4 @@
-"""MGCP - Memory Graph Control Protocol.
+"""MGCP - Memory Graph Core Primitives.
 
 MCP server providing persistent, graph-based memory for LLM interactions.
 Uses FastMCP for cleaner API - verified against official SDK docs.
@@ -1714,6 +1714,99 @@ async def add_workflow_step(
 
 
 # ============================================================================
+# REMINDER BOUNDARY (LLM-controlled suppression)
+# ============================================================================
+
+
+@mcp.tool()
+async def set_reminder_boundary(
+    suppress_for_calls: int | None = None,
+    suppress_for_minutes: int | None = None,
+    note: str = "",
+) -> str:
+    """Set when the reminder system should check back in.
+
+    Call this after loading context at task start to suppress repetitive
+    reminder hooks for the duration of focused work.
+
+    Args:
+        suppress_for_calls: Suppress reminders for N hook checks (counter mode)
+        suppress_for_minutes: Suppress reminders for N minutes (timer mode)
+        note: Optional note about what task is being worked on
+
+    Examples:
+        Small fix: set_reminder_boundary(suppress_for_calls=5)
+        Large feature: set_reminder_boundary(suppress_for_calls=40, note="implementing auth")
+        Time-based: set_reminder_boundary(suppress_for_minutes=30)
+
+    A/B Testing:
+        Set MGCP_REMINDER_MODE=counter or MGCP_REMINDER_MODE=timer to test modes.
+        If both suppress_for_calls and suppress_for_minutes are provided,
+        the last one specified determines the mode.
+    """
+    from .reminder_state import get_status, set_boundary
+
+    # If no parameters, just return current status
+    if suppress_for_calls is None and suppress_for_minutes is None and not note:
+        status = get_status()
+        mode = status["mode"]
+        if mode == "counter":
+            if status["is_suppressed"]:
+                return (
+                    f"Reminder status: SUPPRESSED (counter mode)\n"
+                    f"Calls remaining: {status['calls_remaining']}\n"
+                    f"Task: {status['task_note'] or '(none)'}"
+                )
+            else:
+                return f"Reminder status: ACTIVE (counter mode)\nCall count: {status['current_call_count']}"
+        else:
+            if status["is_suppressed"]:
+                return (
+                    f"Reminder status: SUPPRESSED (timer mode)\n"
+                    f"Minutes remaining: {status['minutes_remaining']}\n"
+                    f"Task: {status['task_note'] or '(none)'}"
+                )
+            else:
+                return f"Reminder status: ACTIVE (timer mode)"
+
+    # Set new boundary
+    state = set_boundary(
+        suppress_for_calls=suppress_for_calls,
+        suppress_for_minutes=suppress_for_minutes,
+        note=note,
+    )
+
+    mode = state["mode"]
+    if mode == "counter":
+        remaining = state["suppress_until_call"] - state["current_call_count"]
+        return (
+            f"Reminder boundary set (counter mode)\n"
+            f"Will suppress for {remaining} hook checks\n"
+            f"Task: {note or '(none)'}"
+        )
+    else:
+        import time
+        remaining_mins = int((state["suppress_until_time"] - time.time()) / 60)
+        return (
+            f"Reminder boundary set (timer mode)\n"
+            f"Will suppress for ~{remaining_mins} minutes\n"
+            f"Task: {note or '(none)'}"
+        )
+
+
+@mcp.tool()
+async def reset_reminder_state() -> str:
+    """Reset reminder state to defaults.
+
+    Use if the reminder system gets stuck or you want to clear suppression.
+    """
+    from .reminder_state import reset_state
+
+    state = reset_state()
+    return f"Reminder state reset. Mode: {state['mode']}, call count: 0, no suppression active."
+
+
+# ============================================================================
 # ENTRY POINT
 # ============================================================================
 
@@ -1724,7 +1817,7 @@ def main():
 
     if len(sys.argv) > 1:
         if sys.argv[1] in ("--help", "-h"):
-            print("""MGCP - Memory Graph Control Protocol Server
+            print("""MGCP - Memory Graph Core Primitives Server
 
 Usage: mgcp [OPTIONS]
 

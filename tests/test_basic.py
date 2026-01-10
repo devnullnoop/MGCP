@@ -1,4 +1,4 @@
-"""Basic tests for MGCP (Memory Graph Control Protocol)."""
+"""Basic tests for MGCP (Memory Graph Core Primitives)."""
 
 import os
 import tempfile

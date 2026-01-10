@@ -1,7 +1,7 @@
 [project]
 name = "mgcp"
 version = "1.1.0"
-description = "Memory Graph Control Protocol - Persistent graph-based memory for LLM interactions via MCP"
+description = "LLMprint (Memory Graph Core Primitives) - Persistent graph-based memory for LLM interactions via MCP"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE.md"}

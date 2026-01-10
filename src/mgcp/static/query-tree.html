@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Query Decision Tree - Lesson Memory</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'brand-cyan': '#4fc3f7',
+                        'brand-dark': '#0a0a1a',
+                        'brand-panel': '#1a1a2e',
+                        'brand-surface': '#0f0f23',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* D3 specific styles that Tailwind can't easily handle */
+        .node-query { fill: #4fc3f7; }
+        .node-retrieved { fill: #22c55e; }
+        .node-related { fill: #a855f7; }
+        .node-prerequisite { fill: #f97316; }
+        .node-alternative { fill: #ec4899; }
+
+        .link-relevance { stroke: #22c55e; }
+        .link-related { stroke: #6b7280; stroke-dasharray: 4,2; }
+        .link-prerequisite { stroke: #f97316; }
+        .link-sequence { stroke: #3b82f6; }
+        .link-alternative { stroke: #ec4899; stroke-dasharray: 8,4; }
+        .link-complements { stroke: #8b5cf6; }
+
+        .node text {
+            font-size: 11px;
+            fill: #e5e7eb;
+            pointer-events: none;
+        }
+
+        .tooltip {
+            position: absolute;
+            background: rgba(26, 26, 46, 0.95);
+            border: 1px solid #4fc3f7;
+            border-radius: 8px;
+            padding: 12px;
+            pointer-events: none;
+            max-width: 300px;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body class="bg-brand-dark text-gray-200 font-sans min-h-screen">
+    <!-- Header -->
+    <header class="bg-gradient-to-br from-brand-panel to-brand-surface px-6 py-4 flex justify-between items-center border-b border-brand-cyan">
+        <div class="flex items-center gap-4">
+            <a href="/session" class="text-brand-cyan hover:text-white transition-colors">&larr; Session</a>
+            <h1 class="text-xl font-semibold text-white">Query Decision Tree</h1>
+        </div>
+        <div class="flex items-center gap-4">
+            <span id="query-text" class="text-sm text-gray-400 italic max-w-md truncate"></span>
+        </div>
+    </header>
+
+    <!-- Legend -->
+    <div class="absolute top-20 right-6 bg-brand-panel/90 backdrop-blur rounded-lg p-4 border border-gray-700 z-10">
+        <h3 class="text-xs text-brand-cyan uppercase tracking-wide mb-3">Legend</h3>
+        <div class="space-y-2 text-xs">
+            <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-full bg-brand-cyan"></div>
+                <span class="text-gray-300">Query</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                <span class="text-gray-300">Retrieved (direct hit)</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-full bg-purple-500"></div>
+                <span class="text-gray-300">Related</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-full bg-orange-500"></div>
+                <span class="text-gray-300">Prerequisite</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-full bg-pink-500"></div>
+                <span class="text-gray-300">Alternative</span>
+            </div>
+        </div>
+        <div class="mt-4 pt-3 border-t border-gray-700">
+            <h4 class="text-xs text-gray-500 mb-2">Edge Types</h4>
+            <div class="space-y-1 text-xs">
+                <div class="flex items-center gap-2">
+                    <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#22c55e" stroke-width="2"/></svg>
+                    <span class="text-gray-400">Relevance</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#6b7280" stroke-width="1" stroke-dasharray="4,2"/></svg>
+                    <span class="text-gray-400">Related</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#f97316" stroke-width="2"/></svg>
+                    <span class="text-gray-400">Prerequisite</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Info Panel (shown on node hover/click) -->
+    <div id="info-panel" class="absolute bottom-6 left-6 bg-brand-panel/90 backdrop-blur rounded-lg p-4 border border-gray-700 max-w-sm hidden">
+        <h3 id="info-title" class="text-sm font-semibold text-white mb-2"></h3>
+        <p id="info-action" class="text-xs text-gray-300 mb-2"></p>
+        <div id="info-meta" class="text-xs text-gray-500"></div>
+    </div>
+
+    <!-- Main Graph Container -->
+    <main class="w-full h-[calc(100vh-65px)]">
+        <svg id="graph" class="w-full h-full"></svg>
+    </main>
+
+    <!-- Tooltip -->
+    <div id="tooltip" class="tooltip hidden">
+        <div id="tooltip-content"></div>
+    </div>
+
+    <script>
+        /**
+         * Query Decision Tree Visualization
+         * Shows the lessons retrieved for a query and their relationships
+         */
+
+        const API_BASE = window.location.origin;
+
+        // Get query info from URL params
+        const params = new URLSearchParams(window.location.search);
+        const queryId = params.get('query_id');
+        const sessionId = params.get('session_id');
+
+        // Graph data
+        let nodes = [];
+        let links = [];
+        let simulation = null;
+
+        /**
+         * Fetch data from API
+         */
+        async function fetchAPI(endpoint) {
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return await response.json();
+            } catch (err) {
+                console.error(`API error (${endpoint}):`, err);
+                return null;
+            }
+        }
+
+        /**
+         * Load query data and build the tree
+         */
+        async function loadQueryTree() {
+            // If no query specified, find the most recent query from most recent session
+            let queryText = '';
+            let lessonIds = [];
+            let scores = [];
+
+            if (sessionId) {
+                const events = await fetchAPI(`/api/sessions/${sessionId}/events`);
+                if (events) {
+                    // Find the query event
+                    const queryEvent = events.find(e => e.event_type === 'query' && (!queryId || e.id === queryId));
+                    if (queryEvent) {
+                        queryText = queryEvent.payload.query_text || '';
+                    }
+
+                    // Find corresponding retrieval
+                    const retrieveEvent = events.find(e =>
+                        e.event_type === 'retrieve' &&
+                        (!queryId || e.payload.query_id === queryId)
+                    );
+                    if (retrieveEvent) {
+                        lessonIds = retrieveEvent.payload.lesson_ids || [];
+                        scores = retrieveEvent.payload.scores || [];
+                    }
+                }
+            } else {
+                // Get most recent session
+                const sessions = await fetchAPI('/api/sessions?limit=1');
+                if (sessions && sessions.length > 0) {
+                    const events = await fetchAPI(`/api/sessions/${sessions[0].id}/events`);
+                    if (events) {
+                        const queryEvent = events.find(e => e.event_type === 'query');
+                        if (queryEvent) {
+                            queryText = queryEvent.payload.query_text || '';
+                        }
+                        const retrieveEvent = events.find(e => e.event_type === 'retrieve');
+                        if (retrieveEvent) {
+                            lessonIds = retrieveEvent.payload.lesson_ids || [];
+                            scores = retrieveEvent.payload.scores || [];
+                        }
+                    }
+                }
+            }
+
+            document.getElementById('query-text').textContent = `"${queryText}"`;
+
+            if (lessonIds.length === 0) {
+                showEmptyState();
+                return;
+            }
+
+            // Build the graph
+            await buildGraph(queryText, lessonIds, scores);
+        }
+
+        /**
+         * Build graph data structure
+         */
+        async function buildGraph(queryText, lessonIds, scores) {
+            nodes = [];
+            links = [];
+
+            // Add query node at center
+            nodes.push({
+                id: 'query',
+                type: 'query',
+                label: truncate(queryText, 30),
+                fullText: queryText,
+                x: window.innerWidth / 2,
+                y: window.innerHeight / 2,
+                fixed: true
+            });
+
+            // Fetch full graph data
+            const graphData = await fetchAPI('/api/graph');
+            const graphLessons = graphData ? graphData.nodes : [];
+            const graphLinks = graphData ? graphData.links : [];
+
+            // Create lookup maps
+            const lessonMap = new Map(graphLessons.map(l => [l.id, l]));
+            const linksBySource = new Map();
+            graphLinks.forEach(link => {
+                if (!linksBySource.has(link.source)) {
+                    linksBySource.set(link.source, []);
+                }
+                linksBySource.get(link.source).push(link);
+            });
+
+            // Add retrieved lesson nodes
+            lessonIds.forEach((lessonId, i) => {
+                const lesson = lessonMap.get(lessonId);
+                const score = scores[i] || 0;
+
+                nodes.push({
+                    id: lessonId,
+                    type: 'retrieved',
+                    label: truncate(lessonId, 20),
+                    score: score,
+                    action: lesson ? lesson.action : '',
+                    trigger: lesson ? lesson.trigger : '',
+                    tags: lesson ? lesson.tags : []
+                });
+
+                // Link from query to retrieved lesson
+                links.push({
+                    source: 'query',
+                    target: lessonId,
+                    type: 'relevance',
+                    weight: score
+                });
+            });
+
+            // Add related lessons (one level deep)
+            const addedRelated = new Set(lessonIds);
+            addedRelated.add('query');
+
+            lessonIds.forEach(lessonId => {
+                const lessonLinks = linksBySource.get(lessonId) || [];
+
+                lessonLinks.forEach(link => {
+                    const targetId = link.target;
+                    const relationType = link.relation || 'related';
+
+                    // Skip if already added or is the parent relation
+                    if (addedRelated.has(targetId)) {
+                        // Still add the link between retrieved lessons
+                        if (lessonIds.includes(targetId) && relationType !== 'parent') {
+                            links.push({
+                                source: lessonId,
+                                target: targetId,
+                                type: relationType,
+                                weight: link.weight || 0.5
+                            });
+                        }
+                        return;
+                    }
+                    if (relationType === 'parent') return;
+
+                    // Add the related node
+                    const relatedLesson = lessonMap.get(targetId);
+                    if (relatedLesson) {
+                        let nodeType = 'related';
+                        if (relationType === 'prerequisite') nodeType = 'prerequisite';
+                        if (relationType === 'alternative') nodeType = 'alternative';
+
+                        nodes.push({
+                            id: targetId,
+                            type: nodeType,
+                            label: truncate(targetId, 18),
+                            action: relatedLesson.action || '',
+                            trigger: relatedLesson.trigger || '',
+                            tags: relatedLesson.tags || [],
+                            relationType: relationType
+                        });
+
+                        links.push({
+                            source: lessonId,
+                            target: targetId,
+                            type: relationType,
+                            weight: link.weight || 0.5
+                        });
+
+                        addedRelated.add(targetId);
+                    }
+                });
+            });
+
+            renderGraph();
+        }
+
+        /**
+         * Render the D3 force-directed graph
+         */
+        function renderGraph() {
+            const svg = d3.select('#graph');
+            const width = window.innerWidth;
+            const height = window.innerHeight - 65;
+
+            svg.attr('viewBox', [0, 0, width, height]);
+
+            // Clear existing
+            svg.selectAll('*').remove();
+
+            // Create container groups
+            const g = svg.append('g');
+
+            // Add zoom behavior
+            const zoom = d3.zoom()
+                .scaleExtent([0.3, 3])
+                .on('zoom', (event) => g.attr('transform', event.transform));
+
+            svg.call(zoom);
+
+            // Create force simulation
+            simulation = d3.forceSimulation(nodes)
+                .force('link', d3.forceLink(links).id(d => d.id).distance(d => {
+                    if (d.type === 'relevance') return 150 * (1 - d.weight * 0.5);
+                    return 120;
+                }))
+                .force('charge', d3.forceManyBody().strength(-400))
+                .force('center', d3.forceCenter(width / 2, height / 2))
+                .force('collision', d3.forceCollide().radius(50));
+
+            // Draw links
+            const link = g.append('g')
+                .attr('class', 'links')
+                .selectAll('line')
+                .data(links)
+                .join('line')
+                .attr('class', d => `link-${d.type}`)
+                .attr('stroke-width', d => {
+                    if (d.type === 'relevance') return 1 + d.weight * 4;
+                    return 1 + (d.weight || 0.5) * 2;
+                })
+                .attr('stroke-opacity', d => 0.4 + (d.weight || 0.5) * 0.4);
+
+            // Draw nodes
+            const node = g.append('g')
+                .attr('class', 'nodes')
+                .selectAll('g')
+                .data(nodes)
+                .join('g')
+                .attr('class', 'node')
+                .call(d3.drag()
+                    .on('start', dragstarted)
+                    .on('drag', dragged)
+                    .on('end', dragended));
+
+            // Node circles
+            node.append('circle')
+                .attr('r', d => {
+                    if (d.type === 'query') return 25;
+                    if (d.type === 'retrieved') return 15 + d.score * 10;
+                    return 12;
+                })
+                .attr('class', d => `node-${d.type}`)
+                .attr('stroke', '#1a1a2e')
+                .attr('stroke-width', 2);
+
+            // Node labels
+            node.append('text')
+                .attr('dy', d => d.type === 'query' ? 40 : 28)
+                .attr('text-anchor', 'middle')
+                .text(d => d.label);
+
+            // Score labels for retrieved nodes
+            node.filter(d => d.type === 'retrieved')
+                .append('text')
+                .attr('dy', 4)
+                .attr('text-anchor', 'middle')
+                .attr('fill', '#1a1a2e')
+                .attr('font-size', '10px')
+                .attr('font-weight', 'bold')
+                .text(d => Math.round(d.score * 100) + '%');
+
+            // Hover interactions
+            node.on('mouseover', showTooltip)
+                .on('mouseout', hideTooltip)
+                .on('click', showInfoPanel);
+
+            // Update positions on simulation tick
+            simulation.on('tick', () => {
+                link
+                    .attr('x1', d => d.source.x)
+                    .attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x)
+                    .attr('y2', d => d.target.y);
+
+                node.attr('transform', d => `translate(${d.x},${d.y})`);
+            });
+
+            // Center the view
+            svg.call(zoom.transform, d3.zoomIdentity.translate(0, 0).scale(0.9));
+        }
+
+        /**
+         * Drag handlers
+         */
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            if (d.type !== 'query') {
+                d.fx = null;
+                d.fy = null;
+            }
+        }
+
+        /**
+         * Tooltip handlers
+         */
+        function showTooltip(event, d) {
+            const tooltip = document.getElementById('tooltip');
+            const content = document.getElementById('tooltip-content');
+
+            let html = `<div class="font-semibold text-white mb-1">${d.id}</div>`;
+
+            if (d.type === 'query') {
+                html += `<div class="text-gray-300 text-xs">${d.fullText}</div>`;
+            } else {
+                if (d.action) {
+                    html += `<div class="text-gray-300 text-xs mb-2">${d.action}</div>`;
+                }
+                if (d.score !== undefined) {
+                    html += `<div class="text-green-400 text-xs">Relevance: ${Math.round(d.score * 100)}%</div>`;
+                }
+                if (d.relationType) {
+                    html += `<div class="text-purple-400 text-xs">Relationship: ${d.relationType}</div>`;
+                }
+                if (d.tags && d.tags.length) {
+                    html += `<div class="text-gray-500 text-xs mt-1">Tags: ${d.tags.join(', ')}</div>`;
+                }
+            }
+
+            content.innerHTML = html;
+            tooltip.style.left = (event.pageX + 15) + 'px';
+            tooltip.style.top = (event.pageY - 10) + 'px';
+            tooltip.classList.remove('hidden');
+        }
+
+        function hideTooltip() {
+            document.getElementById('tooltip').classList.add('hidden');
+        }
+
+        /**
+         * Info panel for selected node
+         */
+        function showInfoPanel(event, d) {
+            const panel = document.getElementById('info-panel');
+
+            document.getElementById('info-title').textContent = d.id;
+
+            if (d.type === 'query') {
+                document.getElementById('info-action').textContent = d.fullText;
+                document.getElementById('info-meta').textContent = 'This was your query to the lesson memory';
+            } else {
+                document.getElementById('info-action').textContent = d.action || 'No action defined';
+
+                let meta = [];
+                if (d.score !== undefined) meta.push(`Relevance: ${Math.round(d.score * 100)}%`);
+                if (d.relationType) meta.push(`Connected via: ${d.relationType}`);
+                if (d.tags && d.tags.length) meta.push(`Tags: ${d.tags.join(', ')}`);
+
+                document.getElementById('info-meta').textContent = meta.join(' | ');
+            }
+
+            panel.classList.remove('hidden');
+        }
+
+        /**
+         * Show empty state
+         */
+        function showEmptyState() {
+            const svg = d3.select('#graph');
+            svg.append('text')
+                .attr('x', window.innerWidth / 2)
+                .attr('y', window.innerHeight / 2)
+                .attr('text-anchor', 'middle')
+                .attr('fill', '#6b7280')
+                .text('No query data found. Try querying some lessons first.');
+        }
+
+        /**
+         * Utility: truncate text
+         */
+        function truncate(text, maxLen) {
+            if (!text) return '';
+            return text.length > maxLen ? text.substring(0, maxLen) + '...' : text;
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            if (nodes.length > 0) {
+                renderGraph();
+            }
+        });
+
+        // Initialize
+        loadQueryTree();
+    </script>
+</body>
+</html>

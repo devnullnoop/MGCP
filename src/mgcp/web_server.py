@@ -771,67 +771,67 @@ async def websocket_events(websocket: WebSocket):
 # Static Files & Dashboard
 # ============================================================================
 
-# Get the docs directory path
-DOCS_DIR = Path(__file__).parent.parent.parent / "docs"
+# Get the static directory path (web assets)
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 @app.get("/")
 async def serve_dashboard():
     """Serve the main dashboard."""
-    dashboard_path = DOCS_DIR / "dashboard.html"
+    dashboard_path = STATIC_DIR / "dashboard.html"
     if dashboard_path.exists():
         return FileResponse(dashboard_path)
-    return HTMLResponse("<h1>Dashboard not found. Run the setup script.</h1>")
+    return HTMLResponse("<!DOCTYPE html><html><body><h1>Dashboard not found.</h1></body></html>")
 
 
 @app.get("/visualizer")
 async def serve_visualizer():
     """Serve the memory visualizer."""
-    viz_path = DOCS_DIR / "memory-visualizer.html"
+    viz_path = STATIC_DIR / "memory-visualizer.html"
     if viz_path.exists():
         return FileResponse(viz_path)
-    return HTMLResponse("<h1>Visualizer not found.</h1>")
+    return HTMLResponse("<!DOCTYPE html><html><body><h1>Visualizer not found.</h1></body></html>")
 
 
 @app.get("/session")
 async def serve_session_detail():
     """Serve the session detail page."""
-    session_path = DOCS_DIR / "session-detail.html"
+    session_path = STATIC_DIR / "session-detail.html"
     if session_path.exists():
         return FileResponse(session_path)
-    return HTMLResponse("<h1>Session detail page not found.</h1>")
+    return HTMLResponse("<!DOCTYPE html><html><body><h1>Session detail page not found.</h1></body></html>")
 
 
 @app.get("/query-tree")
 async def serve_query_tree():
     """Serve the query decision tree visualization."""
-    tree_path = DOCS_DIR / "query-tree.html"
+    tree_path = STATIC_DIR / "query-tree.html"
     if tree_path.exists():
         return FileResponse(tree_path)
-    return HTMLResponse("<h1>Query tree visualization not found.</h1>")
+    return HTMLResponse("<!DOCTYPE html><html><body><h1>Query tree visualization not found.</h1></body></html>")
 
 
 @app.get("/projects")
 async def serve_projects():
     """Serve the project contexts management page."""
-    projects_path = DOCS_DIR / "projects.html"
+    projects_path = STATIC_DIR / "projects.html"
     if projects_path.exists():
         return FileResponse(projects_path)
-    return HTMLResponse("<h1>Projects page not found.</h1>")
+    return HTMLResponse("<!DOCTYPE html><html><body><h1>Projects page not found.</h1></body></html>")
 
 
 @app.get("/lessons")
 async def serve_lessons():
     """Serve the lessons management page."""
-    lessons_path = DOCS_DIR / "lessons.html"
+    lessons_path = STATIC_DIR / "lessons.html"
     if lessons_path.exists():
         return FileResponse(lessons_path)
-    return HTMLResponse("<h1>Lessons page not found.</h1>")
+    return HTMLResponse("<!DOCTYPE html><html><body><h1>Lessons page not found.</h1></body></html>")
 
 
 # Mount static files for other assets
-if DOCS_DIR.exists():
-    app.mount("/docs", StaticFiles(directory=str(DOCS_DIR)), name="docs")
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765):

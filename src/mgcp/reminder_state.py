@@ -1,50 +1,38 @@
-"""Reminder state management for LLM-controlled suppression.
+"""Self-directed reminder system for LLM workflow continuity.
 
-This module manages the state file that coordinates between:
-- MCP tool (set_reminder_boundary) - writes suppression boundaries
-- Hooks (task-start-reminder.py) - reads state to decide whether to fire
+This module manages scheduled reminders that the LLM sets for itself.
+Use case: At step N, schedule knowledge needed for step N+1.
 
 State file location: ~/.mgcp/reminder_state.json
 
-A/B Testing:
-- Set MGCP_REMINDER_MODE=counter for call-count based suppression
-- Set MGCP_REMINDER_MODE=timer for time-based suppression
+How it works:
+1. LLM calls schedule_reminder(after_calls=2, message="...", lesson_ids="...", workflow_step="...")
+2. Hook increments counter on each UserPromptSubmit
+3. When counter reaches threshold, hook injects the reminder content
+4. Pattern-based workflow hooks run INDEPENDENTLY (both can fire)
 """
 
 import json
-import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
 
 # State file location
 STATE_DIR = Path.home() / ".mgcp"
 STATE_FILE = STATE_DIR / "reminder_state.json"
 
-# A/B mode selection
-ReminderMode = Literal["counter", "timer"]
-
-
-def get_mode() -> ReminderMode:
-    """Get the current reminder mode from environment or default."""
-    mode = os.environ.get("MGCP_REMINDER_MODE", "counter").lower()
-    if mode not in ("counter", "timer"):
-        return "counter"
-    return mode
-
 
 def load_state() -> dict:
     """Load current state from file, or return defaults."""
     defaults = {
-        "mode": get_mode(),
-        "suppress_until_call": 0,
-        "suppress_until_time": 0,
         "current_call_count": 0,
-        "task_note": "",
         "last_updated": datetime.now(UTC).isoformat(),
-        # LLM-directed reminder fields
-        "reminder_message": "",  # Custom message to inject when boundary expires
+        # Reminder scheduling
+        "remind_at_call": 0,  # Fire reminder when call count reaches this
+        "remind_at_time": 0,  # Fire reminder at this timestamp (alternative to call-based)
+        # Reminder content
+        "task_note": "",  # What task is being worked on
+        "reminder_message": "",  # Custom message to inject
         "lesson_ids": [],  # Lesson IDs to surface
         "workflow_step": "",  # Workflow/step to load (e.g., "bug-fix/investigate")
     }
@@ -71,48 +59,44 @@ def save_state(state: dict) -> None:
         state["last_updated"] = datetime.now(UTC).isoformat()
         with open(STATE_FILE, "w") as f:
             json.dump(state, f, indent=2)
-    except (IOError, OSError) as e:
-        # Log but don't crash - graceful degradation
+    except (IOError, OSError):
         pass
 
 
-def set_boundary(
-    suppress_for_calls: int | None = None,
-    suppress_for_minutes: int | None = None,
+def schedule_reminder(
+    after_calls: int | None = None,
+    after_minutes: int | None = None,
     note: str = "",
     message: str = "",
     lesson_ids: list[str] | None = None,
     workflow_step: str = "",
 ) -> dict:
-    """Set a reminder suppression boundary with optional LLM-directed reminder.
+    """Schedule a self-directed reminder for a future checkpoint.
+
+    Use this at the end of a workflow step to set up knowledge for the next step.
+    The reminder fires regardless of what the user types - it's counter/timer based.
 
     Args:
-        suppress_for_calls: Suppress reminders for N hook checks (counter mode)
-        suppress_for_minutes: Suppress reminders for N minutes (timer mode)
-        note: Optional note about what task is being worked on
-        message: Custom message to inject when boundary expires
-        lesson_ids: List of lesson IDs to surface when boundary expires
-        workflow_step: Workflow/step to load (e.g., "bug-fix/investigate")
+        after_calls: Fire reminder after N user messages
+        after_minutes: Fire reminder after N minutes
+        note: What task is being worked on (context)
+        message: Custom message to inject when reminder fires
+        lesson_ids: Lesson IDs to surface when reminder fires
+        workflow_step: Workflow/step to load (e.g., "feature-development/plan")
 
     Returns:
-        Updated state dict with confirmation of what was set
+        Updated state dict
     """
     state = load_state()
-    mode = get_mode()
-    state["mode"] = mode
 
-    if suppress_for_calls is not None:
-        state["suppress_until_call"] = state["current_call_count"] + suppress_for_calls
-        state["mode"] = "counter"  # Override mode if explicitly setting calls
+    if after_calls is not None:
+        state["remind_at_call"] = state["current_call_count"] + after_calls
 
-    if suppress_for_minutes is not None:
-        state["suppress_until_time"] = time.time() + (suppress_for_minutes * 60)
-        state["mode"] = "timer"  # Override mode if explicitly setting time
+    if after_minutes is not None:
+        state["remind_at_time"] = time.time() + (after_minutes * 60)
 
     if note:
         state["task_note"] = note
-
-    # LLM-directed reminder fields
     if message:
         state["reminder_message"] = message
     if lesson_ids is not None:
@@ -124,82 +108,38 @@ def set_boundary(
     return state
 
 
-def should_suppress() -> tuple[bool, str]:
-    """Check if reminders should be suppressed.
-
-    Also increments the call counter for counter mode tracking.
-
-    Returns:
-        Tuple of (should_suppress: bool, reason: str)
-    """
+def increment_counter() -> int:
+    """Increment the call counter and return new value."""
     state = load_state()
-    mode = state.get("mode", "counter")
-
-    # Increment call counter
     state["current_call_count"] = state.get("current_call_count", 0) + 1
     save_state(state)
-
-    if mode == "counter":
-        suppress_until = state.get("suppress_until_call", 0)
-        current = state["current_call_count"]
-        if current < suppress_until:
-            remaining = suppress_until - current
-            return True, f"Suppressed ({remaining} calls remaining)"
-        return False, "Counter expired"
-
-    elif mode == "timer":
-        suppress_until = state.get("suppress_until_time", 0)
-        now = time.time()
-        if now < suppress_until:
-            remaining_mins = int((suppress_until - now) / 60)
-            return True, f"Suppressed ({remaining_mins} minutes remaining)"
-        return False, "Timer expired"
-
-    return False, "Unknown mode"
-
-
-def get_status() -> dict:
-    """Get current reminder state status for display."""
-    state = load_state()
-    mode = state.get("mode", "counter")
-
-    status = {
-        "mode": mode,
-        "current_call_count": state.get("current_call_count", 0),
-        "task_note": state.get("task_note", ""),
-        "last_updated": state.get("last_updated", ""),
-    }
-
-    if mode == "counter":
-        suppress_until = state.get("suppress_until_call", 0)
-        current = state.get("current_call_count", 0)
-        status["suppress_until_call"] = suppress_until
-        status["calls_remaining"] = max(0, suppress_until - current)
-        status["is_suppressed"] = current < suppress_until
-    else:
-        suppress_until = state.get("suppress_until_time", 0)
-        now = time.time()
-        status["suppress_until_time"] = suppress_until
-        status["minutes_remaining"] = max(0, int((suppress_until - now) / 60))
-        status["is_suppressed"] = now < suppress_until
-
-    return status
+    return state["current_call_count"]
 
 
 def check_and_consume_reminder() -> dict | None:
-    """Check if an LLM-directed reminder should fire and consume it.
+    """Check if a scheduled reminder should fire, and consume it if so.
 
-    Called by hooks when suppression has expired. If there's a pending
-    custom reminder (message, lesson_ids, or workflow_step), returns the
-    reminder data and clears it so it only fires once.
+    Call this from the hook on each UserPromptSubmit.
 
     Returns:
-        dict with reminder data if a reminder should fire, None otherwise.
+        dict with reminder data if ready to fire, None otherwise.
         Keys: message, lesson_ids, workflow_step, task_note
     """
     state = load_state()
+    current_call = state.get("current_call_count", 0)
+    now = time.time()
 
-    # Check if there's any reminder data to consume
+    # Check if reminder threshold reached
+    remind_at_call = state.get("remind_at_call", 0)
+    remind_at_time = state.get("remind_at_time", 0)
+
+    call_ready = remind_at_call > 0 and current_call >= remind_at_call
+    time_ready = remind_at_time > 0 and now >= remind_at_time
+
+    if not call_ready and not time_ready:
+        return None
+
+    # Check if there's any reminder content
     message = state.get("reminder_message", "")
     lesson_ids = state.get("lesson_ids", [])
     workflow_step = state.get("workflow_step", "")
@@ -215,24 +155,52 @@ def check_and_consume_reminder() -> dict | None:
         "task_note": state.get("task_note", ""),
     }
 
-    # Clear the reminder data (consume it)
+    # Consume the reminder (clear it so it only fires once)
+    state["remind_at_call"] = 0
+    state["remind_at_time"] = 0
     state["reminder_message"] = ""
     state["lesson_ids"] = []
     state["workflow_step"] = ""
+    state["task_note"] = ""
     save_state(state)
 
     return reminder
 
 
+def get_status() -> dict:
+    """Get current reminder state status for display."""
+    state = load_state()
+    current_call = state.get("current_call_count", 0)
+    now = time.time()
+
+    remind_at_call = state.get("remind_at_call", 0)
+    remind_at_time = state.get("remind_at_time", 0)
+
+    return {
+        "current_call_count": current_call,
+        "last_updated": state.get("last_updated", ""),
+        "scheduled_reminder": {
+            "at_call": remind_at_call,
+            "at_time": remind_at_time,
+            "calls_until": max(0, remind_at_call - current_call) if remind_at_call else 0,
+            "minutes_until": max(0, int((remind_at_time - now) / 60)) if remind_at_time else 0,
+            "has_content": bool(state.get("reminder_message") or state.get("lesson_ids") or state.get("workflow_step")),
+            "message": state.get("reminder_message", ""),
+            "lesson_ids": state.get("lesson_ids", []),
+            "workflow_step": state.get("workflow_step", ""),
+            "task_note": state.get("task_note", ""),
+        },
+    }
+
+
 def reset_state() -> dict:
-    """Reset state to defaults. Useful for testing or clearing stuck state."""
+    """Reset state to defaults."""
     state = {
-        "mode": get_mode(),
-        "suppress_until_call": 0,
-        "suppress_until_time": 0,
         "current_call_count": 0,
-        "task_note": "",
         "last_updated": datetime.now(UTC).isoformat(),
+        "remind_at_call": 0,
+        "remind_at_time": 0,
+        "task_note": "",
         "reminder_message": "",
         "lesson_ids": [],
         "workflow_step": "",

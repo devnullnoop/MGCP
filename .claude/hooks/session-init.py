@@ -108,6 +108,31 @@ ALWAYS call `mcp__mgcp__save_project_context` with:
 - "decided to" / "chose X over Y" → add_catalogue_decision
 - "these files are related" / "coupled" → add_catalogue_coupling
 - "watch out for" / "gotcha" / "quirk" → add_catalogue_arch_note
+
+### Self-Directed Reminders - MANDATORY FOR WORKFLOW STEPS
+
+**THIS IS NOT OPTIONAL.** When you complete ANY workflow step, you MUST schedule a reminder for the next step BEFORE responding to the user.
+
+**WHY:** The user might say "ok" or "continue" - no keywords, no pattern hook fires. Without a scheduled reminder, you WILL skip the next step's lessons and make preventable mistakes.
+
+**EXECUTE THIS PATTERN:**
+```
+# You just finished Research step. BEFORE your response:
+schedule_reminder(
+    after_calls=1,
+    message="EXECUTE Plan step NOW. Call get_workflow_step('feature-development', 'plan', expand_lessons=true) BEFORE doing anything else.",
+    workflow_step="feature-development/plan"
+)
+# THEN send your response
+```
+
+**FORMAT YOUR MESSAGES AS COMMANDS:**
+- DO: "EXECUTE X NOW", "CALL Y BEFORE proceeding", "YOU MUST Z"
+- NOT: "consider", "remember to", "might want to"
+
+Future-you will be processing the user's next message. A suggestion competes with the task. A command overrides it. Write reminders that future-you cannot ignore.
+
+**IF YOU SKIP THIS:** You will forget the next step. You will jump straight to coding. You will miss critical lessons. This has happened before. That's why this system exists.
 """
 
 output = {

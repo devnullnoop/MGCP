@@ -1714,118 +1714,99 @@ async def add_workflow_step(
 
 
 # ============================================================================
-# REMINDER BOUNDARY (LLM-controlled suppression)
+# REMINDER SYSTEM
 # ============================================================================
 
 
 @mcp.tool()
-async def set_reminder_boundary(
-    suppress_for_calls: int | None = None,
-    suppress_for_minutes: int | None = None,
+async def schedule_reminder(
+    after_calls: int | None = None,
+    after_minutes: int | None = None,
     note: str = "",
     message: str = "",
     lesson_ids: str = "",
     workflow_step: str = "",
 ) -> str:
-    """Set when the reminder system should check back in, with optional self-directed reminder.
+    """Schedule a self-directed reminder for the future.
 
-    Call this to schedule a future reminder for yourself. When the boundary expires,
-    your custom message and specified lessons/workflow step will be injected back to you.
-
-    This enables self-directed workflow execution: set a reminder for your next step,
-    and the system will surface the relevant knowledge when it's time.
+    Use this to remind yourself about next steps, lessons to review,
+    or workflow stages to execute. When the threshold is reached,
+    the hook will inject your message/lessons/workflow into the prompt.
 
     Args:
-        suppress_for_calls: Remind after N hook checks (counter mode)
-        suppress_for_minutes: Remind after N minutes (timer mode)
-        note: Optional note about what task is being worked on
-        message: Custom reminder message to inject when boundary expires
+        after_calls: Fire reminder after N hook checks (user messages)
+        after_minutes: Fire reminder after N minutes
+        note: What task is being worked on
+        message: Custom reminder message to inject when reminder fires
         lesson_ids: Comma-separated lesson IDs to surface (e.g., "root-cause-analysis,error-context")
         workflow_step: Workflow/step to load (e.g., "bug-fix/investigate")
 
     Examples:
-        # Simple suppression (old behavior)
-        set_reminder_boundary(suppress_for_calls=5)
-
-        # Self-directed workflow reminder
-        set_reminder_boundary(
-            suppress_for_calls=2,
-            message="Execute step 2: Investigate root cause",
-            lesson_ids="root-cause-analysis,error-context",
-            workflow_step="bug-fix/investigate"
-        )
-
-        # Time-based reminder with next step
-        set_reminder_boundary(
-            suppress_for_minutes=5,
-            message="Check test results and move to Review step",
+        # Remind about next workflow step after 3 messages
+        schedule_reminder(
+            after_calls=3,
+            message="Time to move to the Review step",
             workflow_step="feature-development/review"
         )
 
-    A/B Testing:
-        Set MGCP_REMINDER_MODE=counter or MGCP_REMINDER_MODE=timer to test modes.
-        If both suppress_for_calls and suppress_for_minutes are provided,
-        the last one specified determines the mode.
+        # Remind to check test results in 5 minutes
+        schedule_reminder(
+            after_minutes=5,
+            message="Check if tests passed",
+            lesson_ids="verify-test-results"
+        )
     """
-    from .reminder_state import get_status, set_boundary
+    import time as time_module
+
+    from .reminder_state import get_status, schedule_reminder as do_schedule
 
     # If no parameters, just return current status
-    if suppress_for_calls is None and suppress_for_minutes is None and not note:
+    if after_calls is None and after_minutes is None and not note and not message:
         status = get_status()
-        mode = status["mode"]
-        if mode == "counter":
-            if status["is_suppressed"]:
-                return (
-                    f"Reminder status: SUPPRESSED (counter mode)\n"
-                    f"Calls remaining: {status['calls_remaining']}\n"
-                    f"Task: {status['task_note'] or '(none)'}"
-                )
-            else:
-                return f"Reminder status: ACTIVE (counter mode)\nCall count: {status['current_call_count']}"
+        sched = status["scheduled_reminder"]
+        if sched["has_content"]:
+            parts = ["Scheduled reminder: PENDING"]
+            if sched["calls_until"]:
+                parts.append(f"Fires in: {sched['calls_until']} calls")
+            if sched["minutes_until"]:
+                parts.append(f"Fires in: {sched['minutes_until']} minutes")
+            if sched["message"]:
+                parts.append(f"Message: {sched['message']}")
+            if sched["lesson_ids"]:
+                parts.append(f"Lessons: {', '.join(sched['lesson_ids'])}")
+            if sched["workflow_step"]:
+                parts.append(f"Workflow: {sched['workflow_step']}")
+            return "\n".join(parts)
         else:
-            if status["is_suppressed"]:
-                return (
-                    f"Reminder status: SUPPRESSED (timer mode)\n"
-                    f"Minutes remaining: {status['minutes_remaining']}\n"
-                    f"Task: {status['task_note'] or '(none)'}"
-                )
-            else:
-                return f"Reminder status: ACTIVE (timer mode)"
+            return "Scheduled reminder: NONE"
 
     # Parse lesson_ids string to list
     lesson_id_list = [lid.strip() for lid in lesson_ids.split(",") if lid.strip()] if lesson_ids else None
 
-    # Set new boundary with all parameters
-    state = set_boundary(
-        suppress_for_calls=suppress_for_calls,
-        suppress_for_minutes=suppress_for_minutes,
+    state = do_schedule(
+        after_calls=after_calls,
+        after_minutes=after_minutes,
         note=note,
         message=message,
         lesson_ids=lesson_id_list,
         workflow_step=workflow_step,
     )
 
-    mode = state["mode"]
-    lines = []
+    lines = ["Reminder scheduled"]
 
-    if mode == "counter":
-        remaining = state["suppress_until_call"] - state["current_call_count"]
-        lines.append(f"Reminder scheduled (counter mode)")
-        lines.append(f"Will fire after {remaining} hook checks")
-    else:
-        import time
-        remaining_mins = int((state["suppress_until_time"] - time.time()) / 60)
-        lines.append(f"Reminder scheduled (timer mode)")
-        lines.append(f"Will fire after ~{remaining_mins} minutes")
-
+    if after_calls is not None:
+        remaining = state["remind_at_call"] - state["current_call_count"]
+        lines.append(f"Fires after: {remaining} hook checks")
+    if after_minutes is not None:
+        lines.append(f"Fires after: {after_minutes} minutes")
     if note:
         lines.append(f"Task: {note}")
     if message:
         lines.append(f"Message: {message}")
     if lesson_id_list:
-        lines.append(f"Lessons to surface: {', '.join(lesson_id_list)}")
+        lines.append(f"Lessons: {', '.join(lesson_id_list)}")
     if workflow_step:
-        lines.append(f"Workflow step: {workflow_step}")
+        lines.append(f"Workflow: {workflow_step}")
 
     return "\n".join(lines)
 
@@ -1834,12 +1815,12 @@ async def set_reminder_boundary(
 async def reset_reminder_state() -> str:
     """Reset reminder state to defaults.
 
-    Use if the reminder system gets stuck or you want to clear suppression.
+    Use if the reminder system gets stuck or you want to clear a scheduled reminder.
     """
     from .reminder_state import reset_state
 
-    state = reset_state()
-    return f"Reminder state reset. Mode: {state['mode']}, call count: 0, no suppression active."
+    reset_state()
+    return "Reminder state reset. Call count: 0, no scheduled reminders."
 
 
 # ============================================================================

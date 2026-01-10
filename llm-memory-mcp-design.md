@@ -324,7 +324,7 @@ MGCP/
 ├── src/
 │   └── mgcp/
 │       ├── __init__.py
-│       ├── server.py            # MCP server (23 tools)
+│       ├── server.py            # MCP server (34 tools)
 │       ├── models.py            # Pydantic models
 │       ├── graph.py             # NetworkX graph operations
 │       ├── vector_store.py      # ChromaDB for lessons

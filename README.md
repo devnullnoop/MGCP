@@ -32,7 +32,7 @@ Without persistent memory, LLMs:
   <img alt="MGCP Architecture" src="docs/screenshots/architecture-dark.png" width="700">
 </picture>
 
-MGCP provides **32 MCP tools** that let your LLM:
+MGCP provides **34 MCP tools** that let your LLM:
 - Query relevant lessons semantically before starting any task
 - Store new lessons as they're discovered
 - Traverse related knowledge through the graph
@@ -272,6 +272,12 @@ This flexibility means MGCP can serve as the memory backbone for any LLM applica
 | `update_workflow` | Update workflow metadata/triggers |
 | `add_workflow_step` | Add a step to a workflow |
 | `link_lesson_to_workflow_step` | Link lesson to workflow step |
+
+### Reminder Control (2 tools)
+| Tool | Purpose |
+|------|---------|
+| `set_reminder_boundary` | LLM-controlled suppression of hook reminders |
+| `reset_reminder_state` | Reset reminder state to defaults |
 
 ## Web Dashboard
 

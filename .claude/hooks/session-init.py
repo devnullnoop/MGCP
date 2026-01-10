@@ -28,7 +28,15 @@ you're biased toward executing it even if lessons say otherwise.
 ### At Session Start (DO THIS NOW):
 1. Call `mcp__mgcp__get_project_context` with project_path: "{project_path}"
 2. Call `mcp__mgcp__query_lessons` with a task_description based on what the user is asking about
-3. **OUTPUT a brief project status to the user** before addressing their message:
+3. **Schedule a bootstrap reminder** to ensure you use the reminder system:
+   ```
+   schedule_reminder(
+       after_calls=2,
+       message="REMINDER SYSTEM CHECK: Are you working on a multi-step task or workflow? If YES, you MUST schedule a reminder for the next step BEFORE responding. If you haven't been scheduling reminders, START NOW.",
+       lesson_ids="schedule-reminder-at-step-end,pre-response-reminder-check"
+   )
+   ```
+4. **OUTPUT a brief project status to the user** before addressing their message:
 
 Example format:
 ```

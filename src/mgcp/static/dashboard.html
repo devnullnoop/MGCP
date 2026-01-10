@@ -1,0 +1,1701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MGCP Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        /**
+         * Tailwind CSS Configuration
+         * Extends the default theme with custom brand colors matching the dark theme.
+         */
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'brand-cyan': '#4fc3f7',
+                        'brand-dark': '#0a0a1a',
+                        'brand-panel': '#1a1a2e',
+                        'brand-surface': '#0f0f23',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Minimal CSS for animations that cannot be done in Tailwind */
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .animate-pulse-slow {
+            animation: pulse 2s infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin {
+            animation: spin 1s linear infinite;
+        }
+
+        /* Neural firing animations */
+        @keyframes neural-pulse {
+            0% { stroke-opacity: 0; stroke-width: 1; }
+            20% { stroke-opacity: 1; stroke-width: 4; }
+            100% { stroke-opacity: 0; stroke-width: 1; }
+        }
+        @keyframes node-fire {
+            0% { transform: scale(1); filter: brightness(1); }
+            30% { transform: scale(1.4); filter: brightness(2) drop-shadow(0 0 20px currentColor); }
+            100% { transform: scale(1); filter: brightness(1); }
+        }
+        @keyframes ripple {
+            0% { r: 15; opacity: 0.8; }
+            100% { r: 60; opacity: 0; }
+        }
+        .neural-active {
+            animation: node-fire 0.6s ease-out;
+        }
+        .link-pulse {
+            animation: neural-pulse 0.8s ease-out;
+        }
+
+        /* Modern button glow effects */
+        .btn-glow {
+            transition: all 0.2s ease;
+        }
+        .btn-glow:hover {
+            box-shadow: 0 0 20px rgba(79, 195, 247, 0.4), 0 0 40px rgba(79, 195, 247, 0.2);
+            transform: translateY(-1px);
+        }
+        .btn-glow-green:hover {
+            box-shadow: 0 0 20px rgba(34, 197, 94, 0.4), 0 0 40px rgba(34, 197, 94, 0.2);
+            transform: translateY(-1px);
+        }
+
+        /* Custom slider thumb */
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            background: #4fc3f7;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        input[type="range"]::-webkit-slider-thumb:hover {
+            background: #81d4fa;
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            background: #4fc3f7;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body class="bg-brand-dark text-gray-200 font-sans">
+    <!-- Main Grid Container -->
+    <div class="grid grid-cols-[1fr_350px] grid-rows-[auto_1fr_150px] min-h-screen h-screen gap-px bg-gray-700">
+
+        <!-- Header -->
+        <header class="col-span-2 bg-gradient-to-br from-brand-panel to-brand-surface px-6 py-4 flex justify-between items-center border-b border-brand-cyan">
+            <div class="flex items-center gap-6">
+                <h1 class="text-xl font-semibold text-white">MGCP Dashboard</h1>
+                <nav class="flex gap-1 text-sm">
+                    <a href="/" class="px-4 py-1.5 rounded-full bg-brand-cyan text-brand-dark font-medium transition-all duration-200">Dashboard</a>
+                    <a href="/session" class="px-4 py-1.5 rounded-full text-gray-400 hover:text-white hover:bg-white/10 transition-all duration-200">Sessions</a>
+                    <a href="/lessons" class="px-4 py-1.5 rounded-full text-gray-400 hover:text-white hover:bg-white/10 transition-all duration-200">Lessons</a>
+                    <a href="/projects" class="px-4 py-1.5 rounded-full text-gray-400 hover:text-white hover:bg-white/10 transition-all duration-200">Projects</a>
+                </nav>
+            </div>
+            <div class="flex items-center gap-4">
+                <div class="flex gap-2">
+                    <button onclick="refreshData()" class="btn-glow bg-gradient-to-b from-brand-cyan/30 to-brand-cyan/10 border border-brand-cyan/50 text-brand-cyan px-4 py-2 rounded-lg text-sm font-medium hover:border-brand-cyan hover:bg-brand-cyan/30 focus:outline-none focus:ring-2 focus:ring-brand-cyan focus:ring-offset-2 focus:ring-offset-brand-dark disabled:opacity-50 disabled:cursor-not-allowed">
+                        Refresh
+                    </button>
+                    <button onclick="resetView()" class="btn-glow bg-gradient-to-b from-brand-cyan/30 to-brand-cyan/10 border border-brand-cyan/50 text-brand-cyan px-4 py-2 rounded-lg text-sm font-medium hover:border-brand-cyan hover:bg-brand-cyan/30 focus:outline-none focus:ring-2 focus:ring-brand-cyan focus:ring-offset-2 focus:ring-offset-brand-dark">
+                        Reset View
+                    </button>
+                    <button onclick="toggleHeatmap()" class="btn-glow bg-gradient-to-b from-brand-cyan/30 to-brand-cyan/10 border border-brand-cyan/50 text-brand-cyan px-4 py-2 rounded-lg text-sm font-medium hover:border-brand-cyan hover:bg-brand-cyan/30 focus:outline-none focus:ring-2 focus:ring-brand-cyan focus:ring-offset-2 focus:ring-offset-brand-dark">
+                        Heatmap
+                    </button>
+                    <button onclick="testNeuralFire()" class="btn-glow btn-glow-green bg-gradient-to-b from-green-500/30 to-green-500/10 border border-green-500/50 text-green-400 px-4 py-2 rounded-lg text-sm font-medium hover:border-green-500 hover:bg-green-500/30 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 focus:ring-offset-brand-dark">
+                        ⚡ Fire
+                    </button>
+                </div>
+
+                <!-- Health Widget -->
+                <div id="health-widget" class="flex items-center gap-2 px-3 py-1.5 bg-brand-dark/50 rounded-lg border border-gray-700">
+                    <div id="health-dot" class="w-2 h-2 rounded-full bg-gray-500"></div>
+                    <span id="health-text" class="text-xs text-gray-400">Loading...</span>
+                </div>
+
+                <div id="status-dot" class="w-3 h-3 rounded-full bg-gray-500 transition-colors duration-300"></div>
+                <span id="status-text" class="text-sm text-gray-300">Connecting...</span>
+            </div>
+        </header>
+
+        <!-- Graph Container -->
+        <div class="bg-brand-surface relative overflow-hidden">
+            <svg id="graph" class="w-full h-full"></svg>
+
+            <!-- Tooltip -->
+            <div id="tooltip" class="absolute bg-brand-panel/95 border border-brand-cyan rounded-lg p-4 max-w-xs pointer-events-none opacity-0 transition-opacity duration-200 z-50 shadow-xl">
+                <h4 id="tooltip-title" class="text-brand-cyan font-semibold mb-2">Lesson Title</h4>
+                <p id="tooltip-action" class="text-sm text-gray-300 mb-2">Action text here</p>
+                <div class="text-xs text-gray-400">
+                    <span id="tooltip-meta">Version 1 - Used 5 times</span>
+                </div>
+            </div>
+
+            <!-- Loading Overlay -->
+            <div id="loading" class="absolute inset-0 bg-brand-dark/90 flex items-center justify-center z-[1000]">
+                <div class="w-12 h-12 border-4 border-gray-700 border-t-brand-cyan rounded-full animate-spin"></div>
+            </div>
+
+            <!-- Event Indicator -->
+            <div id="event-indicator" class="absolute top-3 left-3 px-4 py-2 bg-green-500/90 rounded text-sm text-white opacity-0 transition-opacity duration-300">
+                New event received
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="bg-brand-panel flex flex-col shadow-xl row-span-2 overflow-y-auto">
+
+            <!-- Statistics Section -->
+            <div class="p-4 border-b border-gray-700">
+                <h3 class="text-brand-cyan text-sm font-semibold uppercase tracking-wide mb-3">Session Statistics</h3>
+                <div class="grid grid-cols-2 gap-2">
+                    <div class="bg-white/5 p-3 rounded-lg text-center">
+                        <div id="stat-queries" class="text-2xl font-bold text-brand-cyan">0</div>
+                        <div class="text-xs text-gray-400 uppercase tracking-wide">Queries</div>
+                    </div>
+                    <div class="bg-white/5 p-3 rounded-lg text-center">
+                        <div id="stat-lessons" class="text-2xl font-bold text-brand-cyan">0</div>
+                        <div class="text-xs text-gray-400 uppercase tracking-wide">Lessons</div>
+                    </div>
+                    <div class="bg-white/5 p-3 rounded-lg text-center">
+                        <div id="stat-sessions" class="text-2xl font-bold text-brand-cyan">0</div>
+                        <div class="text-xs text-gray-400 uppercase tracking-wide">Sessions</div>
+                    </div>
+                    <div class="bg-white/5 p-3 rounded-lg text-center">
+                        <div id="stat-retrievals" class="text-2xl font-bold text-brand-cyan">0</div>
+                        <div class="text-xs text-gray-400 uppercase tracking-wide">Retrievals</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Legend Section -->
+            <div class="p-4 border-b border-gray-700">
+                <h3 class="text-brand-cyan text-sm font-semibold uppercase tracking-wide mb-3">Node Legend</h3>
+                <div class="flex flex-wrap gap-3 mb-3">
+                    <div class="flex items-center gap-2 text-sm">
+                        <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                        <span class="text-gray-300">Root</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-sm">
+                        <div class="w-3 h-3 rounded-full bg-purple-600"></div>
+                        <span class="text-gray-300">Category</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-sm">
+                        <div class="w-3 h-3 rounded-full bg-brand-cyan"></div>
+                        <span class="text-gray-300">Lesson</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-sm">
+                        <div class="w-3 h-3 rounded-full bg-amber-500"></div>
+                        <span class="text-gray-300">Workflow</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-sm">
+                        <div class="w-3 h-3 rounded-full bg-yellow-400"></div>
+                        <span class="text-gray-300">Step</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-sm">
+                        <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                        <span class="text-gray-300">Active</span>
+                    </div>
+                </div>
+
+                <!-- Relationship Types -->
+                <h4 class="text-gray-400 text-xs font-semibold uppercase tracking-wide mt-4 mb-2">Relationships</h4>
+                <div class="grid grid-cols-2 gap-1 text-xs">
+                    <div class="flex items-center gap-2">
+                        <svg width="16" height="8"><line x1="0" y1="4" x2="16" y2="4" stroke="#6b7280" stroke-width="2"/></svg>
+                        <span class="text-gray-400">Parent</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <svg width="16" height="8"><line x1="0" y1="4" x2="16" y2="4" stroke="#22c55e" stroke-width="2"/></svg>
+                        <span class="text-gray-400">Related</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <svg width="16" height="8"><line x1="0" y1="4" x2="16" y2="4" stroke="#f97316" stroke-width="2"/></svg>
+                        <span class="text-gray-400">Prerequisite</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <svg width="16" height="8"><line x1="0" y1="4" x2="16" y2="4" stroke="#3b82f6" stroke-width="2"/></svg>
+                        <span class="text-gray-400">Sequence</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <svg width="16" height="8"><line x1="0" y1="4" x2="16" y2="4" stroke="#ec4899" stroke-width="2" stroke-dasharray="4,2"/></svg>
+                        <span class="text-gray-400">Alternative</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <svg width="16" height="8"><line x1="0" y1="4" x2="16" y2="4" stroke="#8b5cf6" stroke-width="2"/></svg>
+                        <span class="text-gray-400">Complements</span>
+                    </div>
+                </div>
+
+                <!-- Heat Scale -->
+                <div class="flex items-center gap-2 mt-4">
+                    <span class="text-xs text-gray-400">Usage:</span>
+                    <div class="flex-1 h-2 rounded-full bg-gradient-to-r from-brand-panel via-brand-cyan via-green-400 via-orange-400 to-red-500"></div>
+                </div>
+                <div class="flex justify-between text-xs text-gray-400 mt-1">
+                    <span>Cold</span>
+                    <span>Hot</span>
+                </div>
+            </div>
+
+            <!-- Graph Controls Section -->
+            <div class="p-4 border-b border-gray-700">
+                <h3 class="text-brand-cyan text-sm font-semibold uppercase tracking-wide mb-3">Graph Controls</h3>
+
+                <!-- Search -->
+                <div class="mb-4">
+                    <label class="text-xs text-gray-400 mb-1 block">Search Nodes</label>
+                    <div class="relative">
+                        <input type="text" id="node-search" placeholder="Find lesson..."
+                            class="w-full bg-brand-dark border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:border-brand-cyan focus:outline-none focus:ring-1 focus:ring-brand-cyan">
+                        <button onclick="clearSearch()" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-xs">✕</button>
+                    </div>
+                </div>
+
+                <!-- Zoom Controls -->
+                <div class="mb-4">
+                    <label class="text-xs text-gray-400 mb-2 block">Zoom</label>
+                    <div class="flex items-center gap-2">
+                        <button onclick="zoomOut()" class="w-8 h-8 bg-brand-dark border border-gray-600 rounded-lg text-gray-300 hover:border-brand-cyan hover:text-brand-cyan transition-colors">−</button>
+                        <div class="flex-1 text-center">
+                            <span id="zoom-level" class="text-sm text-gray-300">100%</span>
+                        </div>
+                        <button onclick="zoomIn()" class="w-8 h-8 bg-brand-dark border border-gray-600 rounded-lg text-gray-300 hover:border-brand-cyan hover:text-brand-cyan transition-colors">+</button>
+                        <button onclick="fitToScreen()" class="px-2 h-8 bg-brand-dark border border-gray-600 rounded-lg text-xs text-gray-300 hover:border-brand-cyan hover:text-brand-cyan transition-colors">Fit</button>
+                    </div>
+                </div>
+
+                <!-- Node Type Filters -->
+                <div class="mb-4">
+                    <label class="text-xs text-gray-400 mb-2 block">Show Node Types</label>
+                    <div class="grid grid-cols-2 gap-1">
+                        <label class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer hover:text-white">
+                            <input type="checkbox" id="filter-lesson" checked onchange="applyFilters()" class="rounded border-gray-600 bg-brand-dark text-brand-cyan focus:ring-brand-cyan">
+                            <span class="w-2 h-2 rounded-full bg-brand-cyan"></span> Lessons
+                        </label>
+                        <label class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer hover:text-white">
+                            <input type="checkbox" id="filter-category" checked onchange="applyFilters()" class="rounded border-gray-600 bg-brand-dark text-brand-cyan focus:ring-brand-cyan">
+                            <span class="w-2 h-2 rounded-full bg-purple-600"></span> Categories
+                        </label>
+                        <label class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer hover:text-white">
+                            <input type="checkbox" id="filter-workflow" checked onchange="applyFilters()" class="rounded border-gray-600 bg-brand-dark text-brand-cyan focus:ring-brand-cyan">
+                            <span class="w-2 h-2 rounded-full bg-amber-500"></span> Workflows
+                        </label>
+                        <label class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer hover:text-white">
+                            <input type="checkbox" id="filter-step" checked onchange="applyFilters()" class="rounded border-gray-600 bg-brand-dark text-brand-cyan focus:ring-brand-cyan">
+                            <span class="w-2 h-2 rounded-full bg-yellow-400"></span> Steps
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Relationship Filters -->
+                <div class="mb-4">
+                    <label class="text-xs text-gray-400 mb-2 block">Show Relationships</label>
+                    <div class="grid grid-cols-2 gap-1">
+                        <label class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer hover:text-white">
+                            <input type="checkbox" id="filter-rel-parent" checked onchange="applyFilters()" class="rounded border-gray-600 bg-brand-dark text-brand-cyan focus:ring-brand-cyan">
+                            <span class="w-3 h-0.5 bg-gray-500"></span> Parent
+                        </label>
+                        <label class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer hover:text-white">
+                            <input type="checkbox" id="filter-rel-related" checked onchange="applyFilters()" class="rounded border-gray-600 bg-brand-dark text-brand-cyan focus:ring-brand-cyan">
+                            <span class="w-3 h-0.5 bg-green-500"></span> Related
+                        </label>
+                        <label class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer hover:text-white">
+                            <input type="checkbox" id="filter-rel-prerequisite" checked onchange="applyFilters()" class="rounded border-gray-600 bg-brand-dark text-brand-cyan focus:ring-brand-cyan">
+                            <span class="w-3 h-0.5 bg-orange-500"></span> Prereq
+                        </label>
+                        <label class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer hover:text-white">
+                            <input type="checkbox" id="filter-rel-sequence" checked onchange="applyFilters()" class="rounded border-gray-600 bg-brand-dark text-brand-cyan focus:ring-brand-cyan">
+                            <span class="w-3 h-0.5 bg-blue-500"></span> Sequence
+                        </label>
+                        <label class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer hover:text-white">
+                            <input type="checkbox" id="filter-rel-complements" checked onchange="applyFilters()" class="rounded border-gray-600 bg-brand-dark text-brand-cyan focus:ring-brand-cyan">
+                            <span class="w-3 h-0.5 bg-purple-500"></span> Compl.
+                        </label>
+                        <label class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer hover:text-white">
+                            <input type="checkbox" id="filter-rel-alternative" checked onchange="applyFilters()" class="rounded border-gray-600 bg-brand-dark text-brand-cyan focus:ring-brand-cyan">
+                            <span class="w-3 h-0.5 bg-pink-500 opacity-50" style="background: repeating-linear-gradient(90deg, #ec4899, #ec4899 2px, transparent 2px, transparent 4px);"></span> Alt
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Layout Controls -->
+                <div>
+                    <label class="text-xs text-gray-400 mb-2 block">Layout</label>
+                    <div class="space-y-2">
+                        <div>
+                            <div class="flex justify-between text-xs text-gray-500 mb-1">
+                                <span>Force</span>
+                                <span id="force-value">-300</span>
+                            </div>
+                            <input type="range" id="force-slider" min="-800" max="-50" value="-300" oninput="updateLayout()"
+                                class="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer slider-thumb">
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-xs text-gray-500 mb-1">
+                                <span>Distance</span>
+                                <span id="distance-value">100</span>
+                            </div>
+                            <input type="range" id="distance-slider" min="30" max="250" value="100" oninput="updateLayout()"
+                                class="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer slider-thumb">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Events Section -->
+            <div class="p-4">
+                <h3 class="text-brand-cyan text-sm font-semibold uppercase tracking-wide mb-3">Recent Events</h3>
+                <div id="event-list" class="space-y-2 max-h-96 overflow-y-auto">
+                    <div class="text-gray-500 text-center py-8">
+                        Waiting for events...
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Timeline -->
+        <div class="bg-brand-panel p-4 border-t border-brand-cyan">
+            <div class="flex justify-between items-center mb-2">
+                <h3 class="text-brand-cyan text-sm font-semibold uppercase tracking-wide">Query Timeline</h3>
+                <span class="text-xs text-gray-400">Recent activity</span>
+            </div>
+            <canvas id="timeline" class="h-24"></canvas>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * Lesson Memory Dashboard - Live API Integration
+         *
+         * This dashboard connects to the lesson memory MCP server to display
+         * real-time graph visualizations and event streams. It uses WebSocket
+         * for live updates and REST API for initial data loading.
+         */
+
+        // API Configuration - uses current origin for deployment flexibility
+        const API_BASE = window.location.origin;
+        const WS_URL = `ws://${window.location.host}/ws/events`;
+
+        // Application State
+        let graphData = { nodes: [], links: [] };
+        let events = [];
+        let activeNodes = new Set();
+        let showHeatmap = true;
+        let ws = null;
+        let simulation = null;
+
+        // DOM Element References
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const loading = document.getElementById('loading');
+        const eventIndicator = document.getElementById('event-indicator');
+
+        // ====================================================================
+        // WebSocket Connection Management
+        // ====================================================================
+
+        /**
+         * Establishes WebSocket connection for real-time event streaming.
+         * Automatically reconnects on disconnection with 3 second delay.
+         */
+        function connectWebSocket() {
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                statusDot.classList.remove('bg-gray-500', 'bg-red-500');
+                statusDot.classList.add('bg-green-500', 'animate-pulse-slow');
+                statusText.textContent = 'Connected';
+                console.log('WebSocket connected');
+            };
+
+            ws.onclose = () => {
+                statusDot.classList.remove('bg-green-500', 'animate-pulse-slow');
+                statusDot.classList.add('bg-red-500');
+                statusText.textContent = 'Disconnected';
+                console.log('WebSocket disconnected. Reconnecting in 3s...');
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'heartbeat') return;
+                handleEvent(data);
+            };
+        }
+
+        /**
+         * Processes incoming WebSocket events and updates the UI accordingly.
+         * @param {Object} event - The event object from the WebSocket
+         */
+        function handleEvent(event) {
+            // Show visual indicator for new events
+            eventIndicator.textContent = `${event.type}: ${event.payload?.query_text || event.payload?.lesson_ids?.join(', ') || ''}`;
+            eventIndicator.classList.remove('opacity-0');
+            eventIndicator.classList.add('opacity-100');
+            setTimeout(() => {
+                eventIndicator.classList.remove('opacity-100');
+                eventIndicator.classList.add('opacity-0');
+            }, 2000);
+
+            // Add event to history (keep last 50)
+            events.unshift(event);
+            if (events.length > 50) events.pop();
+            updateEventList();
+
+            // Trigger neural firing for retrieve events
+            if (event.type === 'retrieve' && event.payload?.lesson_ids) {
+                triggerNeuralFiring(event.payload.lesson_ids, { intensity: 1.0, cascade: true });
+            }
+
+            // For query events, fire from root node to show "thinking"
+            if (event.type === 'query') {
+                triggerNeuralFiring(['root'], { intensity: 0.5, cascade: true });
+            }
+
+            // Update statistics
+            updateStats();
+
+            // Update timeline for query/retrieve events
+            if (event.type === 'query' || event.type === 'retrieve') {
+                updateTimelineFromEvent(event);
+            }
+        }
+
+        // ====================================================================
+        // REST API Functions
+        // ====================================================================
+
+        /**
+         * Fetches data from the API with error handling.
+         * @param {string} endpoint - The API endpoint to fetch
+         * @returns {Object|null} - The JSON response or null on error
+         */
+        async function fetchAPI(endpoint) {
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return await response.json();
+            } catch (err) {
+                console.error(`API error (${endpoint}):`, err);
+                return null;
+            }
+        }
+
+        /**
+         * Loads all initial data from the API endpoints.
+         * Called on page load and when refresh button is clicked.
+         */
+        async function loadInitialData() {
+            loading.classList.remove('hidden');
+
+            try {
+                // Load graph structure
+                const graph = await fetchAPI('/api/graph');
+                if (graph) {
+                    graphData = graph;
+                    initGraph();
+                }
+
+                // Load session count
+                const sessions = await fetchAPI('/api/sessions');
+                if (sessions) {
+                    document.getElementById('stat-sessions').textContent = sessions.length;
+                }
+
+                // Load lesson count
+                const lessons = await fetchAPI('/api/lessons');
+                if (lessons) {
+                    document.getElementById('stat-lessons').textContent = lessons.length;
+                }
+
+                // Load usage statistics
+                const usage = await fetchAPI('/api/lessons/usage');
+                if (usage) {
+                    const totalRetrievals = usage.reduce((sum, u) => sum + (u.total_retrievals || 0), 0);
+                    document.getElementById('stat-retrievals').textContent = totalRetrievals;
+                }
+
+                // Load timeline data and populate events
+                const timeline = await fetchAPI('/api/timeline');
+                if (timeline) {
+                    initTimeline(timeline);
+                    // Populate events array from timeline data
+                    events = timeline.map(e => ({
+                        timestamp: e.timestamp,
+                        type: e.type,
+                        session_id: e.session_id,
+                        payload: e.payload
+                    })).reverse(); // Most recent first
+                    updateEventList();
+                    updateStats();
+                }
+
+                // Update query and retrieval counts from timeline
+                if (timeline) {
+                    const queryCount = timeline.filter(e => e.type === 'query').length;
+                    const retrieveCount = timeline.filter(e => e.type === 'retrieve').length;
+                    document.getElementById('stat-queries').textContent = queryCount;
+                    document.getElementById('stat-retrievals').textContent = retrieveCount;
+                }
+
+            } catch (err) {
+                console.error('Failed to load initial data:', err);
+            } finally {
+                loading.classList.add('hidden');
+            }
+        }
+
+        /**
+         * Refreshes all data from the API.
+         */
+        async function refreshData() {
+            await loadInitialData();
+        }
+
+        // ====================================================================
+        // D3.js Graph Visualization
+        // ====================================================================
+
+        /**
+         * Initializes the D3.js force-directed graph visualization.
+         * Creates nodes, links, and sets up force simulation.
+         */
+        function initGraph() {
+            const svg = d3.select("#graph");
+            const container = document.querySelector(".bg-brand-surface");
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+
+            // Clear previous graph
+            svg.selectAll("*").remove();
+            svg.attr("width", width).attr("height", height);
+
+            // Defs for markers and filters
+            const defs = svg.append("defs");
+
+            // Arrow marker for directed links
+            defs.append("marker")
+                .attr("id", "arrowhead")
+                .attr("viewBox", "-0 -5 10 10")
+                .attr("refX", 20)
+                .attr("refY", 0)
+                .attr("orient", "auto")
+                .attr("markerWidth", 6)
+                .attr("markerHeight", 6)
+                .append("path")
+                .attr("d", "M 0,-5 L 10,0 L 0,5")
+                .attr("fill", "#555");
+
+            // Glow filter for neural firing effect
+            const glowFilter = defs.append("filter")
+                .attr("id", "neural-glow")
+                .attr("x", "-50%")
+                .attr("y", "-50%")
+                .attr("width", "200%")
+                .attr("height", "200%");
+            glowFilter.append("feGaussianBlur")
+                .attr("in", "SourceGraphic")
+                .attr("stdDeviation", "4")
+                .attr("result", "blur");
+            glowFilter.append("feMerge")
+                .selectAll("feMergeNode")
+                .data(["blur", "SourceGraphic"])
+                .join("feMergeNode")
+                .attr("in", d => d);
+
+            // Intense glow for active nodes
+            const intenseGlow = defs.append("filter")
+                .attr("id", "neural-glow-intense")
+                .attr("x", "-100%")
+                .attr("y", "-100%")
+                .attr("width", "300%")
+                .attr("height", "300%");
+            intenseGlow.append("feGaussianBlur")
+                .attr("in", "SourceGraphic")
+                .attr("stdDeviation", "8")
+                .attr("result", "blur");
+            const intenseMerge = intenseGlow.append("feMerge");
+            intenseMerge.append("feMergeNode").attr("in", "blur");
+            intenseMerge.append("feMergeNode").attr("in", "blur");
+            intenseMerge.append("feMergeNode").attr("in", "SourceGraphic");
+
+            // Pulse gradient for links
+            const pulseGradient = defs.append("linearGradient")
+                .attr("id", "pulse-gradient")
+                .attr("gradientUnits", "userSpaceOnUse");
+            pulseGradient.append("stop").attr("offset", "0%").attr("stop-color", "#4fc3f7").attr("stop-opacity", "0");
+            pulseGradient.append("stop").attr("offset", "50%").attr("stop-color", "#4fc3f7").attr("stop-opacity", "1");
+            pulseGradient.append("stop").attr("offset", "100%").attr("stop-color", "#4fc3f7").attr("stop-opacity", "0");
+
+            const g = svg.append("g");
+
+            // Enable zoom and pan
+            const zoom = d3.zoom()
+                .scaleExtent([0.3, 3])
+                .on("zoom", (event) => g.attr("transform", event.transform));
+            svg.call(zoom);
+
+            // Initialize force simulation
+            simulation = d3.forceSimulation(graphData.nodes)
+                .force("link", d3.forceLink(graphData.links).id(d => d.id).distance(100))
+                .force("charge", d3.forceManyBody().strength(-300))
+                .force("center", d3.forceCenter(width / 2, height / 2))
+                .force("collision", d3.forceCollide().radius(40));
+
+            // Group for ripple effects (behind everything)
+            const rippleGroup = g.append("g").attr("class", "ripple-layer");
+
+            // Group for pulse effects on links
+            const pulseGroup = g.append("g").attr("class", "pulse-layer");
+
+            // Draw links with typed relationship colors
+            const linkGroup = g.append("g").attr("class", "link-layer");
+            const link = linkGroup
+                .selectAll("line")
+                .data(graphData.links)
+                .join("line")
+                .attr("stroke", d => getLinkColor(d.relation))
+                .attr("stroke-width", d => 1 + (d.weight || 0.5) * 2)
+                .attr("stroke-dasharray", d => getLinkDashArray(d.relation))
+                .attr("stroke-opacity", d => 0.4 + (d.weight || 0.5) * 0.4)
+                .attr("marker-end", "url(#arrowhead)")
+                .attr("data-source", d => d.source.id || d.source)
+                .attr("data-target", d => d.target.id || d.target);
+
+            // Draw nodes
+            const node = g.append("g")
+                .selectAll("g")
+                .data(graphData.nodes)
+                .join("g")
+                .attr("class", "node")
+                .call(d3.drag()
+                    .on("start", dragstarted)
+                    .on("drag", dragged)
+                    .on("end", dragended));
+
+            // Node circles
+            node.append("circle")
+                .attr("r", d => d.type === "root" ? 25 : d.type === "category" ? 20 : 15)
+                .attr("fill", d => getNodeColor(d))
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 2)
+                .style("cursor", "pointer");
+
+            // Node labels
+            node.append("text")
+                .text(d => d.label)
+                .attr("dy", d => d.type === "root" ? 40 : 30)
+                .attr("text-anchor", "middle")
+                .attr("fill", "#9ca3af")
+                .attr("font-size", "12px");
+
+            // Tooltip handling
+            const tooltip = document.getElementById("tooltip");
+            node.on("mouseover", (event, d) => {
+                if (d.action) {
+                    document.getElementById("tooltip-title").textContent = d.label;
+                    document.getElementById("tooltip-action").textContent = d.action;
+                    document.getElementById("tooltip-meta").textContent = `Usage: ${d.usage}% | Tags: ${(d.tags || []).join(', ') || 'none'}`;
+                    tooltip.style.left = (event.pageX + 15) + "px";
+                    tooltip.style.top = (event.pageY - 10) + "px";
+                    tooltip.classList.remove("opacity-0");
+                    tooltip.classList.add("opacity-100");
+                }
+            }).on("mouseout", () => {
+                tooltip.classList.remove("opacity-100");
+                tooltip.classList.add("opacity-0");
+            });
+
+            // Update positions on simulation tick
+            simulation.on("tick", () => {
+                link
+                    .attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+                node.attr("transform", d => `translate(${d.x},${d.y})`);
+            });
+
+            // Store references for global access
+            window.graphNode = node;
+            window.graphSvg = svg;
+            window.graphZoom = zoom;
+        }
+
+        /**
+         * Determines link stroke color based on relationship type.
+         * @param {string} relationType - The relationship type
+         * @returns {string} - The hex color code
+         */
+        function getLinkColor(relationType) {
+            const colors = {
+                'parent': '#6b7280',      // Gray
+                'related': '#22c55e',     // Green
+                'prerequisite': '#f97316', // Orange
+                'sequence_next': '#3b82f6', // Blue
+                'alternative': '#ec4899',  // Pink
+                'complements': '#8b5cf6',  // Purple
+                'specializes': '#06b6d4',  // Cyan
+                'generalizes': '#14b8a6',  // Teal
+                'contradicts': '#ef4444',  // Red
+            };
+            return colors[relationType] || '#6b7280';
+        }
+
+        /**
+         * Determines link dash array based on relationship type.
+         * @param {string} relationType - The relationship type
+         * @returns {string} - SVG dash-array value
+         */
+        function getLinkDashArray(relationType) {
+            if (relationType === 'alternative') return '8,4';
+            if (relationType === 'contradicts') return '4,4';
+            if (relationType === 'related') return '4,2';
+            return 'none';
+        }
+
+        /**
+         * Determines node fill color based on type, active state, and heatmap mode.
+         * @param {Object} d - The node data object
+         * @returns {string} - The hex color code
+         */
+        function getNodeColor(d) {
+            if (activeNodes.has(d.id)) return "#4caf50";
+
+            // Always show distinctive colors for structural nodes (root, workflow, etc.)
+            if (d.type === "root") return "#f44336";
+            if (d.type === "category") return "#9c27b0";
+            if (d.type === "workflow") return "#f59e0b"; // Amber for workflow
+            if (d.type === "workflow_step") return "#fbbf24"; // Yellow for steps
+
+            // For lessons, use heatmap or type-based color
+            if (!showHeatmap) {
+                return "#4fc3f7";
+            }
+            // Heatmap based on usage percentage
+            const usage = (d.usage || 0) / 100;
+            if (usage > 0.8) return "#f44336";
+            if (usage > 0.6) return "#ffb74d";
+            if (usage > 0.4) return "#81c784";
+            if (usage > 0.2) return "#4fc3f7";
+            return "#1a1a3e";
+        }
+
+        /**
+         * Updates all node colors based on current state.
+         */
+        function updateNodeColors() {
+            if (window.graphNode) {
+                window.graphNode.select("circle").attr("fill", d => getNodeColor(d));
+            }
+        }
+
+        /**
+         * Triggers neural firing visualization - like neurons firing in a brain.
+         * Creates cascading light pulses across nodes and edges.
+         * @param {Array} nodeIds - Array of node IDs that were activated
+         * @param {Object} options - Animation options (intensity, cascade)
+         */
+        function triggerNeuralFiring(nodeIds, options = {}) {
+            const intensity = options.intensity || 1.0;
+            const cascade = options.cascade !== false;
+            const svg = d3.select("#graph");
+            const g = svg.select("g");
+
+            if (!g.node() || !window.graphNode) return;
+
+            activeNodes = new Set(nodeIds);
+
+            // Get node positions
+            const nodePositions = {};
+            window.graphNode.each(function(d) {
+                nodePositions[d.id] = { x: d.x, y: d.y, data: d };
+            });
+
+            // 1. Create ripple effects at activated nodes
+            nodeIds.forEach((nodeId, index) => {
+                const pos = nodePositions[nodeId];
+                if (!pos) return;
+
+                const delay = index * 50; // Stagger the firing
+
+                // Create expanding ripple ring
+                setTimeout(() => {
+                    const rippleLayer = g.select(".ripple-layer");
+                    if (!rippleLayer.node()) return;
+
+                    for (let i = 0; i < 3; i++) {
+                        rippleLayer.append("circle")
+                            .attr("cx", pos.x)
+                            .attr("cy", pos.y)
+                            .attr("r", 15)
+                            .attr("fill", "none")
+                            .attr("stroke", "#4fc3f7")
+                            .attr("stroke-width", 3 * intensity)
+                            .attr("opacity", 0.8)
+                            .transition()
+                            .delay(i * 100)
+                            .duration(800)
+                            .attr("r", 80)
+                            .attr("opacity", 0)
+                            .attr("stroke-width", 1)
+                            .remove();
+                    }
+                }, delay);
+            });
+
+            // 2. Fire the primary nodes with glow
+            window.graphNode.filter(d => activeNodes.has(d.id))
+                .select("circle")
+                .attr("filter", "url(#neural-glow-intense)")
+                .transition()
+                .duration(150)
+                .attr("fill", "#00ff88")
+                .attr("r", d => (d.type === "root" ? 25 : d.type === "category" ? 20 : 15) * 1.5)
+                .transition()
+                .duration(400)
+                .attr("r", d => d.type === "root" ? 25 : d.type === "category" ? 20 : 15)
+                .attr("fill", "#4caf50")
+                .transition()
+                .delay(2000)
+                .duration(500)
+                .attr("filter", null)
+                .attr("fill", d => getNodeColor(d));
+
+            // 3. Animate pulses along connected edges
+            if (cascade) {
+                const pulseLayer = g.select(".pulse-layer");
+                if (pulseLayer.node()) {
+                    graphData.links.forEach(link => {
+                        const sourceId = link.source.id || link.source;
+                        const targetId = link.target.id || link.target;
+
+                        // If either end is an activated node, pulse this edge
+                        if (activeNodes.has(sourceId) || activeNodes.has(targetId)) {
+                            const sourcePos = nodePositions[sourceId];
+                            const targetPos = nodePositions[targetId];
+                            if (!sourcePos || !targetPos) return;
+
+                            // Determine direction (from activated node outward)
+                            const isSourceActive = activeNodes.has(sourceId);
+                            const startPos = isSourceActive ? sourcePos : targetPos;
+                            const endPos = isSourceActive ? targetPos : sourcePos;
+
+                            // Create animated pulse along the edge
+                            const pulseDelay = isSourceActive ? 100 : 300;
+
+                            setTimeout(() => {
+                                // Glowing pulse traveling along edge
+                                const pulse = pulseLayer.append("circle")
+                                    .attr("cx", startPos.x)
+                                    .attr("cy", startPos.y)
+                                    .attr("r", 6)
+                                    .attr("fill", "#4fc3f7")
+                                    .attr("filter", "url(#neural-glow)")
+                                    .attr("opacity", 1);
+
+                                pulse.transition()
+                                    .duration(400)
+                                    .attr("cx", endPos.x)
+                                    .attr("cy", endPos.y)
+                                    .attr("r", 4)
+                                    .attr("opacity", 0)
+                                    .remove();
+
+                                // Flash the edge itself
+                                g.select(".link-layer")
+                                    .selectAll("line")
+                                    .filter(d => {
+                                        const s = d.source.id || d.source;
+                                        const t = d.target.id || d.target;
+                                        return (s === sourceId && t === targetId) || (s === targetId && t === sourceId);
+                                    })
+                                    .transition()
+                                    .duration(100)
+                                    .attr("stroke", "#4fc3f7")
+                                    .attr("stroke-width", 4)
+                                    .attr("stroke-opacity", 1)
+                                    .transition()
+                                    .duration(600)
+                                    .attr("stroke", d => getLinkColor(d.relation))
+                                    .attr("stroke-width", d => 1 + (d.weight || 0.5) * 2)
+                                    .attr("stroke-opacity", d => 0.4 + (d.weight || 0.5) * 0.4);
+
+                                // Cascade to connected nodes (secondary activation)
+                                if (!activeNodes.has(endPos.data?.id)) {
+                                    setTimeout(() => {
+                                        const secondaryNode = window.graphNode.filter(d => d.id === endPos.data?.id);
+                                        if (secondaryNode.node()) {
+                                            secondaryNode.select("circle")
+                                                .transition()
+                                                .duration(150)
+                                                .attr("fill", "#4fc3f7")
+                                                .attr("filter", "url(#neural-glow)")
+                                                .attr("r", d => (d.type === "root" ? 25 : d.type === "category" ? 20 : 15) * 1.2)
+                                                .transition()
+                                                .duration(400)
+                                                .attr("r", d => d.type === "root" ? 25 : d.type === "category" ? 20 : 15)
+                                                .attr("fill", d => getNodeColor(d))
+                                                .attr("filter", null);
+                                        }
+                                    }, 300);
+                                }
+                            }, pulseDelay);
+                        }
+                    });
+                }
+            }
+
+            // 4. Clear active state after animation completes
+            setTimeout(() => {
+                activeNodes.clear();
+                updateNodeColors();
+            }, 3500);
+        }
+
+        /**
+         * Legacy highlight function - now calls neural firing
+         * @param {Array} nodeIds - Array of node IDs to highlight
+         */
+        function highlightNodes(nodeIds) {
+            triggerNeuralFiring(nodeIds, { intensity: 1.0, cascade: true });
+        }
+
+        // Drag event handlers
+        function dragstarted(event) {
+            if (!event.active && simulation) simulation.alphaTarget(0.3).restart();
+            event.subject.fx = event.subject.x;
+            event.subject.fy = event.subject.y;
+        }
+
+        function dragged(event) {
+            event.subject.fx = event.x;
+            event.subject.fy = event.y;
+        }
+
+        function dragended(event) {
+            if (!event.active && simulation) simulation.alphaTarget(0);
+            event.subject.fx = null;
+            event.subject.fy = null;
+        }
+
+        /**
+         * Resets the graph view to initial zoom/pan state.
+         */
+        function resetView() {
+            if (window.graphSvg && window.graphZoom) {
+                window.graphSvg.transition().duration(500).call(window.graphZoom.transform, d3.zoomIdentity);
+            }
+            activeNodes.clear();
+            updateNodeColors();
+        }
+
+        /**
+         * Toggles between heatmap and type-based node coloring.
+         */
+        function toggleHeatmap() {
+            showHeatmap = !showHeatmap;
+            updateNodeColors();
+        }
+
+        // ====================================================================
+        // Chart.js Timeline Visualization
+        // ====================================================================
+
+        let timelineChart = null;
+
+        /**
+         * Initializes the timeline bar chart with historical data.
+         * @param {Array} data - Array of event objects with timestamps
+         */
+        function initTimeline(data) {
+            const ctx = document.getElementById("timeline").getContext("2d");
+
+            // Group events into 5-minute buckets
+            const buckets = {};
+            data.forEach(event => {
+                const date = new Date(event.timestamp);
+                const bucket = new Date(Math.floor(date.getTime() / 300000) * 300000);
+                const key = bucket.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                buckets[key] = (buckets[key] || 0) + 1;
+            });
+
+            const labels = Object.keys(buckets).slice(-15);
+            const values = labels.map(k => buckets[k]);
+
+            if (timelineChart) {
+                timelineChart.destroy();
+            }
+
+            timelineChart = new Chart(ctx, {
+                type: "bar",
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: "Events",
+                        data: values,
+                        backgroundColor: "rgba(79, 195, 247, 0.6)",
+                        borderColor: "#4fc3f7",
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: { color: "rgba(255,255,255,0.1)" },
+                            ticks: { color: "#9ca3af" }
+                        },
+                        x: {
+                            grid: { color: "rgba(255,255,255,0.1)" },
+                            ticks: { color: "#9ca3af", maxRotation: 0 }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+        }
+
+        /**
+         * Updates the timeline chart with a new event.
+         * @param {Object} event - The event to add to the timeline
+         */
+        function updateTimelineFromEvent(event) {
+            if (!timelineChart) return;
+
+            const date = new Date(event.timestamp);
+            const label = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            const lastLabel = timelineChart.data.labels[timelineChart.data.labels.length - 1];
+            if (lastLabel === label) {
+                // Increment existing bucket
+                timelineChart.data.datasets[0].data[timelineChart.data.datasets[0].data.length - 1]++;
+            } else {
+                // Add new bucket
+                timelineChart.data.labels.push(label);
+                timelineChart.data.datasets[0].data.push(1);
+                if (timelineChart.data.labels.length > 15) {
+                    timelineChart.data.labels.shift();
+                    timelineChart.data.datasets[0].data.shift();
+                }
+            }
+            timelineChart.update();
+        }
+
+        // ====================================================================
+        // Event List UI
+        // ====================================================================
+
+        /**
+         * Updates the event list in the sidebar with recent events.
+         */
+        function updateEventList() {
+            const list = document.getElementById("event-list");
+            if (events.length === 0) {
+                list.innerHTML = '<div class="text-gray-500 text-center py-8">Waiting for events...</div>';
+                return;
+            }
+
+            list.innerHTML = events.slice(0, 15).map((e, i) => {
+                const time = new Date(e.timestamp).toLocaleTimeString();
+                let text = e.type;
+                if (e.payload?.query_text) text = e.payload.query_text;
+                else if (e.payload?.lesson_ids) text = `${e.payload.lesson_ids.length} lessons`;
+
+                return `
+                    <div class="bg-white/5 rounded-lg p-3 border-l-4 ${i === 0 ? 'border-green-500 bg-green-500/10' : 'border-brand-cyan'} cursor-pointer hover:bg-white/10 transition-all duration-200" onclick="highlightFromEvent(${i})">
+                        <div class="text-xs text-gray-400">${time}</div>
+                        <div class="text-sm text-gray-200 my-1">${text}</div>
+                        <div class="text-xs text-green-400">${e.type}</div>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        /**
+         * Highlights nodes associated with a specific event from the list.
+         * @param {number} index - The index of the event in the events array
+         */
+        function highlightFromEvent(index) {
+            const event = events[index];
+            if (event.payload?.lesson_ids) {
+                highlightNodes(event.payload.lesson_ids);
+            }
+        }
+
+        /**
+         * Updates the query count statistic based on events.
+         */
+        function updateStats() {
+            const queryCount = events.filter(e => e.type === 'query').length;
+            document.getElementById('stat-queries').textContent = queryCount;
+        }
+
+        // ====================================================================
+        // Initialization
+        // ====================================================================
+
+        // ====================================================================
+        // Health Widget
+        // ====================================================================
+
+        /**
+         * Updates the health widget with current system status.
+         */
+        async function updateHealthWidget() {
+            const healthDot = document.getElementById('health-dot');
+            const healthText = document.getElementById('health-text');
+
+            try {
+                const health = await fetchAPI('/api/health');
+                if (health && health.status === 'healthy') {
+                    healthDot.classList.remove('bg-gray-500', 'bg-red-500');
+                    healthDot.classList.add('bg-green-500');
+                    healthText.textContent = `${health.lessons_count} lessons · ${health.projects_count} projects`;
+                    healthText.classList.remove('text-red-400');
+                    healthText.classList.add('text-gray-400');
+                } else {
+                    healthDot.classList.remove('bg-gray-500', 'bg-green-500');
+                    healthDot.classList.add('bg-red-500');
+                    healthText.textContent = 'Unhealthy';
+                    healthText.classList.remove('text-gray-400');
+                    healthText.classList.add('text-red-400');
+                }
+            } catch (err) {
+                healthDot.classList.remove('bg-gray-500', 'bg-green-500');
+                healthDot.classList.add('bg-red-500');
+                healthText.textContent = 'Error';
+            }
+        }
+
+        // ====================================================================
+        // Test Functions
+        // ====================================================================
+
+        /**
+         * Test function to trigger neural firing along a path from root.
+         * Simulates a query tracing through the graph hierarchy.
+         */
+        function testNeuralFire() {
+            if (!graphData.nodes || graphData.nodes.length === 0) {
+                console.log('No nodes to fire');
+                return;
+            }
+
+            // Build a path from root to a random leaf lesson
+            const path = buildPathFromRoot();
+            if (path.length === 0) {
+                console.log('Could not build path');
+                return;
+            }
+
+            console.log('Firing path:', path);
+            triggerNeuralFiringPath(path, { intensity: 1.0 });
+        }
+
+        /**
+         * Builds a random path from root down to a leaf lesson node.
+         * @returns {Array} Array of node IDs forming the path
+         */
+        function buildPathFromRoot() {
+            // Build adjacency map (parent -> children)
+            const children = {};
+            graphData.links.forEach(link => {
+                const source = link.source.id || link.source;
+                const target = link.target.id || link.target;
+                if (link.relation === 'parent') {
+                    if (!children[source]) children[source] = [];
+                    children[source].push(target);
+                }
+            });
+
+            // Start from root and walk down randomly
+            const path = ['root'];
+            let current = 'root';
+            let maxDepth = 10; // Safety limit
+
+            while (maxDepth-- > 0) {
+                const childList = children[current];
+                if (!childList || childList.length === 0) break;
+
+                // Pick a random child
+                const next = childList[Math.floor(Math.random() * childList.length)];
+                path.push(next);
+                current = next;
+
+                // Stop at lessons (leaf nodes)
+                const node = graphData.nodes.find(n => n.id === current);
+                if (node && node.type === 'lesson') break;
+            }
+
+            return path;
+        }
+
+        /**
+         * Triggers neural firing along a path, with sequential timing.
+         * @param {Array} path - Array of node IDs forming the path (in order)
+         * @param {Object} options - Animation options
+         */
+        function triggerNeuralFiringPath(path, options = {}) {
+            const intensity = options.intensity || 1.0;
+            const svg = d3.select("#graph");
+            const g = svg.select("g");
+
+            if (!g.node() || !window.graphNode) return;
+
+            // Get node positions
+            const nodePositions = {};
+            window.graphNode.each(function(d) {
+                nodePositions[d.id] = { x: d.x, y: d.y, data: d };
+            });
+
+            // Build typed relationship map (non-parent links)
+            const typedRelations = {};
+            graphData.links.forEach(link => {
+                const source = link.source.id || link.source;
+                const target = link.target.id || link.target;
+                const relType = link.relation || 'parent';
+                if (relType !== 'parent') {
+                    if (!typedRelations[source]) typedRelations[source] = [];
+                    typedRelations[source].push({ target, relType, link });
+                    if (!typedRelations[target]) typedRelations[target] = [];
+                    typedRelations[target].push({ target: source, relType, link });
+                }
+            });
+
+            // Fire each node in sequence along the path
+            path.forEach((nodeId, index) => {
+                const pos = nodePositions[nodeId];
+                if (!pos) return;
+
+                const delay = index * 300; // 300ms between each node in path
+
+                setTimeout(() => {
+                    // Create ripple at this node
+                    const rippleLayer = g.select(".ripple-layer");
+                    if (rippleLayer.node()) {
+                        for (let i = 0; i < 2; i++) {
+                            rippleLayer.append("circle")
+                                .attr("cx", pos.x)
+                                .attr("cy", pos.y)
+                                .attr("r", 15)
+                                .attr("fill", "none")
+                                .attr("stroke", "#4fc3f7")
+                                .attr("stroke-width", 3 * intensity)
+                                .attr("opacity", 0.8)
+                                .transition()
+                                .delay(i * 80)
+                                .duration(600)
+                                .attr("r", 60)
+                                .attr("opacity", 0)
+                                .attr("stroke-width", 1)
+                                .remove();
+                        }
+                    }
+
+                    // Fire this node
+                    window.graphNode.filter(d => d.id === nodeId)
+                        .select("circle")
+                        .attr("filter", "url(#neural-glow-intense)")
+                        .transition()
+                        .duration(150)
+                        .attr("fill", "#00ff88")
+                        .attr("r", d => (d.type === "root" ? 25 : d.type === "category" ? 20 : 15) * 1.4)
+                        .transition()
+                        .duration(300)
+                        .attr("r", d => d.type === "root" ? 25 : d.type === "category" ? 20 : 15)
+                        .attr("fill", "#4caf50")
+                        .transition()
+                        .delay(1500)
+                        .duration(400)
+                        .attr("filter", null)
+                        .attr("fill", d => getNodeColor(d));
+
+                    // Animate pulse to next node in path
+                    if (index < path.length - 1) {
+                        const nextId = path[index + 1];
+                        const nextPos = nodePositions[nextId];
+                        if (nextPos) {
+                            const pulseLayer = g.select(".pulse-layer");
+                            if (pulseLayer.node()) {
+                                // Create traveling pulse
+                                const pulse = pulseLayer.append("circle")
+                                    .attr("cx", pos.x)
+                                    .attr("cy", pos.y)
+                                    .attr("r", 8)
+                                    .attr("fill", "#4fc3f7")
+                                    .attr("filter", "url(#neural-glow)")
+                                    .attr("opacity", 1);
+
+                                pulse.transition()
+                                    .duration(250)
+                                    .attr("cx", nextPos.x)
+                                    .attr("cy", nextPos.y)
+                                    .attr("r", 4)
+                                    .attr("opacity", 0.3)
+                                    .remove();
+
+                                // Flash the connecting edge
+                                g.select(".link-layer")
+                                    .selectAll("line")
+                                    .filter(d => {
+                                        const s = d.source.id || d.source;
+                                        const t = d.target.id || d.target;
+                                        return (s === nodeId && t === nextId) || (s === nextId && t === nodeId);
+                                    })
+                                    .transition()
+                                    .duration(100)
+                                    .attr("stroke", "#00ff88")
+                                    .attr("stroke-width", 5)
+                                    .attr("stroke-opacity", 1)
+                                    .transition()
+                                    .duration(500)
+                                    .attr("stroke", d => getLinkColor(d.relation))
+                                    .attr("stroke-width", d => 1 + (d.weight || 0.5) * 2)
+                                    .attr("stroke-opacity", d => 0.4 + (d.weight || 0.5) * 0.4);
+                            }
+                        }
+                    }
+
+                    // === SPIDER EFFECT: At leaf node, cascade through typed relationships ===
+                    if (index === path.length - 1) {
+                        const relations = typedRelations[nodeId] || [];
+                        relations.forEach((rel, relIndex) => {
+                            const targetPos = nodePositions[rel.target];
+                            if (!targetPos) return;
+
+                            const spiderDelay = 200 + (relIndex * 150);
+
+                            setTimeout(() => {
+                                const pulseLayer = g.select(".pulse-layer");
+                                if (pulseLayer.node()) {
+                                    // Get color for this relationship type
+                                    const relColor = getLinkColor(rel.relType);
+
+                                    // Create traveling pulse along relationship edge
+                                    const pulse = pulseLayer.append("circle")
+                                        .attr("cx", pos.x)
+                                        .attr("cy", pos.y)
+                                        .attr("r", 6)
+                                        .attr("fill", relColor)
+                                        .attr("filter", "url(#neural-glow)")
+                                        .attr("opacity", 1);
+
+                                    pulse.transition()
+                                        .duration(350)
+                                        .attr("cx", targetPos.x)
+                                        .attr("cy", targetPos.y)
+                                        .attr("r", 3)
+                                        .attr("opacity", 0)
+                                        .remove();
+
+                                    // Flash the typed relationship edge with its color
+                                    g.select(".link-layer")
+                                        .selectAll("line")
+                                        .filter(d => {
+                                            const s = d.source.id || d.source;
+                                            const t = d.target.id || d.target;
+                                            return (s === nodeId && t === rel.target) || (s === rel.target && t === nodeId);
+                                        })
+                                        .transition()
+                                        .duration(100)
+                                        .attr("stroke", relColor)
+                                        .attr("stroke-width", 5)
+                                        .attr("stroke-opacity", 1)
+                                        .transition()
+                                        .duration(700)
+                                        .attr("stroke", d => getLinkColor(d.relation))
+                                        .attr("stroke-width", d => 1 + (d.weight || 0.5) * 2)
+                                        .attr("stroke-opacity", d => 0.4 + (d.weight || 0.5) * 0.4);
+
+                                    // Fire the related node (secondary activation with relationship color)
+                                    window.graphNode.filter(d => d.id === rel.target)
+                                        .select("circle")
+                                        .attr("filter", "url(#neural-glow)")
+                                        .transition()
+                                        .duration(150)
+                                        .attr("fill", relColor)
+                                        .attr("r", d => (d.type === "root" ? 25 : d.type === "category" ? 20 : 15) * 1.3)
+                                        .transition()
+                                        .duration(400)
+                                        .attr("r", d => d.type === "root" ? 25 : d.type === "category" ? 20 : 15)
+                                        .attr("fill", d => getNodeColor(d))
+                                        .attr("filter", null);
+                                }
+                            }, spiderDelay);
+                        });
+                    }
+                }, delay);
+            });
+        }
+
+        // ====================================================================
+        // Graph Controls
+        // ====================================================================
+
+        // Filter state
+        let filterState = {
+            nodeTypes: { lesson: true, category: true, workflow: true, workflow_step: true },
+            relationships: { parent: true, related: true, prerequisite: true, sequence_next: true, complements: true, alternative: true },
+            searchTerm: ''
+        };
+
+        // Current zoom level
+        let currentZoom = 1;
+
+        /**
+         * Searches nodes by label and highlights/focuses matching ones.
+         * Called on input change with debouncing.
+         */
+        let searchTimeout = null;
+        document.getElementById('node-search')?.addEventListener('input', (e) => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                searchNodes(e.target.value);
+            }, 300);
+        });
+
+        function searchNodes(term) {
+            filterState.searchTerm = term.toLowerCase();
+            applyFilters();
+
+            // If there's a search term, find and focus on matching nodes
+            if (term && window.graphNode) {
+                const matches = [];
+                window.graphNode.each(function(d) {
+                    if (d.label?.toLowerCase().includes(term.toLowerCase()) ||
+                        d.id?.toLowerCase().includes(term.toLowerCase())) {
+                        matches.push(d.id);
+                    }
+                });
+
+                if (matches.length > 0) {
+                    // Highlight matching nodes
+                    highlightNodes(matches);
+
+                    // Pan to first match
+                    const firstMatch = graphData.nodes.find(n => n.id === matches[0]);
+                    if (firstMatch && window.graphSvg && window.graphZoom) {
+                        const container = document.querySelector(".bg-brand-surface");
+                        const width = container.clientWidth;
+                        const height = container.clientHeight;
+                        const transform = d3.zoomIdentity
+                            .translate(width / 2 - firstMatch.x * currentZoom, height / 2 - firstMatch.y * currentZoom)
+                            .scale(currentZoom);
+                        window.graphSvg.transition().duration(500).call(window.graphZoom.transform, transform);
+                    }
+                }
+            }
+        }
+
+        function clearSearch() {
+            document.getElementById('node-search').value = '';
+            filterState.searchTerm = '';
+            applyFilters();
+        }
+
+        /**
+         * Zoom controls
+         */
+        function zoomIn() {
+            if (window.graphSvg && window.graphZoom) {
+                currentZoom = Math.min(currentZoom * 1.3, 3);
+                window.graphSvg.transition().duration(300).call(window.graphZoom.scaleTo, currentZoom);
+                updateZoomLevel();
+            }
+        }
+
+        function zoomOut() {
+            if (window.graphSvg && window.graphZoom) {
+                currentZoom = Math.max(currentZoom / 1.3, 0.3);
+                window.graphSvg.transition().duration(300).call(window.graphZoom.scaleTo, currentZoom);
+                updateZoomLevel();
+            }
+        }
+
+        function fitToScreen() {
+            if (!window.graphSvg || !window.graphZoom || !graphData.nodes.length) return;
+
+            const container = document.querySelector(".bg-brand-surface");
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+
+            // Calculate bounding box of all nodes
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            graphData.nodes.forEach(n => {
+                if (n.x !== undefined && n.y !== undefined) {
+                    minX = Math.min(minX, n.x);
+                    maxX = Math.max(maxX, n.x);
+                    minY = Math.min(minY, n.y);
+                    maxY = Math.max(maxY, n.y);
+                }
+            });
+
+            const graphWidth = maxX - minX + 100;
+            const graphHeight = maxY - minY + 100;
+            const scale = Math.min(width / graphWidth, height / graphHeight, 2) * 0.9;
+            const centerX = (minX + maxX) / 2;
+            const centerY = (minY + maxY) / 2;
+
+            currentZoom = scale;
+            const transform = d3.zoomIdentity
+                .translate(width / 2 - centerX * scale, height / 2 - centerY * scale)
+                .scale(scale);
+            window.graphSvg.transition().duration(500).call(window.graphZoom.transform, transform);
+            updateZoomLevel();
+        }
+
+        function updateZoomLevel() {
+            document.getElementById('zoom-level').textContent = Math.round(currentZoom * 100) + '%';
+        }
+
+        // Track zoom from mouse wheel
+        function trackZoom() {
+            if (window.graphSvg) {
+                window.graphSvg.on('zoom.track', (event) => {
+                    if (event.transform) {
+                        currentZoom = event.transform.k;
+                        updateZoomLevel();
+                    }
+                });
+            }
+        }
+
+        /**
+         * Applies all filters (node types, relationships, search) to the graph.
+         */
+        function applyFilters() {
+            // Read checkbox states
+            filterState.nodeTypes.lesson = document.getElementById('filter-lesson')?.checked ?? true;
+            filterState.nodeTypes.category = document.getElementById('filter-category')?.checked ?? true;
+            filterState.nodeTypes.workflow = document.getElementById('filter-workflow')?.checked ?? true;
+            filterState.nodeTypes.workflow_step = document.getElementById('filter-step')?.checked ?? true;
+
+            filterState.relationships.parent = document.getElementById('filter-rel-parent')?.checked ?? true;
+            filterState.relationships.related = document.getElementById('filter-rel-related')?.checked ?? true;
+            filterState.relationships.prerequisite = document.getElementById('filter-rel-prerequisite')?.checked ?? true;
+            filterState.relationships.sequence_next = document.getElementById('filter-rel-sequence')?.checked ?? true;
+            filterState.relationships.complements = document.getElementById('filter-rel-complements')?.checked ?? true;
+            filterState.relationships.alternative = document.getElementById('filter-rel-alternative')?.checked ?? true;
+
+            if (!window.graphNode) return;
+
+            const searchTerm = filterState.searchTerm;
+
+            // Filter nodes
+            window.graphNode.style('opacity', d => {
+                // Root always visible
+                if (d.type === 'root') return 1;
+
+                // Check node type filter
+                const typeKey = d.type === 'workflow_step' ? 'workflow_step' : d.type;
+                if (!filterState.nodeTypes[typeKey]) return 0.1;
+
+                // Check search filter
+                if (searchTerm) {
+                    const matchesSearch = d.label?.toLowerCase().includes(searchTerm) ||
+                                         d.id?.toLowerCase().includes(searchTerm);
+                    if (!matchesSearch) return 0.15;
+                }
+
+                return 1;
+            });
+
+            // Filter links
+            const svg = d3.select("#graph");
+            svg.select(".link-layer").selectAll("line").style('opacity', d => {
+                const relType = d.relation || 'parent';
+
+                // Check relationship type filter
+                if (!filterState.relationships[relType]) return 0.05;
+
+                // Check if connected nodes are visible
+                const sourceId = d.source.id || d.source;
+                const targetId = d.target.id || d.target;
+                const sourceNode = graphData.nodes.find(n => n.id === sourceId);
+                const targetNode = graphData.nodes.find(n => n.id === targetId);
+
+                if (sourceNode && targetNode) {
+                    const sourceTypeKey = sourceNode.type === 'workflow_step' ? 'workflow_step' : sourceNode.type;
+                    const targetTypeKey = targetNode.type === 'workflow_step' ? 'workflow_step' : targetNode.type;
+
+                    if (!filterState.nodeTypes[sourceTypeKey] || !filterState.nodeTypes[targetTypeKey]) {
+                        return 0.05;
+                    }
+                }
+
+                return 0.4 + (d.weight || 0.5) * 0.4;
+            });
+        }
+
+        /**
+         * Updates the force simulation layout based on slider values.
+         */
+        function updateLayout() {
+            const forceValue = parseInt(document.getElementById('force-slider')?.value || -300);
+            const distanceValue = parseInt(document.getElementById('distance-slider')?.value || 100);
+
+            document.getElementById('force-value').textContent = forceValue;
+            document.getElementById('distance-value').textContent = distanceValue;
+
+            if (simulation) {
+                simulation.force('charge').strength(forceValue);
+                simulation.force('link').distance(distanceValue);
+                simulation.alpha(0.5).restart();
+            }
+        }
+
+        // ====================================================================
+        // Initialization
+        // ====================================================================
+
+        /**
+         * Main initialization function.
+         * Loads initial data and establishes WebSocket connection.
+         */
+        async function init() {
+            await loadInitialData();
+            await updateHealthWidget();
+            connectWebSocket();
+
+            // Periodically update health
+            setInterval(updateHealthWidget, 30000);
+        }
+
+        init();
+    </script>
+</body>
+</html>

@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Lesson Memory System - Architecture</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #e0e0e0;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 0.5rem;
+            color: #fff;
+            font-size: 2rem;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 2rem;
+        }
+        .diagram-section {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .diagram-section h2 {
+            color: #4fc3f7;
+            margin-bottom: 1.5rem;
+            font-size: 1.3rem;
+        }
+        .mermaid {
+            display: flex;
+            justify-content: center;
+        }
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-top: 1.5rem;
+            justify-content: center;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+        }
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+        }
+        .color-llm { background: #4fc3f7; }
+        .color-server { background: #81c784; }
+        .color-storage { background: #ffb74d; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>LLM Lesson Memory System</h1>
+        <p class="subtitle">Architecture Overview</p>
+
+        <div class="diagram-section">
+            <h2>System Architecture</h2>
+            <div class="mermaid">
+flowchart TB
+    subgraph Client["Client Layer"]
+        LLM["Claude / LLM"]
+    end
+
+    subgraph Protocol["Protocol Layer"]
+        MCP["MCP Protocol"]
+    end
+
+    subgraph Server["MCP Lesson Server"]
+        QH["Query Handler"]
+        LM["Lesson Manager"]
+        GW["Graph Walker"]
+    end
+
+    subgraph Storage["Storage Layer"]
+        GS[("Graph Store<br/>(NetworkX)")]
+        VS[("Vector Store<br/>(ChromaDB)")]
+    end
+
+    LLM <-->|"Tools & Responses"| MCP
+    MCP <--> QH
+    MCP <--> LM
+    MCP <--> GW
+    QH --> GS
+    QH --> VS
+    LM --> GS
+    LM --> VS
+    GW --> GS
+
+    style LLM fill:#4fc3f7,stroke:#0288d1,color:#000
+    style MCP fill:#4fc3f7,stroke:#0288d1,color:#000
+    style QH fill:#81c784,stroke:#388e3c,color:#000
+    style LM fill:#81c784,stroke:#388e3c,color:#000
+    style GW fill:#81c784,stroke:#388e3c,color:#000
+    style GS fill:#ffb74d,stroke:#f57c00,color:#000
+    style VS fill:#ffb74d,stroke:#f57c00,color:#000
+            </div>
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-color color-llm"></div>
+                    <span>Client & Protocol</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color color-server"></div>
+                    <span>Server Components</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color color-storage"></div>
+                    <span>Storage Backends</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="diagram-section">
+            <h2>Lesson Graph Structure</h2>
+            <div class="mermaid">
+flowchart TD
+    ROOT["global-verify-before-assert"]
+
+    API["global-research-apis"]
+    CALC["global-verify-calculations"]
+    TEST["global-test-before-integrate"]
+
+    RUST_CRATE["rust-check-crate-versions"]
+    PY_PYPI["python-check-pypi-versions"]
+    JS_NPM["js-check-npm-versions"]
+
+    RUST_MEM["rust-memory-estimation"]
+    PY_NUMPY["python-numpy-broadcasting"]
+    SANITY["global-sanity-check-magnitude"]
+
+    RUST_TEST["rust-test-with-known-inputs"]
+    PY_TEST["python-test-with-known-inputs"]
+
+    ROOT --> API
+    ROOT --> CALC
+    ROOT --> TEST
+
+    API --> RUST_CRATE
+    API --> PY_PYPI
+    API --> JS_NPM
+
+    CALC --> RUST_MEM
+    CALC --> PY_NUMPY
+    CALC --> SANITY
+
+    TEST --> RUST_TEST
+    TEST --> PY_TEST
+
+    RUST_MEM -.->|related| SANITY
+    RUST_MEM -.->|related| RUST_TEST
+
+    style ROOT fill:#e91e63,stroke:#c2185b,color:#fff
+    style API fill:#9c27b0,stroke:#7b1fa2,color:#fff
+    style CALC fill:#9c27b0,stroke:#7b1fa2,color:#fff
+    style TEST fill:#9c27b0,stroke:#7b1fa2,color:#fff
+            </div>
+        </div>
+
+        <div class="diagram-section">
+            <h2>MCP Interaction Flow</h2>
+            <div class="mermaid">
+sequenceDiagram
+    participant LLM as Claude/LLM
+    participant MCP as MCP Server
+    participant Graph as Graph Store
+    participant Vector as Vector Store
+
+    Note over LLM: Receives task:<br/>"Implement memory estimation"
+
+    LLM->>MCP: query_lessons("memory estimation")
+    MCP->>Vector: Semantic search
+    Vector-->>MCP: Matching lesson IDs
+    MCP->>Graph: Fetch lessons
+    Graph-->>MCP: Lesson details
+    MCP-->>LLM: [rust-memory-estimation, ...]
+
+    LLM->>MCP: spider_lessons("rust-memory-estimation", depth=1)
+    MCP->>Graph: Walk graph
+    Graph-->>MCP: Related lessons
+    MCP-->>LLM: [global-verify-calculations, ...]
+
+    Note over LLM: Implements with<br/>verification built-in
+
+    LLM->>MCP: refine_lesson("rust-memory-estimation", "...")
+    MCP->>Graph: Update lesson
+    MCP->>Vector: Update embeddings
+    MCP-->>LLM: Updated lesson
+            </div>
+        </div>
+
+        <div class="diagram-section">
+            <h2>Data Model</h2>
+            <div class="mermaid">
+classDiagram
+    class Lesson {
+        +str id
+        +str trigger
+        +str action
+        +str rationale
+        +list~Example~ examples
+        +int version
+        +datetime created_at
+        +datetime last_refined
+        +list~str~ tags
+        +str parent_id
+        +list~str~ related_ids
+    }
+
+    class Example {
+        +str label
+        +str code
+        +str explanation
+    }
+
+    Lesson "1" --> "*" Example : contains
+    Lesson "0..1" --> "*" Lesson : parent_id
+    Lesson "*" --> "*" Lesson : related_ids
+            </div>
+        </div>
+    </div>
+
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'dark',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            },
+            sequence: {
+                useMaxWidth: true,
+                wrap: true
+            }
+        });
+    </script>
+</body>
+</html>

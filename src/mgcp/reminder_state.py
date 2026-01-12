@@ -46,7 +46,7 @@ def load_state() -> dict:
                     if key not in state:
                         state[key] = value
                 return state
-    except (json.JSONDecodeError, IOError, OSError):
+    except (json.JSONDecodeError, OSError):
         pass
 
     return defaults
@@ -59,7 +59,7 @@ def save_state(state: dict) -> None:
         state["last_updated"] = datetime.now(UTC).isoformat()
         with open(STATE_FILE, "w") as f:
             json.dump(state, f, indent=2)
-    except (IOError, OSError):
+    except OSError:
         pass
 
 

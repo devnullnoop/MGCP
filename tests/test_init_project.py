@@ -482,11 +482,14 @@ class TestClaudeHooks:
         """Should return list of created files."""
         result = init_claude_hooks(temp_project)
 
-        # Creates 3 hook scripts + settings.json = 4 files
-        assert len(result["created"]) == 4
+        # Creates 6 hook scripts + settings.json = 7 files
+        assert len(result["created"]) == 7
         assert any("session-init.py" in f for f in result["created"])
-        assert any("mgcp-reminder.sh" in f for f in result["created"])
-        assert any("mgcp-precompact.sh" in f for f in result["created"])
+        assert any("git-reminder.py" in f for f in result["created"])
+        assert any("catalogue-reminder.py" in f for f in result["created"])
+        assert any("task-start-reminder.py" in f for f in result["created"])
+        assert any("mgcp-reminder.py" in f for f in result["created"])
+        assert any("mgcp-precompact.py" in f for f in result["created"])
         assert any("settings.json" in f for f in result["created"])
 
     def test_hook_script_is_valid_python(self, temp_project):
@@ -713,13 +716,13 @@ class TestIntegration:
 
     def test_idempotent_hooks(self, temp_project):
         """Running hook init twice should be idempotent."""
-        # First run - creates 3 hook scripts + settings.json = 4 files
+        # First run - creates 6 hook scripts + settings.json = 7 files
         result1 = init_claude_hooks(temp_project)
-        assert len(result1["created"]) == 4
+        assert len(result1["created"]) == 7
 
-        # Second run - all should be skipped
+        # Second run - all hooks should be skipped, settings.json skipped too
         result2 = init_claude_hooks(temp_project)
-        assert len(result2["skipped"]) == 4
+        assert len(result2["skipped"]) == 7
         assert len(result2["created"]) == 0
 
 
@@ -890,8 +893,8 @@ class TestCrossPlatformPaths:
         from mgcp.init_project import _claude_code_path
         path = _claude_code_path()
 
-        # Claude Code now uses ~/.claude/settings.json on all platforms
-        assert ".claude" in str(path) and "settings.json" in str(path)
+        # Claude Code uses ~/.claude.json on all platforms
+        assert ".claude.json" in str(path)
 
     def test_darwin_cursor_path(self, monkeypatch, temp_home):
         """macOS Cursor path should be correct."""
@@ -997,8 +1000,8 @@ class TestDryRun:
         """Dry run should not create hook files."""
         result = init_claude_hooks(temp_project, dry_run=True)
 
-        # Would create 3 hook scripts + settings.json = 4 files
-        assert len(result["would_create"]) == 4
+        # Would create 6 hook scripts + settings.json = 7 files
+        assert len(result["would_create"]) == 7
         assert len(result["created"]) == 0
         assert not (temp_project / ".claude").exists()
 

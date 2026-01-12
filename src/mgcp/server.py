@@ -1758,9 +1758,9 @@ async def schedule_reminder(
             lesson_ids="verify-test-results"
         )
     """
-    import time as time_module
 
-    from .reminder_state import get_status, schedule_reminder as do_schedule
+    from .reminder_state import get_status
+    from .reminder_state import schedule_reminder as do_schedule
 
     # If no parameters, just return current status
     if after_calls is None and after_minutes is None and not note and not message:

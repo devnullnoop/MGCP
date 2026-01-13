@@ -275,11 +275,16 @@ This flexibility means MGCP can serve as the memory backbone for any LLM applica
 | `add_workflow_step` | Add a step to a workflow |
 | `link_lesson_to_workflow_step` | Link lesson to workflow step |
 
-### Reminder Control (2 tools)
+### Self-Directed Reminders (2 tools)
+
+The reminder system allows the LLM to schedule reminders for itself during multi-step tasks. When following a workflow like `feature-development` (Research → Plan → Document → Execute → Test → Review), the LLM can schedule a reminder before completing each step to ensure it doesn't skip the next step's lessons when the user simply says "ok" or "continue".
+
+Reminders fire based on hook check counts (user messages) or elapsed time, and can inject specific lessons or workflow steps into the prompt when triggered.
+
 | Tool | Purpose |
 |------|---------|
-| `schedule_reminder` | Schedule self-directed reminders for workflow continuity |
-| `reset_reminder_state` | Reset reminder state to defaults |
+| `schedule_reminder` | Schedule a reminder after N messages or N minutes, with optional lesson/workflow injection |
+| `reset_reminder_state` | Clear any scheduled reminder and reset state to defaults |
 
 ## Web Dashboard
 
@@ -304,8 +309,6 @@ MGCP uses a hybrid storage approach optimized for different access patterns:
 Data is stored in `~/.mgcp/` by default:
 - `lessons.db` - Lessons, project contexts, and usage telemetry
 - `chroma/` - Vector embeddings for semantic search
-
-See the architecture diagram at http://localhost:8765/static/architecture.html (when dashboard is running).
 
 ## Development
 

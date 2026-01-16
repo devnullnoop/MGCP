@@ -120,10 +120,34 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="MGCP Telemetry API",
-    description="REST API and WebSocket for MGCP visualization",
-    version="1.0.0",
+    title="MGCP Web API",
+    description="""
+## Memory Graph Core Primitives - Web API
+
+REST API for managing lessons, projects, and viewing telemetry.
+
+### Key Endpoints
+
+- **Lessons**: CRUD operations for lessons (`/api/lessons`)
+- **Projects**: Project context management (`/api/projects`)
+- **Catalogue**: Project-specific knowledge (`/api/projects/{id}/catalogue`)
+- **Telemetry**: Session and usage data (`/api/sessions`, `/api/timeline`)
+
+### WebSocket
+
+Real-time events at `/ws/events`
+
+### UI Pages
+
+- `/` - Dashboard
+- `/lessons` - Lesson browser
+- `/projects` - Project contexts
+- `/docs` - This API documentation
+""",
+    version="1.1.0",
     lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
 # CORS for local development
@@ -474,12 +498,8 @@ async def delete_project(project_id: str) -> dict[str, Any]:
         return {"error": "Project not found"}
 
     # Delete from database
-    conn = await store._get_conn()
-    try:
+    async with store._connection(commit=True) as conn:
         await conn.execute("DELETE FROM project_contexts WHERE project_id = ?", (project_id,))
-        await conn.commit()
-    finally:
-        await conn.close()
 
     return {"deleted": project_id}
 

@@ -76,6 +76,10 @@ ignore = ["E741"]  # Allow single-letter variables in comprehensions
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (skipped in CI)",
+    "integration: marks tests as integration tests",
+]
 filterwarnings = [
     # aiosqlite background thread cleanup happens after event loop closes - harmless
     "ignore:Exception in thread:pytest.PytestUnhandledThreadExceptionWarning",

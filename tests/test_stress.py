@@ -199,15 +199,18 @@ class TestVectorStoreStress:
             lesson = generate_lesson("generic", i)
             vector_store.add_lesson(lesson)
 
-        # Give ChromaDB time to index (CI environments can be slow)
-        time.sleep(0.5)
-
-        # Search for the specific lesson - use exact trigger terms for reliability
-        results = vector_store.search("quantum entanglement superposition", limit=10)
-        result_ids = [r[0] for r in results]
+        # CI environments can be slow - retry with backoff
+        result_ids = []
+        for attempt in range(5):
+            time.sleep(0.5 * (attempt + 1))  # 0.5s, 1s, 1.5s, 2s, 2.5s
+            results = vector_store.search("quantum entanglement photon", limit=10)
+            result_ids = [r[0] for r in results]
+            if result_ids:  # Found something
+                break
 
         # The specific lesson should be in top results
-        assert "specific-needle" in result_ids, "Specific lesson not found in search results"
+        assert len(result_ids) > 0, "ChromaDB search returned no results after retries"
+        assert "specific-needle" in result_ids, f"Specific lesson not in results: {result_ids[:5]}"
 
 
 class TestGraphStress:

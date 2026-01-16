@@ -1,32 +1,63 @@
 # LLMprint - Memory Graph Core Primitives (MGCP)
 
-**LLMprint** (/ˌɛl-ɛl-ˈɪm-prɪnt/) — *Large Language Imprint*. The lasting impression your LLM develops through persistent memory.
+**Persistent context for stateless LLMs.**
 
 [![License](https://img.shields.io/badge/License-O'Saasy-blue.svg)](https://osaasy.dev/)
 [![Python](https://img.shields.io/badge/Python-3.11%20|%203.12-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-> **⚠️ Alpha Software / Research Project** — This is a research project exploring ways to extend and improve LLM interactions through persistent memory. We're dogfooding it daily as we build it, which means things work but may change rapidly. APIs are not stable, data formats may evolve, and you might hit rough edges. If you're comfortable with that, welcome aboard! Feedback and bug reports are appreciated.
+> **⚠️ Alpha Software** — Actively dogfooding as we build. Working, but APIs may change.
 
-**Persistent, graph-based memory for LLM interactions via the Model Context Protocol.**
+## The Core Problem
 
-MGCP solves a fundamental problem with LLM assistants: **they forget everything between sessions**. Every conversation starts from zero. Lessons learned, project context, architectural decisions—all lost.
+LLMs are stateless. Every session starts from zero. The AI that helped you debug authentication yesterday has no memory of it today. Lessons learned, project context, architectural decisions—gone.
 
-MGCP gives your LLM a persistent memory that:
-- **Remembers lessons** learned across all your projects
-- **Stores project context** so sessions can resume seamlessly
-- **Uses semantic search** to surface relevant knowledge at the right time
-- **Builds a knowledge graph** of interconnected lessons
+You've probably experienced this: explaining the same codebase structure repeatedly, watching the AI make a mistake you corrected last week, or losing important context when a session ends.
 
-## The Problem
+## What MGCP Does
 
-Without persistent memory, LLMs:
-- Re-learn the same lessons in every session
-- Lose track of project decisions and context
-- Can't transfer knowledge between projects
-- Require expensive full-context loading from static files
+MGCP gives your LLM **persistent context that survives session boundaries**.
 
-## The Solution
+```
+Session 1: LLM encounters a bug → adds lesson → stored in database
+
+Session 2: LLM has no memory of Session 1
+         → Hook fires: "query lessons before coding"
+         → Semantic search returns relevant lesson
+         → Bug avoided
+```
+
+**The primary audience is the LLM, not you.** You configure the system; the LLM reads from and writes to it. The knowledge persists even though the LLM doesn't.
+
+### What makes this powerful:
+
+- **Semantic search** finds relevant lessons without exact keyword matches
+- **Graph relationships** surface connected knowledge together
+- **Workflows** ensure multi-step processes aren't shortcut
+- **Hooks** make it proactive—reminders fire automatically at key moments
+- **Project isolation** keeps context separate per codebase
+
+### What this is NOT:
+
+- Not "AI that learns" — lessons are added explicitly
+- Not self-improving — you/the LLM improve it by adding better content
+- Not magic — it's structured context injection with good tooling
+
+**Honest framing:** This is a persistent knowledge store with semantic search, workflow orchestration, and proactive reminders. The value is *continuity*—accumulated guidance that shapes LLM behavior across sessions.
+
+## Real Value Delivered
+
+In active use, MGCP has:
+
+- **Caught bugs before they happened** — lessons from past mistakes surface before repeating them
+- **Kept documentation in sync** — workflow steps enforce doc review before commits
+- **Maintained project context** — picking up exactly where the last session left off
+- **Enforced quality gates** — workflows with checklists prevent skipped steps
+- **Preserved architectural decisions** — rationale survives session boundaries
+
+The system isn't intelligent. But an LLM with accumulated context *behaves* more intelligently than one starting fresh every time.
+
+## How It Works
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/architecture-dark.png">
@@ -34,85 +65,86 @@ Without persistent memory, LLMs:
   <img alt="MGCP Architecture" src="docs/screenshots/architecture-dark.png" width="700">
 </picture>
 
-MGCP provides **34 MCP tools** that let your LLM:
-- Query relevant lessons semantically before starting any task
-- Store new lessons as they're discovered
-- Traverse related knowledge through the graph
-- Save and restore project-specific context between sessions
+| Component | Purpose |
+|-----------|---------|
+| **SQLite** | Lessons, project contexts, telemetry |
+| **ChromaDB** | Vector embeddings for semantic search |
+| **NetworkX** | In-memory graph for relationship traversal |
+| **MCP Protocol** | Native integration with LLM clients |
+| **Hooks** | Proactive reminders at key moments |
 
-## Why MGCP Instead of Custom Agents?
+## Key Concepts
 
-Many developers try to solve the "LLM forgetting things" problem by building custom agents—specialized prompts with baked-in knowledge for specific tasks. A "code review agent" with review guidelines. A "debugging agent" with troubleshooting steps.
+### Lessons
+Knowledge with triggers and actions:
+```
+id: "verify-method-exists"
+trigger: "api endpoint, database call, store method"
+action: "BEFORE calling any method, verify it exists in the class"
+rationale: "We once shipped code calling store._get_conn() which didn't exist"
+```
 
-**The insight: MGCP already does what custom agents would do—without the extra abstraction layer.**
+When the LLM queries "working on api endpoint", this lesson surfaces.
 
-| Approach | Custom Agents | MGCP |
-|----------|--------------|------|
-| Task-specific guidance | Baked into agent prompt | Query lessons by task type |
-| Learning from mistakes | Manually update agent prompt | Add lesson, immediately available |
-| Cross-task knowledge | Duplicate across agents | Single lesson, surfaces everywhere |
-| Refinement | Edit prompt, redeploy | Refine lesson, instant update |
-| Complexity | Agent orchestration layer | Just queries |
+### Workflows
+Step-by-step processes with linked lessons:
+```
+workflow: api-endpoint-development
+steps:
+  1. Design → linked lessons: [api-contract, error-responses]
+  2. Implement → linked lessons: [verify-method-exists]
+  3. Test → linked lessons: [manual-ui-test-required]
+  4. Document → linked lessons: [update-openapi]
+```
 
-When you query `"code review best practices"`, you get code review lessons. Query `"debugging authentication"`, you get those lessons. The knowledge surfaces based on context, not agent selection.
+Each step surfaces relevant guidance. Checklists prevent skipping.
 
-**The benefits:**
-- **No prompt engineering fragility** — Lessons are data, not delicate prompt text
-- **No synchronization problem** — One source of truth, not knowledge duplicated across agents
-- **Immediate learning** — Add a lesson now, it's available in 10 seconds
-- **Composable knowledge** — Lessons combine naturally; agents require explicit orchestration
+### Project Context
+Per-project state that persists:
+- **Todos** with status (pending/in_progress/completed/blocked)
+- **Decisions** with rationale (why we chose X over Y)
+- **Catalogue** (architecture notes, security concerns, conventions)
+- **Active files** being worked on
 
-If you're spending time building custom agents to encode task-specific knowledge, consider whether MGCP's lesson system already solves your problem more simply.
+Session 47 knows what Session 46 was doing.
+
+### Reminders
+Self-directed prompts for multi-step work:
+```python
+schedule_reminder(
+    after_calls=2,
+    message="EXECUTE the Test step before responding",
+    workflow_step="api-endpoint-development/test"
+)
+```
+
+The LLM reminds itself to not skip steps.
 
 ## Screenshots
 
 ### Knowledge Graph Dashboard
-Interactive visualization of your lesson network with real-time updates, usage heatmaps, and neural firing animations.
-
+Interactive visualization with usage heatmaps and real-time updates.
 ![Dashboard](docs/screenshots/dashboard.png)
 
 ### Lesson Management
-Browse, search, and manage your lessons with hierarchical organization and relationship tracking.
-
+Browse, search, and manage lessons with relationship tracking.
 ![Lessons](docs/screenshots/lessons.png)
 
 ### Project Catalogue
-Store project-specific knowledge: architecture notes, security concerns, coding conventions, file couplings, and decisions.
-
+Architecture notes, security concerns, conventions, decisions.
 ![Projects](docs/screenshots/projects.png)
 
 ## Quick Start
 
-### 1. Install MGCP (one time)
+### 1. Install
 
 ```bash
 git clone https://github.com/devnullnoop/MGCP.git
 cd MGCP
-
-# Create and activate a virtual environment
 python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Option A: Use the install helper (recommended - checks for issues first)
+source .venv/bin/activate
 python check_install.py --install
-
-# Option B: Manual installation
-pip install --upgrade pip
-pip install -e ".[dev]"
-mgcp-bootstrap
 ```
-
-The `check_install.py` script verifies Python version, pip version, and virtual environment before installing. It will auto-fix pip if needed and provide clear guidance for any issues.
-
-> **Note**: Using a virtual environment avoids dependency conflicts with other packages.
->
-> **Intel Mac / Older Systems**: If you see `metadata-generation-failed` errors, your pip is too old and trying to build packages from source. Run these commands in order:
-> ```bash
-> pip install --upgrade pip setuptools wheel
-> pip install -e ".[dev]"
-> ```
->
-> **Conda users**: If you see `"setup.py" not found` errors, run `pip install --upgrade pip` first. Conda environments often have older pip versions that don't support modern Python packaging.
 
 ### 2. Configure Your LLM Client
 
@@ -120,305 +152,148 @@ The `check_install.py` script verifies Python version, pip version, and virtual 
 mgcp-init
 ```
 
-This auto-detects installed clients and configures them. Or specify manually:
+Supports: Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Continue, Cline, Sourcegraph Cody
+
+### 3. Start Using
+
+Restart your LLM client. MGCP tools are now available.
 
 ```bash
-mgcp-init --client claude-code    # Claude Code only
-mgcp-init --client cursor         # Cursor only
-mgcp-init --client all            # All supported clients
-mgcp-init --list                  # Show supported clients
-```
-
-**Supported clients:** Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Continue, Cline, Sourcegraph Cody
-
-Restart your LLM client, and MGCP is ready to use.
-
-> **Claude Code Users**: The init command also creates project hooks that remind the AI to save lessons throughout the session. See [Claude Code Hooks](#claude-code-hooks) for details.
-
-### 3. (Optional) Start the Dashboard
-
-```bash
+# Optional: Start the dashboard
 mgcp-dashboard
-# Opens http://127.0.0.1:8765
 ```
 
-## Features
+## MCP Tools (34 total)
 
-### Lesson Memory
-- **Semantic Search**: Find relevant lessons using natural language queries
-- **Graph Traversal**: Explore connected knowledge through typed relationships
-- **Hierarchical Organization**: Parent/child lesson categories
-- **Typed Relationships**: prerequisite, alternative, complements, specializes, etc.
-- **Usage Tracking**: Lessons surface based on actual retrieval patterns
+### Lesson Discovery (5)
+| Tool | Purpose |
+|------|---------|
+| `query_lessons` | Semantic search for relevant lessons |
+| `get_lesson` | Get full lesson details |
+| `spider_lessons` | Traverse related lessons |
+| `list_categories` | Browse lesson hierarchy |
+| `get_lessons_by_category` | Get lessons in a category |
 
-### Project Context
-- **Session Continuity**: Pick up exactly where you left off
-- **Todo Tracking**: Persistent todos that survive session boundaries
-- **Decision History**: Remember architectural choices and their rationale
-- **Active Files**: Track which files you're currently working on
+### Lesson Management (3)
+| Tool | Purpose |
+|------|---------|
+| `add_lesson` | Create a new lesson |
+| `refine_lesson` | Improve existing lesson |
+| `link_lessons` | Create typed relationships |
 
-### Project Catalogue
-- **Architecture Notes**: Document patterns and gotchas
-- **Security Tracking**: Track vulnerabilities with severity and status
-- **Coding Conventions**: Store naming rules and style guides
-- **File Couplings**: Know which files typically change together
-- **Error Patterns**: Common errors and their solutions
+### Project Context (5)
+| Tool | Purpose |
+|------|---------|
+| `get_project_context` | Load saved context |
+| `save_project_context` | Persist for next session |
+| `add_project_todo` | Add todo item |
+| `update_project_todo` | Update todo status |
+| `list_projects` | List all projects |
 
-## Beyond Software Development
+### Project Catalogue (11)
+| Tool | Purpose |
+|------|---------|
+| `search_catalogue` | Semantic search catalogue |
+| `add_catalogue_arch_note` | Architecture notes/gotchas |
+| `add_catalogue_security_note` | Security concerns |
+| `add_catalogue_dependency` | Track dependencies |
+| `add_catalogue_convention` | Coding conventions |
+| `add_catalogue_coupling` | File dependencies |
+| `add_catalogue_decision` | Decisions with rationale |
+| `add_catalogue_error_pattern` | Error solutions |
+| `add_catalogue_custom_item` | Flexible custom items |
+| `remove_catalogue_item` | Remove item |
+| `get_catalogue_item` | Get item details |
 
-**MGCP's architecture is domain-agnostic.** The bootstrap lessons we ship focus on software development because that's our primary use case, but the underlying system works for any domain where an LLM benefits from persistent, contextual memory.
+### Workflows (8)
+| Tool | Purpose |
+|------|---------|
+| `list_workflows` | List available workflows |
+| `query_workflows` | Match task to workflow |
+| `get_workflow` | Get workflow with steps |
+| `get_workflow_step` | Get step with lessons |
+| `create_workflow` | Create workflow |
+| `update_workflow` | Update workflow |
+| `add_workflow_step` | Add step |
+| `link_lesson_to_workflow_step` | Link lesson to step |
 
-The core primitives are universal:
-- **Lessons**: Knowledge with triggers ("when X") and actions ("do Y") - works for any domain
-- **Workflows**: Step-by-step processes with contextual guidance - works for any process
-- **Catalogue**: Context-specific knowledge - works for any bounded context
-- **Relationships**: Connected knowledge that surfaces together - works for any knowledge graph
+### Reminders (2)
+| Tool | Purpose |
+|------|---------|
+| `schedule_reminder` | Schedule self-reminder |
+| `reset_reminder_state` | Clear reminders |
 
-### Alternative Bootstrap Examples
+## Claude Code Hooks
 
-| Domain | Bootstrap Focus |
-|--------|-----------------|
-| **Customer Service** | Escalation triggers, issue resolution patterns, customer preference learning |
-| **Personal Assistant** | User preferences, scheduling patterns, communication style, recurring tasks |
-| **Medical Triage** | Symptom assessment workflows, urgency classification, follow-up protocols |
-| **Sales** | Objection handling, customer profiling, deal stage guidance, competitive intelligence |
-| **Education** | Learning style adaptation, concept explanation strategies, progress tracking |
-| **Legal** | Document review workflows, clause risk patterns, precedent lookup |
-| **Research** | Literature review workflows, methodology checklists, citation patterns |
+Hooks make the system proactive:
 
-### Building Your Own Bootstrap
+| Hook | Trigger | Purpose |
+|------|---------|---------|
+| `session-init.py` | Session start | Load context, query lessons |
+| `git-reminder.py` | "commit", "push" | Query git lessons first |
+| `task-start-reminder.py` | "fix", "implement" | Activate relevant workflow |
+| `catalogue-reminder.py` | Library/security mentions | Remind to catalogue |
+| `mgcp-precompact.py` | Before compression | Save before context lost |
 
-To create a domain-specific MGCP deployment:
-
-1. **Fork the bootstrap**: Copy `src/mgcp/bootstrap.py` and replace the lessons
-2. **Define your lessons**: Create lessons with domain-specific triggers and actions
-3. **Build workflows**: Encode your domain's common processes as workflows
-4. **Link knowledge**: Create relationships between related concepts
-
-The same `query_lessons`, `get_workflow`, and `save_project_context` tools work regardless of domain. The semantic search finds relevant knowledge based on the query, not based on hard-coded assumptions about what you're doing.
-
-**Example: A chatbot personalization bootstrap might include:**
-- Lessons about conversation style preferences ("When user prefers formal language, avoid slang and contractions")
-- Workflows for onboarding new users ("Introduce features gradually, not all at once")
-- Catalogue items for user-specific facts ("User's timezone is PST, prefers morning scheduling")
-
-This flexibility means MGCP can serve as the memory backbone for any LLM application that benefits from learning over time.
+Without hooks, the LLM must remember to query. With hooks, it happens automatically.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `mgcp-init` | Configure MGCP for your LLM client (auto-detects installed clients) |
-| `mgcp-init --client X` | Configure specific client (use `--list` to see all 8 supported clients) |
-| `mgcp-init --verify` | Verify MGCP setup is working correctly |
-| `mgcp-init --doctor` | Diagnose Claude Code MCP configuration issues |
-| `mgcp-init --project-config` | Also configure project-specific MCP server in ~/.claude.json |
-| `mgcp` | Start MCP server (use `mgcp --help` for options) |
-| `mgcp-bootstrap` | Seed database with initial lessons |
-| `mgcp-dashboard` | Start web dashboard on port 8765 |
-| `mgcp-export lessons -o FILE` | Export all lessons to JSON |
-| `mgcp-import FILE` | Import lessons from JSON |
-| `mgcp-duplicates` | Find duplicate lessons by semantic similarity |
-| `mgcp-backup` | Backup data to archive (use `--restore` to restore) |
+| `mgcp-init` | Configure for your LLM client |
+| `mgcp` | Start MCP server |
+| `mgcp-bootstrap` | Seed initial lessons |
+| `mgcp-dashboard` | Start web UI |
+| `mgcp-export` | Export lessons |
+| `mgcp-import` | Import lessons |
+| `mgcp-duplicates` | Find duplicates |
+| `mgcp-backup` | Backup/restore |
 
-## MCP Tools Reference
+## API & Dashboard
 
-### Lesson Discovery & Retrieval (5 tools)
-| Tool | Purpose |
-|------|---------|
-| `query_lessons` | Semantic search for relevant lessons |
-| `get_lesson` | Get full lesson details by ID |
-| `spider_lessons` | Traverse related lessons from a starting point |
-| `list_categories` | Browse top-level lesson categories |
-| `get_lessons_by_category` | Get lessons under a category |
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/health` | Health check |
+| `GET /api/lessons` | All lessons |
+| `GET /api/projects` | All projects |
+| `GET /api/graph` | Graph visualization data |
+| `GET /docs` | OpenAPI documentation |
+| `WS /ws/events` | Real-time events |
 
-### Lesson Management (3 tools)
-| Tool | Purpose |
-|------|---------|
-| `add_lesson` | Create a new lesson |
-| `refine_lesson` | Improve an existing lesson |
-| `link_lessons` | Create typed relationships between lessons |
+## Beyond Software Development
 
-### Project Context (5 tools)
-| Tool | Purpose |
-|------|---------|
-| `get_project_context` | Load saved context for a project |
-| `save_project_context` | Persist context for next session |
-| `add_project_todo` | Add a todo item |
-| `update_project_todo` | Update todo status |
-| `list_projects` | List all tracked projects |
+The architecture is domain-agnostic. Replace our bootstrap with:
 
-### Project Catalogue (11 tools)
-| Tool | Purpose |
-|------|---------|
-| `search_catalogue` | Semantic search across catalogue items |
-| `add_catalogue_arch_note` | Add architecture note/gotcha |
-| `add_catalogue_security_note` | Add security consideration |
-| `add_catalogue_dependency` | Track framework/library/tool |
-| `add_catalogue_convention` | Document coding conventions |
-| `add_catalogue_coupling` | Record file dependencies |
-| `add_catalogue_decision` | Document decisions with rationale |
-| `add_catalogue_error_pattern` | Record error solutions |
-| `add_catalogue_custom_item` | Add flexible custom catalogue item |
-| `remove_catalogue_item` | Remove a catalogue item |
-| `get_catalogue_item` | Get full item details |
+| Domain | Example Lessons |
+|--------|-----------------|
+| **Customer Service** | Escalation triggers, resolution patterns |
+| **Sales** | Objection handling, deal stage guidance |
+| **Medical** | Symptom assessment, triage protocols |
+| **Legal** | Document review, clause risk patterns |
+| **Education** | Learning adaptation, concept explanations |
 
-### Workflows (8 tools)
-| Tool | Purpose |
-|------|---------|
-| `list_workflows` | List all available workflows |
-| `query_workflows` | Semantic match task to workflows |
-| `get_workflow` | Get workflow with all steps and linked lessons |
-| `get_workflow_step` | Get step details with expanded lessons |
-| `create_workflow` | Create a new workflow |
-| `update_workflow` | Update workflow metadata/triggers |
-| `add_workflow_step` | Add a step to a workflow |
-| `link_lesson_to_workflow_step` | Link lesson to workflow step |
-
-### Self-Directed Reminders (2 tools)
-
-The reminder system allows the LLM to schedule reminders for itself during multi-step tasks. When following a workflow like `feature-development` (Research → Plan → Document → Execute → Test → Review), the LLM can schedule a reminder before completing each step to ensure it doesn't skip the next step's lessons when the user simply says "ok" or "continue".
-
-Reminders fire based on hook check counts (user messages) or elapsed time, and can inject specific lessons or workflow steps into the prompt when triggered.
-
-| Tool | Purpose |
-|------|---------|
-| `schedule_reminder` | Schedule a reminder after N messages or N minutes, with optional lesson/workflow injection |
-| `reset_reminder_state` | Clear any scheduled reminder and reset state to defaults |
-
-## Web Dashboard
-
-The dashboard provides visualization and management of your knowledge graph:
-
-- **Interactive Graph**: Force-directed visualization of lesson relationships
-- **Usage Heatmap**: Color-coded nodes showing retrieval frequency
-- **Session History**: Timeline of queries and retrievals
-- **Project Browser**: View and edit project contexts
-- **Real-time Updates**: WebSocket-powered live event stream
-
-## Architecture
-
-MGCP uses a hybrid storage approach optimized for different access patterns:
-
-| Storage | Purpose |
-|---------|---------|
-| **SQLite** | Structured data (lessons, contexts, telemetry) |
-| **ChromaDB** | Vector embeddings for semantic search |
-| **NetworkX** | In-memory graph for relationship traversal |
-
-Data is stored in `~/.mgcp/` by default:
-- `lessons.db` - Lessons, project contexts, and usage telemetry
-- `chroma/` - Vector embeddings for semantic search
-
-## Development
-
-```bash
-# Create virtual environment (if not already done)
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install dev dependencies
-pip3 install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Run specific test
-pytest tests/test_basic.py::TestLessonStore
-
-# Run linter
-ruff check src/
-
-# Start MCP server directly
-python3 -m mgcp.server
-
-# Start web dashboard
-python3 -m mgcp.web_server
-```
+Same tools, different content.
 
 ## Project Status
 
 | Phase | Status |
 |-------|--------|
-| Phase 1: Basic Storage & Retrieval | Complete |
-| Phase 2: Semantic Search | Complete |
-| Phase 3: Graph Traversal | Complete |
-| Phase 4: Refinement & Learning | Complete |
-| Phase 5: Quality of Life | Complete |
-| Phase 6: Proactive Intelligence | Planned |
-
-### Phase 5 Features (Complete)
-- [x] Multi-client support (8 clients: Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Continue, Cline, Cody)
-- [x] Export/import lessons (`mgcp-export`, `mgcp-import`)
-- [x] Duplicate lesson detection (`mgcp-duplicates`)
-- [x] Backup and restore (`mgcp-backup`, `mgcp-backup --restore`)
-- [x] Auto-tagging suggestions (`suggest_tags` in data_ops)
-- [x] Lesson usage analytics dashboard (heatmap visualization)
-- [x] Project deduplication migration (unique constraint on project_path)
-
-### Phase 6 Features (Planned)
-- Auto-suggest lessons from conversations
-- Feedback loop (track which lessons were helpful)
-- Git integration (parse commits/PRs for learnings)
-- Cross-project global lessons
-- Lesson templates (Error→Solution, Gotcha→Workaround)
-- Lesson quality scoring
-
-## API Endpoints
-
-The dashboard exposes a REST API for integration:
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/health` | Health check |
-| `GET /api/lessons` | Get all lessons |
-| `GET /api/lessons/{id}` | Get specific lesson |
-| `PUT /api/lessons/{id}` | Update lesson |
-| `DELETE /api/lessons/{id}` | Delete lesson |
-| `GET /api/graph` | Get graph data for visualization |
-| `GET /api/projects` | List all projects |
-| `GET /api/projects/{id}` | Get project context |
-| `GET /api/sessions` | Get session history |
-| `WS /ws/events` | Real-time event stream |
-
-## Claude Code Hooks
-
-For Claude Code users, `mgcp-init` creates project-level hooks that help the AI remember to use MGCP throughout the session:
-
-| Hook | Trigger | Purpose |
-|------|---------|---------|
-| `session-init.py` | Session start | Prompts AI to load project context and query relevant lessons |
-| `git-reminder.py` | User mentions "commit", "push", "git" | Reminds AI to query lessons before git operations |
-| `catalogue-reminder.py` | User mentions libraries, security, decisions | Reminds AI to catalogue dependencies, security notes, decisions |
-| `task-start-reminder.py` | User says "fix", "implement", "work on" | Reminds AI to query lessons and workflows before starting tasks |
-| `mgcp-reminder.py` | After Edit/Write | Short reminder to save lessons when learning something new |
-| `mgcp-precompact.py` | Before context compression | **Critical** reminder to save all lessons before context is lost |
-
-All hooks are Python scripts for cross-platform compatibility (Windows, macOS, Linux).
-
-These hooks are created in your project's `.claude/` directory:
-```
-.claude/
-├── hooks/
-│   ├── session-init.py
-│   ├── git-reminder.py
-│   ├── catalogue-reminder.py
-│   ├── task-start-reminder.py
-│   ├── mgcp-reminder.py
-│   └── mgcp-precompact.py
-└── settings.json
-```
-
-The hooks ensure the AI actively uses MGCP rather than forgetting about it mid-session.
+| Basic Storage & Retrieval | ✅ Complete |
+| Semantic Search | ✅ Complete |
+| Graph Traversal | ✅ Complete |
+| Refinement & Learning | ✅ Complete |
+| Quality of Life | ✅ Complete |
+| Proactive Intelligence | 🔄 In Progress |
 
 ## Contributing
 
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-[O'Saasy License](https://osaasy.dev/) - Free to use, modify, and distribute. Commercial SaaS rights reserved by the copyright holder. See [LICENSE.md](LICENSE.md) for details.
+[O'Saasy License](https://osaasy.dev/) — Free to use, modify, distribute.
 
 ---
 
-Built with the [Model Context Protocol](https://modelcontextprotocol.io/) for seamless LLM integration.
+Built with the [Model Context Protocol](https://modelcontextprotocol.io/).

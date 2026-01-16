@@ -192,11 +192,18 @@ CORE_LESSONS = [
     ),
     Lesson(
         id="workflow-links-for-process-guidance",
-        trigger="workflow, process, step-by-step, checklist, review workflow",
-        action="To add guidance to a workflow step, use link_lesson_to_workflow_step - don't create new lessons just for workflows. Workflows aggregate existing lessons at the right moments. Check get_workflow first to see what lessons are already linked.",
+        trigger="workflow, process, step-by-step, checklist, review workflow, link lesson to step",
+        action="To add guidance to a workflow step, use link_lesson_to_workflow_step(workflow_id, step_id, lesson_id, relevance, priority) - don't create new lessons just for workflows. Workflows aggregate existing lessons at the right moments. Check get_workflow first to see what lessons are already linked.",
         rationale="Workflows are process templates. They don't contain knowledge themselves - they reference lessons that apply at each step. This keeps knowledge DRY and allows lessons to be reused across multiple workflows.",
         parent_id="mgcp-knowledge-storage-types",
         tags=["mgcp", "workflows", "knowledge-management"],
+        examples=[
+            Example(
+                label="good",
+                code="# Adding security lesson to code review step\nlink_lesson_to_workflow_step(\n    workflow_id='feature-development',\n    step_id='review',\n    lesson_id='validate-user-input',\n    relevance='Input validation must be checked during code review',\n    priority=1  # 1=critical, always show\n)",
+                explanation="Links existing lesson to workflow step with context for when it applies",
+            ),
+        ],
     ),
 
     # =========================================================================
@@ -234,6 +241,36 @@ CORE_LESSONS = [
                 label="good",
                 code="# User: 'Fix the authentication bug'\nquery_lessons('debugging authentication issues')\n# Now debug with relevant lessons in mind",
                 explanation="Query first surfaces relevant debugging lessons and project-specific auth notes",
+            ),
+        ],
+    ),
+    Lesson(
+        id="mgcp-todo-tracking",
+        trigger="todo, task, track progress, step by step, multi-step, work items, backlog, pending tasks",
+        action="For multi-step tasks or work that spans sessions, use add_project_todo to create persistent items and update_project_todo to mark progress (pending/in_progress/completed/blocked). MGCP todos persist in project context across sessions, unlike in-conversation TodoWrite which resets each session.",
+        rationale="MGCP todos are project-scoped and persist across sessions. Use them for work items that may span multiple sessions, technical debt to address later, or backlog items discovered during work. TodoWrite is for within-session tracking; MGCP todos are for cross-session tracking.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "todos", "session", "tracking"],
+        examples=[
+            Example(
+                label="good",
+                code="# Discovered during work: 'auth module needs refactoring'\nadd_project_todo(\n    project_path='/path/to/project',\n    todo='Refactor auth module - extract token validation',\n    priority=3,\n    notes='Blocked by: need to add tests first'\n)\n# Later, when starting work:\nupdate_project_todo(project_path, todo_index=0, status='in_progress')",
+                explanation="Persistent todo survives session end and appears in next session's context",
+            ),
+        ],
+    ),
+    Lesson(
+        id="mgcp-multi-project",
+        trigger="switch project, other project, list projects, which projects, multiple projects, different codebase",
+        action="Use list_projects to see all tracked projects with their last-accessed dates. Each project has isolated context (todos, catalogue, decisions). Switch projects by calling get_project_context with the new project path. Never mix project-specific knowledge between codebases.",
+        rationale="MGCP tracks multiple projects independently. Knowing which projects exist helps when working across codebases. Each project's catalogue and todos are isolated - switching projects loads the correct context automatically.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "projects", "context", "switching"],
+        examples=[
+            Example(
+                label="good",
+                code="# Starting work, unsure which project\nlist_projects()\n# Returns: project-a (last: 2h ago), project-b (last: 3d ago)\nget_project_context(project_path='/path/to/project-a')\n# Now working with project-a's todos, decisions, catalogue",
+                explanation="List projects to see available contexts, then load the right one",
             ),
         ],
     ),
@@ -293,12 +330,34 @@ CORE_LESSONS = [
         tags=["mgcp", "graph", "traversal", "exploration"],
     ),
     Lesson(
+        id="mgcp-browse-lesson-hierarchy",
+        trigger="browse lessons, explore lessons, what lessons exist, categories, find lessons, discover lessons, lesson tree",
+        action="Use list_categories to see top-level lesson categories, then get_lessons_by_category(category_id) to drill down into each category. This is better than query_lessons when exploring unknown territory or understanding what knowledge exists.",
+        rationale="query_lessons works when you know what you need. Browsing via categories works when discovering what's available. The hierarchical structure organizes lessons by topic for systematic exploration.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "graph", "browsing", "discovery"],
+        examples=[
+            Example(
+                label="good",
+                code="# Exploring available lessons\nlist_categories()  # Returns: security, verification, mgcp, git-practices, etc.\nget_lessons_by_category('security')  # Returns all security lessons",
+                explanation="Systematic browsing reveals lesson structure without needing search terms",
+            ),
+        ],
+    ),
+    Lesson(
         id="mgcp-verify-storage",
         trigger="did it save, was it stored, confirm, verify, check it worked",
-        action="After adding or refining knowledge, verify it was stored correctly: (1) For lessons: query_lessons with terms that should match, (2) For catalogue items: search_catalogue or get_catalogue_item to confirm. This closes the feedback loop.",
+        action="After adding or refining knowledge, verify it was stored correctly: (1) For lessons: query_lessons with terms that should match, (2) For catalogue items: search_catalogue for semantic search or get_catalogue_item(project_path, item_type, identifier) for exact retrieval. This closes the feedback loop and confirms the knowledge will surface when needed.",
         rationale="Storage can fail silently or store differently than expected. Verification confirms the knowledge will surface when needed and catches issues immediately.",
         parent_id="mgcp-usage",
         tags=["mgcp", "verification", "feedback", "quality"],
+        examples=[
+            Example(
+                label="good",
+                code="# After adding a security note\nadd_catalogue_security_note(...)\n# Verify with exact retrieval\nget_catalogue_item(\n    project_path='/path/to/project',\n    item_type='security',\n    identifier='SQL injection in login form'\n)\n# Or verify with semantic search\nsearch_catalogue(query='security injection')",
+                explanation="Verify with either exact retrieval or semantic search",
+            ),
+        ],
     ),
 
     # =========================================================================
@@ -342,6 +401,36 @@ CORE_LESSONS = [
         rationale="Dependencies are project-specific context. Recording why a library was chosen and how it's used helps future sessions understand the codebase and make informed decisions about updates.",
         parent_id="mgcp-usage",
         tags=["mgcp", "catalogue", "dependencies"],
+    ),
+    Lesson(
+        id="mgcp-custom-catalogue-items",
+        trigger="custom catalogue, flexible catalogue, api endpoint, env var, feature flag, custom type, project-specific type",
+        action="Use add_catalogue_custom_item when built-in types (arch, security, convention, coupling, decision, error, dependency) don't fit your needs. You define the item_type (e.g., 'api_endpoint', 'env_var', 'feature_flag', 'migration'). Use metadata for structured key-value pairs and tags for searchability.",
+        rationale="Not all project knowledge fits predefined categories. Custom items allow project-specific ontologies - track API endpoints, environment variables, feature flags, or any domain-specific concepts unique to your project.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "catalogue", "custom", "flexible"],
+        examples=[
+            Example(
+                label="good",
+                code="# Track API endpoints with custom metadata\nadd_catalogue_custom_item(\n    project_path='/path/to/project',\n    item_type='api_endpoint',\n    title='POST /api/users',\n    content='Creates a new user account. Requires admin role.',\n    metadata='method=POST,auth=admin,rate_limit=100/hour',\n    tags='users,admin,write'\n)",
+                explanation="Custom type with structured metadata for domain-specific tracking",
+            ),
+        ],
+    ),
+    Lesson(
+        id="mgcp-catalogue-cleanup",
+        trigger="remove catalogue, delete catalogue, outdated catalogue, stale catalogue, clean up catalogue, obsolete entry",
+        action="Use remove_catalogue_item to delete obsolete entries from the project catalogue. Specify the item_type (arch, security, convention, coupling, decision, error, or custom type) and identifier (title for notes/decisions, name for dependencies). Keep the catalogue current to prevent outdated knowledge from misleading future sessions.",
+        rationale="Catalogues grow stale as projects evolve. Outdated entries are worse than no entries - they actively mislead. Removing obsolete items maintains knowledge quality and prevents confusion.",
+        parent_id="mgcp-usage",
+        tags=["mgcp", "catalogue", "cleanup", "maintenance"],
+        examples=[
+            Example(
+                label="good",
+                code="# Remove outdated decision after migration\nremove_catalogue_item(\n    project_path='/path/to/project',\n    item_type='decision',\n    identifier='Use MySQL for database'  # Now using PostgreSQL\n)\n# Add the new decision\nadd_catalogue_decision(\n    project_path='/path/to/project',\n    title='Use PostgreSQL for database',\n    decision='Migrated from MySQL to PostgreSQL',\n    rationale='Better JSON support, needed for new features'\n)",
+                explanation="Remove stale entry, add current one - keeps catalogue accurate",
+            ),
+        ],
     ),
 
     # =========================================================================
@@ -456,6 +545,21 @@ CORE_LESSONS = [
         rationale="Workflows can span multiple sessions. Without explicit resume logic, a new session might start the workflow over or skip remaining steps.",
         parent_id="mgcp-workflow-management",
         tags=["mgcp", "workflow", "session", "continuity"],
+    ),
+    Lesson(
+        id="mgcp-reminder-reset",
+        trigger="reminder stuck, reminder broken, reminder keeps firing, reset reminder, clear reminder, reminder malfunction",
+        action="Use reset_reminder_state to clear all scheduled reminders and return to defaults. Use this when: (1) Reminders fire unexpectedly or repeatedly, (2) You need to cancel a scheduled reminder, (3) The reminder system seems stuck or confused. After reset, you can schedule fresh reminders as needed.",
+        rationale="Reminders can get into unexpected states - firing when they shouldn't, not firing when they should, or creating confusion. Reset provides a clean slate to recover from reminder system issues.",
+        parent_id="schedule-reminder-at-step-end",
+        tags=["mgcp", "reminders", "recovery", "maintenance"],
+        examples=[
+            Example(
+                label="good",
+                code="# Reminder keeps firing about a workflow step already completed\n# Or reminder scheduled for wrong task\nreset_reminder_state()\n# Now schedule correct reminder\nschedule_reminder(\n    after_calls=1,\n    message='EXECUTE next step NOW',\n    workflow_step='feature-development/test'\n)",
+                explanation="Reset clears stuck state, then schedule fresh reminder",
+            ),
+        ],
     ),
 
     # =========================================================================
@@ -745,4 +849,37 @@ CORE_RELATIONSHIPS = [
     ("mgcp-workflow-feedback", "mgcp-create-custom-workflows", "related", "Both concern workflow improvement"),
     ("mgcp-continuous-improvement", "mgcp-check-before-adding", "complements", "Quality review and duplicate checking"),
     ("mgcp-continuous-improvement", "mgcp-refine-not-duplicate", "related", "Both concern knowledge quality"),
+
+    # New lesson relationships (Session 30)
+    # Hierarchical browsing
+    ("mgcp-usage", "mgcp-browse-lesson-hierarchy", "prerequisite", "Understand MGCP before browsing lessons"),
+    ("mgcp-browse-lesson-hierarchy", "mgcp-spider-for-context", "complements", "Browsing and spidering are complementary discovery methods"),
+    ("mgcp-browse-lesson-hierarchy", "mgcp-query-before-action", "alternative", "Browse for discovery, query for specific needs"),
+
+    # Todo tracking
+    ("mgcp-usage", "mgcp-todo-tracking", "prerequisite", "Understand MGCP before todo tracking"),
+    ("mgcp-todo-tracking", "mgcp-save-on-shutdown", "complements", "Todos persist in project context saved on shutdown"),
+    ("mgcp-todo-tracking", "mgcp-session-start", "related", "Todos load at session start via get_project_context"),
+
+    # Multi-project
+    ("mgcp-usage", "mgcp-multi-project", "prerequisite", "Understand MGCP before multi-project workflows"),
+    ("mgcp-multi-project", "mgcp-session-start", "complements", "Multi-project discovery happens at session start"),
+    ("mgcp-multi-project", "catalogue-for-project-specific", "related", "Each project has isolated catalogue"),
+
+    # Custom catalogue items
+    ("mgcp-usage", "mgcp-custom-catalogue-items", "prerequisite", "Understand MGCP before custom catalogue items"),
+    ("catalogue-for-project-specific", "mgcp-custom-catalogue-items", "related", "Custom items extend project catalogue"),
+    ("mgcp-custom-catalogue-items", "mgcp-record-dependencies", "related", "Both are catalogue item types"),
+    ("mgcp-custom-catalogue-items", "mgcp-record-error-patterns", "related", "Both are catalogue item types"),
+
+    # Catalogue cleanup
+    ("mgcp-usage", "mgcp-catalogue-cleanup", "prerequisite", "Understand MGCP before catalogue cleanup"),
+    ("mgcp-catalogue-cleanup", "mgcp-continuous-improvement", "complements", "Cleanup is part of continuous improvement"),
+    ("mgcp-catalogue-cleanup", "mgcp-check-before-adding", "related", "Check before adding, clean up when stale"),
+    ("mgcp-catalogue-cleanup", "catalogue-for-project-specific", "related", "Cleanup applies to project catalogue"),
+
+    # Reminder reset
+    ("schedule-reminder-at-step-end", "mgcp-reminder-reset", "complements", "Reset when reminders malfunction"),
+    ("mgcp-reminder-reset", "bootstrap-reminder-at-session-start", "related", "Both are reminder system utilities"),
+    ("mgcp-reminder-reset", "pre-response-reminder-check", "related", "Reset if reminder scheduling goes wrong"),
 ]

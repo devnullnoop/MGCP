@@ -513,10 +513,18 @@
                 method: 'DELETE'
             });
 
-            if (result !== null) {
-                closeModal();
-                await loadProjects();
+            if (result === null) {
+                alert('Failed to delete project. Check the console for details.');
+                return;
             }
+
+            if (result.error) {
+                alert(`Error: ${result.error}`);
+                return;
+            }
+
+            closeModal();
+            await loadProjects();
         }
 
         function addDecision() {

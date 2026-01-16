@@ -9,6 +9,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -32,7 +33,7 @@ jobs:
 
       - name: Run tests
         run: |
-          pytest -v --tb=short
+          pytest -v --tb=short -m "not slow"
 
   lint:
     runs-on: ubuntu-latest

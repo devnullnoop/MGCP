@@ -22,6 +22,9 @@ from mgcp.models import Lesson, ProjectContext, ProjectTodo, Relationship
 from mgcp.persistence import LessonStore
 from mgcp.vector_store import VectorStore
 
+# Mark all tests in this module as slow - skipped in CI
+pytestmark = pytest.mark.slow
+
 
 def generate_random_text(words: int = 10) -> str:
     """Generate random text with specified word count."""

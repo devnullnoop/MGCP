@@ -163,7 +163,7 @@ Restart your LLM client. MGCP tools are now available.
 mgcp-dashboard
 ```
 
-## MCP Tools (34 total)
+## MCP Tools (35 total)
 
 ### Lesson Discovery (5)
 | Tool | Purpose |
@@ -174,12 +174,13 @@ mgcp-dashboard
 | `list_categories` | Browse lesson hierarchy |
 | `get_lessons_by_category` | Get lessons in a category |
 
-### Lesson Management (3)
+### Lesson Management (4)
 | Tool | Purpose |
 |------|---------|
 | `add_lesson` | Create a new lesson |
 | `refine_lesson` | Improve existing lesson |
 | `link_lessons` | Create typed relationships |
+| `delete_lesson` | Remove lesson from all stores |
 
 ### Project Context (5)
 | Tool | Purpose |

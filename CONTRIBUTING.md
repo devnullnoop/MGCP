@@ -85,7 +85,7 @@ Key files to understand:
 | `src/mgcp/server.py` | MCP server and tool definitions |
 | `src/mgcp/models.py` | Pydantic data models |
 | `src/mgcp/persistence.py` | SQLite storage layer |
-| `src/mgcp/vector_store.py` | ChromaDB integration |
+| `src/mgcp/qdrant_vector_store.py` | Qdrant vector integration |
 | `src/mgcp/graph.py` | NetworkX graph operations |
 
 ## Adding New MCP Tools

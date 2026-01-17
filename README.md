@@ -68,7 +68,7 @@ The system isn't intelligent. But an LLM with accumulated context *behaves* more
 | Component | Purpose |
 |-----------|---------|
 | **SQLite** | Lessons, project contexts, telemetry |
-| **ChromaDB** | Vector embeddings for semantic search |
+| **Qdrant** | Vector embeddings for semantic search |
 | **NetworkX** | In-memory graph for relationship traversal |
 | **MCP Protocol** | Native integration with LLM clients |
 | **Hooks** | Proactive reminders at key moments |

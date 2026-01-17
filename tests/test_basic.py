@@ -8,7 +8,7 @@ import pytest
 from mgcp.graph import LessonGraph
 from mgcp.models import Example, Lesson, ProjectContext, ProjectTodo, Relationship
 from mgcp.persistence import LessonStore
-from mgcp.vector_store import VectorStore
+from mgcp.qdrant_vector_store import QdrantVectorStore
 
 
 @pytest.fixture
@@ -20,8 +20,8 @@ def temp_db():
 
 
 @pytest.fixture
-def temp_chroma():
-    """Create a temporary ChromaDB for testing."""
+def temp_qdrant():
+    """Create a temporary Qdrant directory for testing."""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield tmpdir
 
@@ -149,12 +149,12 @@ class TestLessonGraph:
         assert "child2" in visited
 
 
-class TestVectorStore:
-    """Test vector store operations."""
+class TestQdrantVectorStore:
+    """Test Qdrant vector store operations."""
 
-    def test_add_and_search(self, temp_chroma, sample_lesson):
+    def test_add_and_search(self, temp_qdrant, sample_lesson):
         """Test adding and searching lessons."""
-        store = VectorStore(persist_path=temp_chroma)
+        store = QdrantVectorStore(persist_path=temp_qdrant)
         store.add_lesson(sample_lesson)
 
         # Search
@@ -162,16 +162,54 @@ class TestVectorStore:
         assert len(results) > 0
         assert results[0][0] == "test-lesson"
 
-    def test_remove_lesson(self, temp_chroma, sample_lesson):
-        """Test removing a lesson."""
-        store = VectorStore(persist_path=temp_chroma)
+    def test_remove_vector_lesson(self, temp_qdrant, sample_lesson):
+        """Test removing a lesson from vector store."""
+        store = QdrantVectorStore(persist_path=temp_qdrant)
         store.add_lesson(sample_lesson)
 
         # Remove
-        store.remove_lesson("test-lesson")
+        store.remove_vector_lesson("test-lesson")
 
         # Verify removed
         assert "test-lesson" not in store.get_all_ids()
+
+    def test_search_similar(self, temp_qdrant, sample_lesson):
+        """Test finding similar lessons."""
+        store = QdrantVectorStore(persist_path=temp_qdrant)
+        store.add_lesson(sample_lesson)
+
+        # Add another lesson
+        similar_lesson = Lesson(
+            id="similar-lesson",
+            trigger="test, example, demo",
+            action="This is another test action",
+            rationale="Also for testing",
+            tags=["test"],
+        )
+        store.add_lesson(similar_lesson)
+
+        # Find similar
+        results = store.search_similar("test-lesson", limit=5)
+        assert len(results) > 0
+        assert results[0][0] == "similar-lesson"
+
+    def test_rebuild_index(self, temp_qdrant, sample_lesson):
+        """Test rebuilding the index from scratch."""
+        store = QdrantVectorStore(persist_path=temp_qdrant)
+        store.add_lesson(sample_lesson)
+
+        # Rebuild with new lessons
+        new_lessons = [
+            Lesson(id="new-1", trigger="new trigger 1", action="Action 1"),
+            Lesson(id="new-2", trigger="new trigger 2", action="Action 2"),
+        ]
+        store.rebuild_index(new_lessons)
+
+        # Old lesson should be gone
+        assert store.count() == 2
+        assert "test-lesson" not in store.get_all_ids()
+        assert "new-1" in store.get_all_ids()
+        assert "new-2" in store.get_all_ids()
 
 
 class TestTypedRelationships:

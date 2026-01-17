@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .models import Lesson
 from .persistence import LessonStore
-from .vector_store import VectorStore
+from .qdrant_vector_store import QdrantVectorStore
 
 logger = logging.getLogger("mgcp.data_ops")
 
@@ -80,7 +80,7 @@ async def import_lessons(
         Dict with import results
     """
     store = LessonStore()
-    vector_store = VectorStore()
+    vector_store = QdrantVectorStore()
 
     # Load import file with error handling
     try:
@@ -218,7 +218,7 @@ async def find_duplicates(threshold: float = 0.85) -> list[dict]:
         List of duplicate pairs with similarity scores
     """
     store = LessonStore()
-    vector_store = VectorStore()
+    vector_store = QdrantVectorStore()
 
     lessons = await store.get_all_lessons()
     lessons_by_id = {l.id: l for l in lessons}
@@ -275,7 +275,7 @@ async def suggest_tags(lesson_id: str, max_tags: int = 5) -> list[str]:
         List of suggested tags
     """
     store = LessonStore()
-    vector_store = VectorStore()
+    vector_store = QdrantVectorStore()
 
     lesson = await store.get_lesson(lesson_id)
     if not lesson:

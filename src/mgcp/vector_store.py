@@ -64,8 +64,8 @@ class VectorStore:
             }],
         )
 
-    def remove_lesson(self, lesson_id: str) -> bool:
-        """Remove a lesson from the vector store.
+    def remove_vector_lesson(self, lesson_id: str) -> bool:
+        """Remove a lesson from the vector store (ChromaDB).
 
         Returns:
             True if removal succeeded, False if lesson not found or error occurred.

@@ -43,8 +43,8 @@ class LessonGraph:
             if not any(r.target == related_id for r in lesson.relationships):
                 self.graph.add_edge(lesson.id, related_id, relation="related")
 
-    def remove_lesson(self, lesson_id: str) -> None:
-        """Remove a lesson from the graph."""
+    def remove_graph_lesson(self, lesson_id: str) -> None:
+        """Remove a lesson from the graph (NetworkX)."""
         if lesson_id in self.graph:
             self.graph.remove_node(lesson_id)
 

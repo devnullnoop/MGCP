@@ -5,6 +5,46 @@ All notable changes to MGCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Qdrant vector store**: Replaced ChromaDB with Qdrant for vector storage
+  - Same API for local mode and server mode (growth path for production)
+  - Local mode: `~/.mgcp/qdrant` (no server required)
+  - Server mode: Connect to Qdrant server (same API)
+- **BGE embedding model**: Upgraded from `all-MiniLM-L6-v2` (384 dim) to `BAAI/bge-base-en-v1.5` (768 dim)
+  - ~7% better retrieval quality (MTEB benchmark)
+  - First run downloads ~415MB model
+- **Migration tool**: `mgcp-migrate` command for ChromaDB → Qdrant migration
+  - `--dry-run` to preview what would be migrated
+  - `--force` to overwrite existing Qdrant data
+  - Re-embeds all data with new BGE model
+- **Centralized embedding**: New `embedding.py` module with shared model instance
+- **delete_lesson MCP tool**: Complete lesson deletion from all stores (SQLite, Qdrant, NetworkX)
+- Documentation for delete_lesson in CLAUDE.md (35 tools now documented)
+
+### Changed
+- **Vector store backend**: ChromaDB → Qdrant
+  - `qdrant_vector_store.py` replaces `vector_store.py`
+  - `qdrant_catalogue_store.py` replaces `catalogue_vector_store.py`
+- **Embedding model**: `all-MiniLM-L6-v2` → `BAAI/bge-base-en-v1.5`
+- **Dependencies**: Removed chromadb, added qdrant-client
+- **Renamed internal methods for clarity**:
+  - `vector_store.remove_lesson()` → `vector_store.remove_vector_lesson()` - Qdrant layer
+  - `graph.remove_lesson()` → `graph.remove_graph_lesson()` - NetworkX layer
+  - `persistence.delete_lesson()` remains unchanged - SQLite layer
+- Updated tests to use new method names
+
+### Deprecated
+- ChromaDB vector stores (`vector_store.py`, `catalogue_vector_store.py`) - kept for migration
+
+### Migration Required
+For existing installations with ChromaDB data:
+```bash
+mgcp-migrate              # Migrates ChromaDB data to Qdrant
+mgcp-migrate --dry-run    # Preview first
+```
+
 ## [1.1.0] - 2026-01-07
 
 ### Added

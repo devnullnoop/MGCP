@@ -19,8 +19,8 @@ dependencies = [
     "mcp>=1.0.0",
     "networkx>=3.2",
     "numpy>=1.26.0,<2.0",  # Pin 1.26.x - has wheels for Intel+ARM Mac, avoids numpy 2.0/onnxruntime conflict
-    "chromadb>=0.5.23",
-    "sentence-transformers>=2.2.2",
+    "qdrant-client>=1.12.0",  # Vector store - local mode or server mode with same API
+    "sentence-transformers>=2.2.2",  # For BGE embedding model (BAAI/bge-base-en-v1.5)
     "pydantic>=2.5.0",
     "aiosqlite>=0.19.0",
     "fastapi>=0.109.0",
@@ -45,6 +45,7 @@ mgcp-export = "mgcp.data_ops:main_export"
 mgcp-import = "mgcp.data_ops:main_import"
 mgcp-duplicates = "mgcp.data_ops:main_duplicates"
 mgcp-backup = "mgcp.backup:main"
+mgcp-migrate = "mgcp.migration:main"
 
 [project.urls]
 Homepage = "https://github.com/devnullnoop/MGCP"

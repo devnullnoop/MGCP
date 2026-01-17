@@ -18,10 +18,10 @@ from .bootstrap_dev import DEV_LESSONS, DEV_RELATIONSHIPS, DEV_WORKFLOWS
 from .graph import LessonGraph
 from .models import Relationship
 from .persistence import LessonStore
-from .vector_store import VectorStore
+from .qdrant_vector_store import QdrantVectorStore
 
 
-async def seed_lessons(lessons: list, store: LessonStore, vector_store: VectorStore, graph: LessonGraph) -> tuple[int, int]:
+async def seed_lessons(lessons: list, store: LessonStore, vector_store: QdrantVectorStore, graph: LessonGraph) -> tuple[int, int]:
     """Seed lessons into the database.
 
     Returns (added, skipped) counts.
@@ -141,7 +141,7 @@ async def seed_database(core_only: bool = False, dev_only: bool = False) -> None
         dev_only: If True, only seed development lessons/workflows
     """
     store = LessonStore()
-    vector_store = VectorStore()
+    vector_store = QdrantVectorStore()
     graph = LessonGraph()
 
     # Determine what to seed

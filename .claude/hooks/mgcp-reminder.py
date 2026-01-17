@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-"""PostToolUse hook - contextual reminder after code changes."""
+"""PostToolUse hook - proof-based checkpoint after code changes."""
 
-print("""[MGCP Checkpoint] After this edit, consider:
-  • Discovered a pattern/gotcha? → add_catalogue_arch_note
-  • Files that change together? → add_catalogue_coupling
-  • Made a design decision? → add_catalogue_decision
-  • Learned something reusable? → add_lesson""")
+print("""STOP. After this edit, answer these questions OUT LOUD before continuing:
+
+1. What file(s) did I just change? [list them]
+2. Did I discover a pattern, gotcha, or coupling? [yes/no]
+3. If yes, call the appropriate MGCP tool NOW and show its output:
+   - Pattern/gotcha: mcp__mgcp__add_catalogue_arch_note
+   - Files coupled: mcp__mgcp__add_catalogue_coupling
+   - Decision made: mcp__mgcp__add_catalogue_decision
+
+If no knowledge worth capturing, state: "No new knowledge from this edit."
+
+DO NOT proceed to next action until you've answered above.""")

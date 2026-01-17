@@ -10,15 +10,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/git-reminder.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/catalogue-reminder.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/task-start-reminder.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/user-prompt-dispatcher.py"
           }
         ]
       }

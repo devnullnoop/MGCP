@@ -148,8 +148,8 @@ Examples:
 async def show_status():
     """Show current system status."""
     from .persistence import LessonStore
+    from .qdrant_vector_store import QdrantVectorStore
     from .telemetry import TelemetryLogger
-    from .vector_store import VectorStore
 
     print("\n" + "=" * 50)
     print("  MGCP System Status")
@@ -172,7 +172,7 @@ async def show_status():
 
     # Check vector store
     try:
-        vector_store = VectorStore()
+        vector_store = QdrantVectorStore()
         ids = vector_store.get_all_ids()
         print(f"  Vectors in ChromaDB: {len(ids)}")
     except Exception as e:

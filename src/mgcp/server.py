@@ -14,7 +14,6 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from .catalogue_vector_store import CatalogueVectorStore
 from .graph import LessonGraph
 from .logging_config import configure_logging, get_logger
 from .models import (
@@ -34,8 +33,9 @@ from .models import (
     WorkflowStepLesson,
 )
 from .persistence import LessonStore
+from .qdrant_catalogue_store import QdrantCatalogueStore
+from .qdrant_vector_store import QdrantVectorStore
 from .telemetry import TelemetryLogger
-from .vector_store import VectorStore
 
 # Configure logging with rotation (CRITICAL: logs to file, not stdout which breaks MCP STDIO)
 configure_logging(console_output=False)
@@ -46,8 +46,8 @@ mcp = FastMCP("mgcp")
 
 # Global state (initialized on first tool call)
 _store: LessonStore | None = None
-_vector_store: VectorStore | None = None
-_catalogue_vector: CatalogueVectorStore | None = None
+_vector_store: QdrantVectorStore | None = None
+_catalogue_vector: QdrantCatalogueStore | None = None
 _graph: LessonGraph | None = None
 _telemetry: TelemetryLogger | None = None
 _initialized = False
@@ -81,7 +81,9 @@ def _validate_relationship_type(rel_type: str) -> str | None:
     return None
 
 
-async def _ensure_initialized() -> tuple[LessonStore, VectorStore, CatalogueVectorStore, LessonGraph, TelemetryLogger]:
+async def _ensure_initialized() -> tuple[
+    LessonStore, QdrantVectorStore, QdrantCatalogueStore, LessonGraph, TelemetryLogger
+]:
     """Lazy initialization of components with thread-safe locking."""
     global _store, _vector_store, _catalogue_vector, _graph, _telemetry, _initialized
 
@@ -99,8 +101,8 @@ async def _ensure_initialized() -> tuple[LessonStore, VectorStore, CatalogueVect
 
         try:
             _store = LessonStore()
-            _vector_store = VectorStore()
-            _catalogue_vector = CatalogueVectorStore()
+            _vector_store = QdrantVectorStore()
+            _catalogue_vector = QdrantCatalogueStore()
             _graph = LessonGraph()
             _telemetry = TelemetryLogger()
 
@@ -508,6 +510,43 @@ async def link_lessons(
     arrow = "↔" if bidirectional else "→"
     type_str = f" ({relationship_type})" if relationship_type != "related" else ""
     return f"Linked '{lesson_id_a}' {arrow} '{lesson_id_b}'{type_str}"
+
+
+@mcp.tool()
+async def delete_lesson(lesson_id: str) -> str:
+    """Delete a lesson from MGCP.
+
+    Use when consolidating lessons, removing duplicates, or cleaning up
+    outdated/incorrect lessons. This removes the lesson from:
+    - The persistent store (SQLite)
+    - The vector store (ChromaDB)
+    - The graph (NetworkX)
+
+    Args:
+        lesson_id: The ID of the lesson to delete
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    # Check if lesson exists
+    lesson = await store.get_lesson(lesson_id)
+    if not lesson:
+        return f"Lesson not found: {lesson_id}"
+
+    # Delete from persistence
+    deleted = await store.delete_lesson(lesson_id)
+    if not deleted:
+        return f"Failed to delete lesson: {lesson_id}"
+
+    # Remove from vector store (ChromaDB)
+    vector_store.remove_vector_lesson(lesson_id)
+
+    # Remove from graph (NetworkX)
+    graph.remove_graph_lesson(lesson_id)
+
+    # Log deletion
+    await telemetry.log_event("lesson_deleted", {"lesson_id": lesson_id})
+
+    return f"Deleted lesson: {lesson_id}"
 
 
 # ============================================================================
@@ -1363,45 +1402,29 @@ async def query_workflows(task_description: str, min_relevance: float = 0.35) ->
     if not workflows:
         return "No workflows available."
 
-    # Get or create workflows collection
-    workflows_collection = vector_store.client.get_or_create_collection(
-        name="workflows",
-        metadata={"hnsw:space": "cosine"},
-    )
-
-    # Index/update workflows in collection
+    # Index/update workflows in Qdrant
     for wf in workflows:
-        # Combine name, description, and trigger for semantic matching
         searchable_text = f"{wf.name}. {wf.description}. Keywords: {wf.trigger}"
-        workflows_collection.upsert(
-            ids=[wf.id],
-            documents=[searchable_text],
-            metadatas=[{
+        vector_store.upsert_workflow(
+            workflow_id=wf.id,
+            searchable_text=searchable_text,
+            metadata={
                 "name": wf.name,
                 "description": wf.description,
                 "trigger": wf.trigger,
                 "step_count": len(wf.steps),
-            }],
+            },
         )
 
     # Query for matching workflows
-    results = workflows_collection.query(
-        query_texts=[task_description],
-        n_results=len(workflows),
-        include=["documents", "metadatas", "distances"],
-    )
+    results = vector_store.query_workflows(task_description, limit=len(workflows))
 
-    if not results["ids"] or not results["ids"][0]:
+    if not results:
         return "No workflows matched."
 
     matches = []
-    for i, wf_id in enumerate(results["ids"][0]):
-        # ChromaDB returns distance, convert to similarity (1 - distance for cosine)
-        distance = results["distances"][0][i]
-        relevance = 1 - distance
-
+    for wf_id, relevance, metadata in results:
         if relevance >= min_relevance:
-            metadata = results["metadatas"][0][i]
             matches.append({
                 "id": wf_id,
                 "name": metadata["name"],

@@ -16,16 +16,16 @@ from fastapi.staticfiles import StaticFiles
 from .graph import LessonGraph
 from .models import ProjectContext, ProjectTodo
 from .persistence import LessonStore
+from .qdrant_vector_store import QdrantVectorStore
 from .telemetry import TelemetryLogger
-from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
 # Global instances
 telemetry: TelemetryLogger | None = None
 store: LessonStore | None = None
-vector_store: VectorStore | None = None
-catalogue_vector = None  # CatalogueVectorStore, initialized lazily
+vector_store: QdrantVectorStore | None = None
+catalogue_vector = None  # QdrantCatalogueStore, initialized lazily
 graph: LessonGraph | None = None
 
 
@@ -95,7 +95,7 @@ async def lifespan(app: FastAPI):
 
     telemetry = TelemetryLogger()
     store = LessonStore()
-    vector_store = VectorStore()
+    vector_store = QdrantVectorStore()
     graph = LessonGraph()
 
     # Load existing lessons into graph
@@ -170,7 +170,7 @@ async def ensure_initialized():
     if store is None:
         telemetry = TelemetryLogger()
         store = LessonStore()
-        vector_store = VectorStore()
+        vector_store = QdrantVectorStore()
         graph = LessonGraph()
         lessons = await store.get_all_lessons()
         for lesson in lessons:
@@ -711,8 +711,8 @@ async def delete_lesson_endpoint(lesson_id: str) -> dict[str, Any]:
     # Delete from all stores
     deleted = await store.delete_lesson(lesson_id)
     if deleted:
-        vector_store.remove_lesson(lesson_id)
-        graph.remove_lesson(lesson_id)
+        vector_store.remove_vector_lesson(lesson_id)
+        graph.remove_graph_lesson(lesson_id)
 
     return {"deleted": lesson_id}
 

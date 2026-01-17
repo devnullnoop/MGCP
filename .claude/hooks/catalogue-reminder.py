@@ -33,13 +33,13 @@ CATALOGUE_PATTERNS = [
 ]
 
 REMINDER_TEMPLATES = {
-    "dependency": "Consider cataloguing this dependency with mcp__mgcp__add_catalogue_dependency (name, purpose, version, docs_url)",
-    "security": "Consider adding a security note with mcp__mgcp__add_catalogue_security_note (title, description, severity)",
-    "decision": "Consider documenting this decision with mcp__mgcp__add_catalogue_decision (title, decision, rationale, alternatives)",
-    "arch_note": "Consider adding an architecture note with mcp__mgcp__add_catalogue_arch_note (title, description, category)",
-    "convention": "Consider documenting this convention with mcp__mgcp__add_catalogue_convention (title, rule, category)",
-    "coupling": "Consider recording this file coupling with mcp__mgcp__add_catalogue_coupling (files, reason)",
-    "prior_decision": "⚠️ User is referencing a PRIOR decision. If not already catalogued, add it NOW with add_catalogue_decision or add_catalogue_convention. Do NOT just fix the issue - capture the underlying rule.",
+    "dependency": "REQUIRED: Call mcp__mgcp__search_catalogue with query about this dependency. SHOW OUTPUT. If not found, call add_catalogue_dependency.",
+    "security": "REQUIRED: Call mcp__mgcp__add_catalogue_security_note NOW. SHOW OUTPUT. Do not proceed without documenting this.",
+    "decision": "REQUIRED: Call mcp__mgcp__add_catalogue_decision NOW. SHOW OUTPUT. Include rationale and alternatives considered.",
+    "arch_note": "REQUIRED: Call mcp__mgcp__add_catalogue_arch_note NOW. SHOW OUTPUT. Capture the gotcha/pattern before you forget.",
+    "convention": "REQUIRED: Call mcp__mgcp__add_catalogue_convention NOW. SHOW OUTPUT. Document the rule.",
+    "coupling": "REQUIRED: Call mcp__mgcp__add_catalogue_coupling NOW. SHOW OUTPUT. List the coupled files.",
+    "prior_decision": "STOP. User referenced a prior decision. Call mcp__mgcp__search_catalogue to find it. SHOW OUTPUT. If not found, call add_catalogue_decision NOW before proceeding.",
 }
 
 def main():

@@ -222,127 +222,69 @@ def check_workflow_patterns(prompt: str) -> str | None:
     for pattern in FEATURE_PATTERNS:
         if re.search(pattern, prompt_lower, re.IGNORECASE):
             return """<user-prompt-submit-hook>
-===============================================================================
-WORKFLOW ACTIVATION: feature-development
-===============================================================================
+STOP. This task requires the feature-development workflow.
 
-This task requires the FEATURE DEVELOPMENT workflow. Execute these steps IN ORDER:
+BEFORE writing any code, execute these commands and SHOW OUTPUT:
 
-**STEP 0 - ACTIVATE WORKFLOW (do this NOW):**
-1. Call `mcp__mgcp__get_workflow("feature-development")` to load the full workflow
-2. Call `TodoWrite` to create todos for each of the 6 workflow steps
+1. Call mcp__mgcp__get_workflow("feature-development") - SHOW OUTPUT
+2. Call mcp__mgcp__query_lessons with task description - SHOW OUTPUT
+3. Create TodoWrite entries for each workflow step - SHOW THE TODO LIST
 
-**THEN EXECUTE EACH STEP:**
+The workflow output and lesson query results MUST appear in your response BEFORE any code.
 
-For EACH workflow step (Research -> Plan -> Document -> Execute -> Test -> Review):
-1. Mark the step as in_progress in TodoWrite
-2. Call `mcp__mgcp__get_workflow_step("feature-development", "<step_id>", expand_lessons=true)`
-3. READ the linked lessons - they contain critical guidance
-4. For important lessons, call `mcp__mgcp__spider_lessons("<lesson_id>")` to get related knowledge
-5. Complete ALL checklist items before moving to the next step
-6. Mark the step as completed
-
-**CRITICAL:** Do NOT skip steps. Do NOT combine steps. Each step exists to prevent mistakes.
-
-===============================================================================
+Then for EACH step: call get_workflow_step(step_id, expand_lessons=true) and SHOW OUTPUT before executing that step.
 </user-prompt-submit-hook>"""
 
     # Check bug fix
     for pattern in BUG_FIX_PATTERNS:
         if re.search(pattern, prompt_lower, re.IGNORECASE):
             return """<user-prompt-submit-hook>
-===============================================================================
-WORKFLOW ACTIVATION: bug-fix
-===============================================================================
+STOP. This task requires the bug-fix workflow.
 
-This task requires the BUG FIX workflow. Execute these steps IN ORDER:
+BEFORE attempting any fix, execute these commands and SHOW OUTPUT:
 
-**STEP 0 - ACTIVATE WORKFLOW (do this NOW):**
-1. Call `mcp__mgcp__get_workflow("bug-fix")` to load the full workflow
-2. Call `TodoWrite` to create todos for each of the 4 workflow steps
+1. Call mcp__mgcp__get_workflow("bug-fix") - SHOW OUTPUT
+2. Call mcp__mgcp__query_lessons with bug description - SHOW OUTPUT
+3. Create TodoWrite entries for: Reproduce, Investigate, Fix, Verify - SHOW THE TODO LIST
 
-**THEN EXECUTE EACH STEP:**
+The workflow output and lesson query results MUST appear in your response BEFORE any fix attempts.
 
-For EACH workflow step (Reproduce -> Investigate -> Fix -> Verify):
-1. Mark the step as in_progress in TodoWrite
-2. Call `mcp__mgcp__get_workflow_step("bug-fix", "<step_id>", expand_lessons=true)`
-3. READ the linked lessons - they contain critical debugging guidance
-4. For important lessons, call `mcp__mgcp__spider_lessons("<lesson_id>")` to get related knowledge
-5. Complete ALL checklist items before moving to the next step
-6. Mark the step as completed
-
-**CRITICAL:** Understand the root cause BEFORE applying a fix. Do NOT guess.
-
-===============================================================================
+CRITICAL: Understand the root cause BEFORE fixing. Show your investigation output.
 </user-prompt-submit-hook>"""
 
     # Check security review
     for pattern in SECURITY_REVIEW_PATTERNS:
         if re.search(pattern, prompt_lower, re.IGNORECASE):
             return """<user-prompt-submit-hook>
-===============================================================================
-WORKFLOW ACTIVATION: secure-code-review
-===============================================================================
+STOP. This task requires the secure-code-review workflow (OWASP-based).
 
-This task requires the SECURE CODE REVIEW workflow (OWASP-based). Execute these steps IN ORDER:
+BEFORE reviewing any code, execute these commands and SHOW OUTPUT:
 
-**STEP 0 - ACTIVATE WORKFLOW (do this NOW):**
-1. Call `mcp__mgcp__get_workflow("secure-code-review")` to load the full workflow
-2. Call `TodoWrite` to create todos for each of the 8 workflow steps
+1. Call mcp__mgcp__get_workflow("secure-code-review") - SHOW OUTPUT
+2. Call mcp__mgcp__query_lessons("security vulnerabilities OWASP") - SHOW OUTPUT
+3. Create TodoWrite entries for all 8 steps - SHOW THE TODO LIST
 
-**THEN EXECUTE EACH STEP:**
-
-For EACH workflow step:
-  Input Validation -> Output Encoding -> Authentication -> Authorization ->
-  Cryptography -> Data Protection -> Error Handling & Logging -> File Handling
-
-1. Mark the step as in_progress in TodoWrite
-2. Call `mcp__mgcp__get_workflow_step("secure-code-review", "<step_id>", expand_lessons=true)`
-3. READ the linked OWASP lessons - they contain specific vulnerability checks
-4. For critical lessons, call `mcp__mgcp__spider_lessons("<lesson_id>")` to get related security knowledge
-5. Complete ALL checklist items before moving to the next step
-6. Document any findings with `mcp__mgcp__add_catalogue_security_note`
-7. Mark the step as completed
-
-**CRITICAL:** This is a systematic security audit. Do NOT skip steps. Each step covers different vulnerability classes.
-
-===============================================================================
+For EACH step: call get_workflow_step(step_id, expand_lessons=true) and SHOW OUTPUT.
+Document findings with add_catalogue_security_note and SHOW OUTPUT.
 </user-prompt-submit-hook>"""
 
     # Check generic code modification
     for pattern in CODE_MODIFICATION_PATTERNS:
         if re.search(pattern, prompt_lower, re.IGNORECASE):
             return """<user-prompt-submit-hook>
-===============================================================================
-MANDATORY WORKFLOW SELECTION REQUIRED
-===============================================================================
+STOP. This task involves code modifications.
 
-This task involves CODE MODIFICATIONS. Before writing ANY code, you MUST:
+BEFORE writing any code, execute this and SHOW OUTPUT:
 
-1. Call `mcp__mgcp__list_workflows()` to see available workflows
-2. SELECT a workflow that fits this task:
-   - `feature-development` - For new features, enhancements, refactoring
-   - `bug-fix` - For fixing broken functionality
-   - `secure-code-review` - For security-focused changes
+1. Call mcp__mgcp__query_workflows with task description - SHOW OUTPUT
 
-3. If a workflow applies:
-   - Call `mcp__mgcp__get_workflow("<workflow_id>")`
-   - Create TodoWrite entries for each step
-   - At EACH step, call `get_workflow_step(workflow_id, step_id, expand_lessons=true)`
-   - READ the linked lessons - this is where OWASP and critical guidance surfaces
-   - Complete ALL checklist items before moving to next step
+If a workflow matches (relevance >= 50%):
+- Call get_workflow for that workflow - SHOW OUTPUT
+- Create TodoWrite entries - SHOW THE TODO LIST
+- Proceed step by step, showing each step's output
 
-4. If NO workflow applies, you MUST state:
-   "No workflow applies because: [specific reason]"
-   Example reasons:
-   - "This is a single-line typo fix with no behavior change"
-   - "This is a documentation-only change"
-   - "This is reverting a previous change"
-
-**THIS IS NOT OPTIONAL.** Code changes without workflow selection are prohibited.
-The workflow ensures research, planning, testing, and review are not skipped.
-
-===============================================================================
+If NO workflow applies, state: "No workflow applies because: [specific reason]"
+(e.g., "single-line typo fix", "documentation-only change")
 </user-prompt-submit-hook>"""
 
     return None

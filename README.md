@@ -275,6 +275,36 @@ The architecture is domain-agnostic. Replace our bootstrap with:
 
 Same tools, different content.
 
+## Potential Applicability to Agentic Workflows
+
+> **Note:** We have not built or tested this. Our focus is development workflows. The following is speculation about what the architecture *could* support—not a proven capability.
+
+Any agent operating across invocations faces statelessness. The components here—lessons, workflows, semantic search, hooks—could theoretically address that for agentic systems beyond coding assistants. We haven't tried it, but the pieces are:
+
+| Component | Potential Use |
+|-----------|---------------|
+| `add_lesson` / `refine_lesson` | Agent captures patterns from outcomes |
+| `query_lessons` | Agent retrieves relevant guidance before acting |
+| `workflows` | Multi-step processes with enforcement |
+| Hooks (event triggers) | Inject context at decision points |
+
+This wouldn't be machine learning—it would be **systematic accumulation** through explicit capture. The agent (or human) would need to add lessons when relevant; nothing is automatic.
+
+A hypothetical multi-agent pattern:
+
+```
+Agent A completes task → explicitly adds lesson about edge case
+
+Agent B starts related task → queries lessons → edge case surfaces
+```
+
+**What would be required to actually try this:**
+- Hooks/triggers integrated with your agent framework's events
+- Discipline around lesson capture (garbage in, garbage out)
+- Tuning of triggers to match how your agents describe tasks
+
+If someone tries this, we'd be interested to hear how it goes. The architecture is domain-agnostic; whether it's useful for orchestration is an open question.
+
 ## Project Status
 
 | Phase | Status |

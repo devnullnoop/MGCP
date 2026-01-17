@@ -1,4 +1,4 @@
-# LLMprint - Memory Graph Core Primitives (MGCP)
+# Memory Graph Core Primitives (MGCP)
 
 **Persistent context for stateless LLMs.**
 

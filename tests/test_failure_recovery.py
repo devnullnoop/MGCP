@@ -18,7 +18,7 @@ import pytest
 from mgcp.graph import LessonGraph
 from mgcp.models import Lesson
 from mgcp.persistence import LessonStore
-from mgcp.vector_store import VectorStore
+from mgcp.qdrant_vector_store import QdrantVectorStore
 
 
 class TestCorruptedDatabase:
@@ -103,7 +103,7 @@ class TestMissingFiles:
 
             assert not chroma_path.exists()
 
-            store = VectorStore(persist_path=str(chroma_path))
+            store = QdrantVectorStore(persist_path=str(chroma_path))
 
             # Should be able to add and search
             lesson = Lesson(id="test", trigger="test query", action="test action")
@@ -308,7 +308,7 @@ class TestRecoveryScenarios:
             ]
 
             # Add to first vector store
-            store1 = VectorStore(persist_path=str(chroma_path_1))
+            store1 = QdrantVectorStore(persist_path=str(chroma_path_1))
             for lesson in lessons:
                 store1.add_lesson(lesson)
 
@@ -318,7 +318,7 @@ class TestRecoveryScenarios:
 
             # Create a NEW vector store (simulates needing to rebuild)
             # This is the recovery scenario: you have lessons in SQLite but need to rebuild vector index
-            store2 = VectorStore(persist_path=str(chroma_path_2))
+            store2 = QdrantVectorStore(persist_path=str(chroma_path_2))
 
             # Re-add all lessons (this is the recovery process)
             for lesson in lessons:
@@ -372,7 +372,7 @@ class TestGracefulDegradation:
     def test_search_returns_empty_on_error(self):
         """Search returns empty results rather than crashing on errors."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            store = VectorStore(persist_path=tmpdir)
+            store = QdrantVectorStore(persist_path=tmpdir)
 
             # Search with no data should return empty, not crash
             results = store.search("anything", limit=5)
@@ -517,7 +517,7 @@ class TestEdgeCaseInputs:
     def test_vector_search_with_empty_query(self):
         """Handles empty search queries."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            store = VectorStore(persist_path=tmpdir)
+            store = QdrantVectorStore(persist_path=tmpdir)
 
             # Add a lesson first
             lesson = Lesson(id="test", trigger="test", action="test")
@@ -530,7 +530,7 @@ class TestEdgeCaseInputs:
     def test_vector_search_with_special_characters(self):
         """Handles special characters in search queries."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            store = VectorStore(persist_path=tmpdir)
+            store = QdrantVectorStore(persist_path=tmpdir)
 
             lesson = Lesson(id="test", trigger="python code", action="test")
             store.add_lesson(lesson)

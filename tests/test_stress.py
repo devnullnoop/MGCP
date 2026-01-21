@@ -20,7 +20,7 @@ import pytest
 from mgcp.graph import LessonGraph
 from mgcp.models import Lesson, ProjectContext, ProjectTodo, Relationship
 from mgcp.persistence import LessonStore
-from mgcp.vector_store import VectorStore
+from mgcp.qdrant_vector_store import QdrantVectorStore
 
 # Mark all tests in this module as slow - skipped in CI
 pytestmark = pytest.mark.slow
@@ -140,14 +140,14 @@ class TestLessonStoreStress:
         assert elapsed < 5, f"Getting 100 contexts took {elapsed:.1f}s (expected <5s)"
 
 
-class TestVectorStoreStress:
+class TestQdrantVectorStoreStress:
     """Stress tests for the vector store."""
 
     @pytest.fixture
     def vector_store(self):
         """Create a vector store with temporary storage."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            yield VectorStore(persist_path=tmpdir)
+            yield QdrantVectorStore(persist_path=tmpdir)
 
     def test_add_500_lessons(self, vector_store):
         """Can add 500 lessons to vector store in reasonable time."""
@@ -308,7 +308,7 @@ class TestConcurrentOperations:
         with tempfile.TemporaryDirectory() as tmpdir:
             yield {
                 "lesson_store": LessonStore(db_path=str(Path(tmpdir) / "concurrent.db")),
-                "vector_store": VectorStore(persist_path=str(Path(tmpdir) / "chroma")),
+                "vector_store": QdrantVectorStore(persist_path=str(Path(tmpdir) / "chroma")),
             }
 
     @pytest.mark.asyncio

@@ -39,8 +39,8 @@ class TestImports:
 
     def test_import_vector_store(self):
         """Vector store module can be imported."""
-        from mgcp.vector_store import VectorStore
-        assert VectorStore is not None
+        from mgcp.qdrant_vector_store import QdrantVectorStore
+        assert QdrantVectorStore is not None
 
     def test_import_data_ops(self):
         """Data ops module can be imported."""
@@ -170,17 +170,17 @@ class TestVectorStoreSmoke:
             yield tmpdir
 
     def test_vector_store_init(self, temp_chroma):
-        """VectorStore can be initialized."""
-        from mgcp.vector_store import VectorStore
-        store = VectorStore(persist_path=temp_chroma)
+        """QdrantVectorStore can be initialized."""
+        from mgcp.qdrant_vector_store import QdrantVectorStore
+        store = QdrantVectorStore(persist_path=temp_chroma)
         assert store is not None
 
     def test_add_and_search(self, temp_chroma):
         """Can add a lesson and search for it."""
         from mgcp.models import Lesson
-        from mgcp.vector_store import VectorStore
+        from mgcp.qdrant_vector_store import QdrantVectorStore
 
-        store = VectorStore(persist_path=temp_chroma)
+        store = QdrantVectorStore(persist_path=temp_chroma)
         lesson = Lesson(
             id="vector-smoke",
             trigger="vector test search",
@@ -257,11 +257,11 @@ class TestEndToEndSmoke:
         from mgcp.graph import LessonGraph
         from mgcp.models import Lesson
         from mgcp.persistence import LessonStore
-        from mgcp.vector_store import VectorStore
+        from mgcp.qdrant_vector_store import QdrantVectorStore
 
         # Initialize stores
         lesson_store = LessonStore(db_path=str(temp_env["db"]))
-        vector_store = VectorStore(persist_path=str(temp_env["chroma"]))
+        vector_store = QdrantVectorStore(persist_path=str(temp_env["chroma"]))
         graph = LessonGraph()
 
         # Create lesson

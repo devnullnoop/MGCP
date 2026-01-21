@@ -35,7 +35,7 @@ from dataclasses import dataclass
 import pytest
 
 from mgcp.models import Lesson
-from mgcp.vector_store import VectorStore
+from mgcp.qdrant_vector_store import QdrantVectorStore
 
 # Minimum relevance score to consider a match
 # Note: Short phrases against long documents yield lower semantic similarity than
@@ -191,68 +191,68 @@ LESSON_PHRASINGS = {
 # =============================================================================
 
 @pytest.fixture
-def temp_chroma():
-    """Create a temporary ChromaDB directory."""
+def temp_qdrant():
+    """Create a temporary Qdrant directory."""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield tmpdir
 
 
 @pytest.fixture
-def vector_store_with_workflows(temp_chroma):
-    """Create a vector store with test workflows indexed."""
-    store = VectorStore(persist_path=temp_chroma)
+def vector_store_with_workflows(temp_qdrant):
+    """Create a vector store with test workflows indexed as lessons.
 
-    # Create workflow collection and index test workflows
-    workflows_collection = store.client.get_or_create_collection(
-        name="workflows",
-        metadata={"hnsw:space": "cosine"},
-    )
+    Since we're testing semantic matching, we represent workflows as lessons
+    with rich trigger text. This tests the same embedding/search behavior.
+    """
+    store = QdrantVectorStore(persist_path=temp_qdrant)
 
     # Bug-fix workflow - rich text to match varied phrasings
-    bug_fix_text = (
-        "Bug Fix workflow. Use when fixing a bug, debugging an issue, or troubleshooting "
-        "problems. This workflow ensures understanding the root cause before applying a fix. "
-        "Triggers: fix the bug, fix this bug, debug this issue, there's a bug, something's "
-        "broken, it's not working, this doesn't work, not working correctly, stopped working, "
-        "investigate the error, troubleshoot the problem, it crashed, getting an error, throws "
-        "an exception, there's an issue with, having a problem with, something wrong with, "
-        "repair the broken feature, resolve the defect, diagnose the issue. Keywords: bug, "
-        "fix, issue, broken, not working, error, crash, debug, troubleshoot, diagnose, problem, "
-        "defect, exception, repair, resolve, investigate, wrong, stopped"
+    bug_fix_lesson = Lesson(
+        id="bug-fix",
+        trigger=(
+            "Bug Fix workflow. Use when fixing a bug, debugging an issue, or troubleshooting "
+            "problems. This workflow ensures understanding the root cause before applying a fix. "
+            "Triggers: fix the bug, fix this bug, debug this issue, there's a bug, something's "
+            "broken, it's not working, this doesn't work, not working correctly, stopped working, "
+            "investigate the error, troubleshoot the problem, it crashed, getting an error, throws "
+            "an exception, there's an issue with, having a problem with, something wrong with, "
+            "repair the broken feature, resolve the defect, diagnose the issue. Keywords: bug, "
+            "fix, issue, broken, not working, error, crash, debug, troubleshoot, diagnose, problem, "
+            "defect, exception, repair, resolve, investigate, wrong, stopped"
+        ),
+        action="Follow bug-fix workflow",
     )
 
     # Feature development workflow - rich text to match varied phrasings
-    feature_text = (
-        "Feature Development workflow. Use when implementing a new feature, adding "
-        "functionality, or making significant changes to the codebase. This workflow ensures "
-        "research, planning, documentation, and testing. Triggers: add a new feature, "
-        "implement user authentication, implement the export, add functionality, build the "
-        "dashboard, create a new component, create export functionality, build out the API, "
-        "enhance the UI, improve performance, make it faster, optimize the queries, update "
-        "the styling, modernize the codebase, redesign the interface, refactor the module, "
-        "refactor this code, clean up the architecture. Keywords: new feature, implement, "
-        "add functionality, build, create, improve, modernize, enhance, style, update, "
-        "redesign, refactor, UI, UX, styling, controls, filters, visualization, graph, view, "
-        "component, optimize, performance, faster, dashboard, API, authentication, export, "
-        "interface, architecture, cleanup"
+    feature_lesson = Lesson(
+        id="feature-development",
+        trigger=(
+            "Feature Development workflow. Use when implementing a new feature, adding "
+            "functionality, or making significant changes to the codebase. This workflow ensures "
+            "research, planning, documentation, and testing. Triggers: add a new feature, "
+            "implement user authentication, implement the export, add functionality, build the "
+            "dashboard, create a new component, create export functionality, build out the API, "
+            "enhance the UI, improve performance, make it faster, optimize the queries, update "
+            "the styling, modernize the codebase, redesign the interface, refactor the module, "
+            "refactor this code, clean up the architecture. Keywords: new feature, implement, "
+            "add functionality, build, create, improve, modernize, enhance, style, update, "
+            "redesign, refactor, UI, UX, styling, controls, filters, visualization, graph, view, "
+            "component, optimize, performance, faster, dashboard, API, authentication, export, "
+            "interface, architecture, cleanup"
+        ),
+        action="Follow feature-development workflow",
     )
 
-    workflows_collection.upsert(
-        ids=["bug-fix", "feature-development"],
-        documents=[bug_fix_text, feature_text],
-        metadatas=[
-            {"name": "Bug Fix", "description": "Fix bugs", "trigger": "bug fix", "step_count": 4},
-            {"name": "Feature Development", "description": "Build features", "trigger": "implement", "step_count": 6},
-        ],
-    )
+    store.add_lesson(bug_fix_lesson)
+    store.add_lesson(feature_lesson)
 
-    return store, workflows_collection
+    return store
 
 
 @pytest.fixture
-def vector_store_with_lessons(temp_chroma):
+def vector_store_with_lessons(temp_qdrant):
     """Create a vector store with test lessons."""
-    store = VectorStore(persist_path=temp_chroma)
+    store = QdrantVectorStore(persist_path=temp_qdrant)
 
     # Add lessons with rich trigger text for better semantic matching
     lessons = [
@@ -342,70 +342,60 @@ def vector_store_with_lessons(temp_chroma):
 # =============================================================================
 
 class TestWorkflowTriggers:
-    """Test that workflow triggers match expected phrasings."""
+    """Test that workflow triggers match expected phrasings.
+
+    Workflows are stored as lessons with rich trigger text for this test.
+    """
 
     @pytest.mark.parametrize("phrasing", WORKFLOW_PHRASINGS["bug-fix"].phrasings)
     def test_bug_fix_phrasings(self, vector_store_with_workflows, phrasing):
         """Test that bug-fix related phrasings match the bug-fix workflow."""
-        store, workflows_collection = vector_store_with_workflows
+        store = vector_store_with_workflows
 
-        results = workflows_collection.query(
-            query_texts=[phrasing],
-            n_results=2,
-            include=["distances"],
-        )
+        results = store.search(phrasing, limit=2)
 
-        assert results["ids"] and results["ids"][0], f"No results for '{phrasing}'"
+        assert results, f"No results for '{phrasing}'"
 
-        # Find the bug-fix workflow in results
-        results["ids"][0][0]
-        best_distance = results["distances"][0][0]
-        1 - best_distance
-
-        # Check if bug-fix is the top match OR has relevance >= threshold
-        bug_fix_idx = None
-        for i, wf_id in enumerate(results["ids"][0]):
-            if wf_id == "bug-fix":
-                bug_fix_idx = i
+        # Check if bug-fix is in results with sufficient relevance
+        bug_fix_result = None
+        for lesson_id, score in results:
+            if lesson_id == "bug-fix":
+                bug_fix_result = (lesson_id, score)
                 break
 
-        if bug_fix_idx is not None:
-            relevance = 1 - results["distances"][0][bug_fix_idx]
+        if bug_fix_result is not None:
+            relevance = bug_fix_result[1]
             assert relevance >= MIN_RELEVANCE, (
                 f"'{phrasing}' matched bug-fix with only {relevance:.0%} relevance "
                 f"(need >= {MIN_RELEVANCE:.0%})"
             )
         else:
-            pytest.fail(f"'{phrasing}' did not match bug-fix workflow at all")
+            pytest.fail(f"'{phrasing}' did not match bug-fix workflow at all. Got: {results}")
 
     @pytest.mark.parametrize("phrasing", WORKFLOW_PHRASINGS["feature-development"].phrasings)
     def test_feature_development_phrasings(self, vector_store_with_workflows, phrasing):
         """Test that feature-development related phrasings match correctly."""
-        store, workflows_collection = vector_store_with_workflows
+        store = vector_store_with_workflows
 
-        results = workflows_collection.query(
-            query_texts=[phrasing],
-            n_results=2,
-            include=["distances"],
-        )
+        results = store.search(phrasing, limit=2)
 
-        assert results["ids"] and results["ids"][0], f"No results for '{phrasing}'"
+        assert results, f"No results for '{phrasing}'"
 
         # Find feature-development in results
-        feature_idx = None
-        for i, wf_id in enumerate(results["ids"][0]):
-            if wf_id == "feature-development":
-                feature_idx = i
+        feature_result = None
+        for lesson_id, score in results:
+            if lesson_id == "feature-development":
+                feature_result = (lesson_id, score)
                 break
 
-        if feature_idx is not None:
-            relevance = 1 - results["distances"][0][feature_idx]
+        if feature_result is not None:
+            relevance = feature_result[1]
             assert relevance >= MIN_RELEVANCE, (
                 f"'{phrasing}' matched feature-development with only {relevance:.0%} "
                 f"relevance (need >= {MIN_RELEVANCE:.0%})"
             )
         else:
-            pytest.fail(f"'{phrasing}' did not match feature-development workflow")
+            pytest.fail(f"'{phrasing}' did not match feature-development workflow. Got: {results}")
 
 
 # =============================================================================
@@ -426,7 +416,6 @@ class TestLessonTriggers:
         assert results, f"No results for '{phrasing}'"
 
         # Check if at least one expected lesson is in results with sufficient relevance
-        [lesson_id for lesson_id, score in results]
         found_relevant = [
             (lesson_id, score)
             for lesson_id, score in results
@@ -490,7 +479,7 @@ class TestGapDetection:
 
     def test_report_workflow_coverage(self, vector_store_with_workflows):
         """Generate a coverage report for workflow triggers."""
-        store, workflows_collection = vector_store_with_workflows
+        store = vector_store_with_workflows
 
         report = []
         failures = []
@@ -499,35 +488,30 @@ class TestGapDetection:
             report.append(f"\n## {workflow_id} ({test_case.intent})")
 
             for phrasing in test_case.phrasings:
-                results = workflows_collection.query(
-                    query_texts=[phrasing],
-                    n_results=2,
-                    include=["distances"],
-                )
+                results = store.search(phrasing, limit=2)
 
-                if not results["ids"] or not results["ids"][0]:
-                    report.append(f"  ❌ '{phrasing}' - NO MATCH")
+                if not results:
+                    report.append(f"  - '{phrasing}' - NO MATCH")
                     failures.append((workflow_id, phrasing, "no match"))
                     continue
 
                 # Find target workflow
-                target_idx = None
-                for i, wf_id in enumerate(results["ids"][0]):
-                    if wf_id == workflow_id:
-                        target_idx = i
+                target_result = None
+                for lesson_id, score in results:
+                    if lesson_id == workflow_id:
+                        target_result = (lesson_id, score)
                         break
 
-                if target_idx is None:
-                    best_id = results["ids"][0][0]
-                    best_rel = 1 - results["distances"][0][0]
-                    report.append(f"  ❌ '{phrasing}' - matched {best_id} ({best_rel:.0%}) instead")
+                if target_result is None:
+                    best_id, best_rel = results[0]
+                    report.append(f"  - '{phrasing}' - matched {best_id} ({best_rel:.0%}) instead")
                     failures.append((workflow_id, phrasing, f"wrong match: {best_id}"))
                 else:
-                    relevance = 1 - results["distances"][0][target_idx]
+                    relevance = target_result[1]
                     if relevance >= MIN_RELEVANCE:
-                        report.append(f"  ✅ '{phrasing}' - {relevance:.0%}")
+                        report.append(f"  + '{phrasing}' - {relevance:.0%}")
                     else:
-                        report.append(f"  ⚠️ '{phrasing}' - {relevance:.0%} (below threshold)")
+                        report.append(f"  ? '{phrasing}' - {relevance:.0%} (below threshold)")
                         failures.append((workflow_id, phrasing, f"low relevance: {relevance:.0%}"))
 
         # Print report for visibility
@@ -552,7 +536,7 @@ class TestGapDetection:
                 results = store.search(phrasing, limit=5)
 
                 if not results:
-                    report.append(f"  ❌ '{phrasing}' - NO MATCH")
+                    report.append(f"  - '{phrasing}' - NO MATCH")
                     failures.append((category, phrasing, "no match"))
                     continue
 
@@ -561,10 +545,10 @@ class TestGapDetection:
 
                 if found:
                     best_match = found[0]
-                    report.append(f"  ✅ '{phrasing}' - {best_match[0]} ({best_match[1]:.0%})")
+                    report.append(f"  + '{phrasing}' - {best_match[0]} ({best_match[1]:.0%})")
                 else:
                     top_match = results[0]
-                    report.append(f"  ⚠️ '{phrasing}' - got {top_match[0]} ({top_match[1]:.0%})")
+                    report.append(f"  ? '{phrasing}' - got {top_match[0]} ({top_match[1]:.0%})")
                     failures.append((category, phrasing, f"unexpected: {top_match[0]}"))
 
         print("\n".join(report))
@@ -587,49 +571,33 @@ class TestRealDataTriggers:
         """Load the real MGCP vector store."""
         # Use default MGCP data path
         mgcp_dir = os.path.expanduser("~/.mgcp")
-        chroma_path = os.path.join(mgcp_dir, "chroma")
+        qdrant_path = os.path.join(mgcp_dir, "qdrant")
 
-        if not os.path.exists(chroma_path):
-            pytest.skip("No MGCP data found at ~/.mgcp/chroma")
+        if not os.path.exists(qdrant_path):
+            pytest.skip("No MGCP data found at ~/.mgcp/qdrant")
 
-        return VectorStore(persist_path=chroma_path)
+        return QdrantVectorStore(persist_path=qdrant_path)
 
-    @pytest.mark.parametrize("phrasing,expected_workflow", [
-        ("fix the bug", "bug-fix"),
-        ("something's broken", "bug-fix"),
-        ("add a new feature", "feature-development"),
-        ("implement authentication", "feature-development"),
+    @pytest.mark.parametrize("phrasing,expected_lessons", [
+        ("fix the bug", ["bug-fix"]),
+        ("something's broken", ["bug-fix"]),
+        ("commit this", ["no-claude-attribution-in-commits", "mgcp-save-before-commit", "query-before-git-operations"]),
+        ("starting a new session", ["mgcp-session-start"]),
     ])
-    def test_real_workflow_matching(self, real_vector_store, phrasing, expected_workflow):
-        """Test workflow matching against real data."""
+    def test_real_lesson_matching(self, real_vector_store, phrasing, expected_lessons):
+        """Test lesson matching against real data."""
         store = real_vector_store
 
-        # Get workflows collection
-        try:
-            workflows_collection = store.client.get_collection("workflows")
-        except Exception:
-            pytest.skip("No workflows collection in real data")
+        results = store.search(phrasing, limit=5)
 
-        results = workflows_collection.query(
-            query_texts=[phrasing],
-            n_results=3,
-            include=["distances"],
-        )
+        if not results:
+            pytest.fail(f"No results for '{phrasing}'")
 
-        if not results["ids"] or not results["ids"][0]:
-            pytest.fail(f"No workflow matched '{phrasing}'")
+        # Check if any expected lesson matched with sufficient relevance
+        found = [(lid, s) for lid, s in results if lid in expected_lessons and s >= MIN_RELEVANCE]
 
-        # Check if expected workflow matched with sufficient relevance
-        for i, wf_id in enumerate(results["ids"][0]):
-            if wf_id == expected_workflow:
-                relevance = 1 - results["distances"][0][i]
-                assert relevance >= MIN_RELEVANCE, (
-                    f"'{phrasing}' matched {expected_workflow} with only {relevance:.0%}"
-                )
-                return
-
-        best_match = results["ids"][0][0]
-        best_rel = 1 - results["distances"][0][0]
-        pytest.fail(
-            f"'{phrasing}' expected {expected_workflow} but got {best_match} ({best_rel:.0%})"
-        )
+        if not found:
+            top_results = [(lid, f"{s:.0%}") for lid, s in results[:3]]
+            pytest.fail(
+                f"'{phrasing}' expected one of {expected_lessons} but got {top_results}"
+            )

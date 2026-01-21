@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-01-21
+
+First tagged release. Includes all changes since initial development.
+
 ### Added
 - **Qdrant vector store**: Replaced ChromaDB with Qdrant for vector storage
   - Same API for local mode and server mode (growth path for production)
@@ -21,7 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Re-embeds all data with new BGE model
 - **Centralized embedding**: New `embedding.py` module with shared model instance
 - **delete_lesson MCP tool**: Complete lesson deletion from all stores (SQLite, Qdrant, NetworkX)
-- Documentation for delete_lesson in CLAUDE.md (35 tools now documented)
+- **Proactive Hooks**: UserPromptSubmit hooks detect keywords and inject reminders
+  - Phase-based dispatcher for workflow state tracking
+  - Git, catalogue, and task-start reminder hooks
+- **Multi-client support**: 8 LLM clients (Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Continue, Cline, Cody)
+- **Data export/import**: `mgcp-export` and `mgcp-import` commands for lesson portability
+- **Backup/restore**: `mgcp-backup` command with `--restore` option
+- **Duplicate detection**: `mgcp-duplicates` command finds semantically similar lessons
+- **Release versioning workflow**: 6-step workflow for semantic versioning releases
+- Documentation for all 35 MCP tools in CLAUDE.md
 
 ### Changed
 - **Vector store backend**: ChromaDB → Qdrant
@@ -29,14 +41,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `qdrant_catalogue_store.py` replaces `catalogue_vector_store.py`
 - **Embedding model**: `all-MiniLM-L6-v2` → `BAAI/bge-base-en-v1.5`
 - **Dependencies**: Removed chromadb, added qdrant-client
-- **Renamed internal methods for clarity**:
-  - `vector_store.remove_lesson()` → `vector_store.remove_vector_lesson()` - Qdrant layer
-  - `graph.remove_lesson()` → `graph.remove_graph_lesson()` - NetworkX layer
-  - `persistence.delete_lesson()` remains unchanged - SQLite layer
-- Updated tests to use new method names
+- **Hook system**: Rewritten to proof-based gates instead of instructional reminders
+- Ruff linter config: line-length 120, per-file ignores for tests/bootstrap
 
-### Deprecated
-- ChromaDB vector stores (`vector_store.py`, `catalogue_vector_store.py`) - kept for migration
+### Fixed
+- Qdrant dual-client lock bug (shared client pattern)
+- Import method name bug (`save_lesson` → `add_lesson`)
+- All linter errors resolved (305 errors fixed)
+- Duplicate project bug with database migration
+- CI test failures from ChromaDB migration
+
+### Removed
+- ChromaDB vector stores (`vector_store.py`, `catalogue_vector_store.py`) - replaced by Qdrant
 
 ### Migration Required
 For existing installations with ChromaDB data:
@@ -44,26 +60,6 @@ For existing installations with ChromaDB data:
 mgcp-migrate              # Migrates ChromaDB data to Qdrant
 mgcp-migrate --dry-run    # Preview first
 ```
-
-## [1.1.0] - 2026-01-07
-
-### Added
-- **Proactive Hooks**: UserPromptSubmit hooks detect keywords and inject reminders:
-  - `git-reminder.py`: Detects git operations, reminds to query lessons
-  - `catalogue-reminder.py`: Detects library/security/decision mentions, reminds to catalogue
-- **Multi-client support**: 8 LLM clients now supported (Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Continue, Cline, Cody)
-- **Data export/import**: `mgcp-export` and `mgcp-import` commands for lesson portability
-- **Backup/restore**: `mgcp-backup` command with `--restore` option for full data backup
-- **Duplicate detection**: `mgcp-duplicates` command finds semantically similar lessons
-- **Project deduplication**: Unique constraint on project_path prevents duplicate contexts
-
-### Changed
-- Ruff linter config updated: line-length 120, per-file ignores for tests/bootstrap
-- Phase 5 marked complete
-
-### Fixed
-- All linter errors resolved (305 errors fixed)
-- Duplicate project bug fixed with database migration
 
 ## [1.0.0] - 2026-01-06
 

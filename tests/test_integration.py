@@ -14,7 +14,7 @@ import pytest
 from mgcp.graph import LessonGraph
 from mgcp.models import Example, Lesson, ProjectContext, ProjectTodo, Relationship
 from mgcp.persistence import LessonStore
-from mgcp.vector_store import VectorStore
+from mgcp.qdrant_vector_store import QdrantVectorStore
 
 
 class TestLessonWorkflow:
@@ -26,7 +26,7 @@ class TestLessonWorkflow:
         with tempfile.TemporaryDirectory() as tmpdir:
             yield {
                 "lesson_store": LessonStore(db_path=str(Path(tmpdir) / "lessons.db")),
-                "vector_store": VectorStore(persist_path=str(Path(tmpdir) / "chroma")),
+                "vector_store": QdrantVectorStore(persist_path=str(Path(tmpdir) / "chroma")),
                 "graph": LessonGraph(),
             }
 

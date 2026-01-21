@@ -4,7 +4,6 @@ import tempfile
 
 import pytest
 
-from mgcp.catalogue_vector_store import CatalogueVectorStore
 from mgcp.models import (
     ArchitecturalNote,
     Convention,
@@ -15,11 +14,12 @@ from mgcp.models import (
     ProjectCatalogue,
     SecurityNote,
 )
+from mgcp.qdrant_catalogue_store import QdrantCatalogueStore
 
 
 @pytest.fixture
-def temp_chroma():
-    """Create a temporary ChromaDB for testing."""
+def temp_qdrant():
+    """Create a temporary Qdrant store for testing."""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield tmpdir
 
@@ -84,28 +84,28 @@ def sample_catalogue():
     )
 
 
-class TestCatalogueVectorStore:
+class TestQdrantCatalogueStore:
     """Test catalogue vector store operations."""
 
-    def test_index_catalogue(self, temp_chroma, sample_catalogue):
+    def test_index_catalogue(self, temp_qdrant, sample_catalogue):
         """Test indexing a full catalogue."""
-        store = CatalogueVectorStore(persist_path=temp_chroma)
+        store = QdrantCatalogueStore(persist_path=temp_qdrant)
         count = store.index_catalogue("proj123", sample_catalogue)
         # 1 arch + 1 security + 1 framework + 1 library + 1 convention + 1 coupling + 1 decision + 1 error
         assert count == 8
 
-    def test_search_arch_notes(self, temp_chroma, sample_catalogue):
+    def test_search_arch_notes(self, temp_qdrant, sample_catalogue):
         """Test searching architectural notes."""
-        store = CatalogueVectorStore(persist_path=temp_chroma)
+        store = QdrantCatalogueStore(persist_path=temp_qdrant)
         store.index_catalogue("proj123", sample_catalogue)
 
         results = store.search("server restart", project_id="proj123")
         assert len(results) > 0
         assert any("arch" in r[2].get("item_type", "") for r in results)
 
-    def test_search_by_project(self, temp_chroma, sample_catalogue):
+    def test_search_by_project(self, temp_qdrant, sample_catalogue):
         """Test searching is scoped to project."""
-        store = CatalogueVectorStore(persist_path=temp_chroma)
+        store = QdrantCatalogueStore(persist_path=temp_qdrant)
         store.index_catalogue("proj123", sample_catalogue)
         store.index_catalogue("proj456", sample_catalogue)
 
@@ -114,53 +114,53 @@ class TestCatalogueVectorStore:
         assert len(results) > 0
         assert all(r[2].get("project_id") == "proj123" for r in results)
 
-    def test_search_by_item_type(self, temp_chroma, sample_catalogue):
+    def test_search_by_item_type(self, temp_qdrant, sample_catalogue):
         """Test filtering by item type."""
-        store = CatalogueVectorStore(persist_path=temp_chroma)
+        store = QdrantCatalogueStore(persist_path=temp_qdrant)
         store.index_catalogue("proj123", sample_catalogue)
 
         results = store.search("injection", item_types=["security"])
         assert len(results) > 0
         assert all(r[2].get("item_type") == "security" for r in results)
 
-    def test_search_conventions(self, temp_chroma, sample_catalogue):
+    def test_search_conventions(self, temp_qdrant, sample_catalogue):
         """Test searching conventions."""
-        store = CatalogueVectorStore(persist_path=temp_chroma)
+        store = QdrantCatalogueStore(persist_path=temp_qdrant)
         store.index_catalogue("proj123", sample_catalogue)
 
         results = store.search("naming convention snake case")
         assert len(results) > 0
         assert any("convention" in r[2].get("item_type", "") for r in results)
 
-    def test_search_decisions(self, temp_chroma, sample_catalogue):
+    def test_search_decisions(self, temp_qdrant, sample_catalogue):
         """Test searching decisions."""
-        store = CatalogueVectorStore(persist_path=temp_chroma)
+        store = QdrantCatalogueStore(persist_path=temp_qdrant)
         store.index_catalogue("proj123", sample_catalogue)
 
         results = store.search("why NetworkX graph database")
         assert len(results) > 0
         assert any("decision" in r[2].get("item_type", "") for r in results)
 
-    def test_search_error_patterns(self, temp_chroma, sample_catalogue):
+    def test_search_error_patterns(self, temp_qdrant, sample_catalogue):
         """Test searching error patterns."""
-        store = CatalogueVectorStore(persist_path=temp_chroma)
+        store = QdrantCatalogueStore(persist_path=temp_qdrant)
         store.index_catalogue("proj123", sample_catalogue)
 
         results = store.search("ModuleNotFoundError import")
         assert len(results) > 0
         assert any("error" in r[2].get("item_type", "") for r in results)
 
-    def test_search_file_couplings(self, temp_chroma, sample_catalogue):
+    def test_search_file_couplings(self, temp_qdrant, sample_catalogue):
         """Test searching file couplings."""
-        store = CatalogueVectorStore(persist_path=temp_chroma)
+        store = QdrantCatalogueStore(persist_path=temp_qdrant)
         store.index_catalogue("proj123", sample_catalogue)
 
         results = store.search("server.py models.py change together")
         assert len(results) > 0
 
-    def test_remove_item(self, temp_chroma, sample_catalogue):
+    def test_remove_item(self, temp_qdrant, sample_catalogue):
         """Test removing a single item."""
-        store = CatalogueVectorStore(persist_path=temp_chroma)
+        store = QdrantCatalogueStore(persist_path=temp_qdrant)
         store.index_catalogue("proj123", sample_catalogue)
 
         initial_count = store.count(project_id="proj123")
@@ -170,9 +170,9 @@ class TestCatalogueVectorStore:
         new_count = store.count(project_id="proj123")
         assert new_count == initial_count - 1
 
-    def test_remove_project(self, temp_chroma, sample_catalogue):
+    def test_remove_project(self, temp_qdrant, sample_catalogue):
         """Test removing all items for a project."""
-        store = CatalogueVectorStore(persist_path=temp_chroma)
+        store = QdrantCatalogueStore(persist_path=temp_qdrant)
         store.index_catalogue("proj123", sample_catalogue)
         store.index_catalogue("proj456", sample_catalogue)
 
@@ -181,18 +181,18 @@ class TestCatalogueVectorStore:
         assert store.count(project_id="proj123") == 0
         assert store.count(project_id="proj456") > 0
 
-    def test_count(self, temp_chroma, sample_catalogue):
+    def test_count(self, temp_qdrant, sample_catalogue):
         """Test counting items."""
-        store = CatalogueVectorStore(persist_path=temp_chroma)
+        store = QdrantCatalogueStore(persist_path=temp_qdrant)
         assert store.count() == 0
 
         store.index_catalogue("proj123", sample_catalogue)
         assert store.count() == 8
         assert store.count(project_id="proj123") == 8
 
-    def test_min_score_filter(self, temp_chroma, sample_catalogue):
+    def test_min_score_filter(self, temp_qdrant, sample_catalogue):
         """Test minimum score filtering."""
-        store = CatalogueVectorStore(persist_path=temp_chroma)
+        store = QdrantCatalogueStore(persist_path=temp_qdrant)
         store.index_catalogue("proj123", sample_catalogue)
 
         # High min_score should filter out low-relevance results

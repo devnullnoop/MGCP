@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+from qdrant_client import QdrantClient
 
 from .graph import LessonGraph
 from .logging_config import configure_logging, get_logger
@@ -101,8 +102,16 @@ async def _ensure_initialized() -> tuple[
 
         try:
             _store = LessonStore()
-            _vector_store = QdrantVectorStore()
-            _catalogue_vector = QdrantCatalogueStore()
+
+            # Create a single shared Qdrant client for all vector stores
+            # CRITICAL: Qdrant local mode only allows ONE client per path.
+            # Multiple clients cause "Storage folder already accessed" errors.
+            from .qdrant_vector_store import get_default_qdrant_path
+            qdrant_path = get_default_qdrant_path()
+            shared_qdrant_client = QdrantClient(path=qdrant_path)
+
+            _vector_store = QdrantVectorStore(client=shared_qdrant_client)
+            _catalogue_vector = QdrantCatalogueStore(client=shared_qdrant_client)
             _graph = LessonGraph()
             _telemetry = TelemetryLogger()
 

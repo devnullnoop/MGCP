@@ -162,7 +162,7 @@ async def import_lessons(
                 )
 
                 # Save to store
-                await store.save_lesson(lesson)
+                await store.add_lesson(lesson)
 
                 # Add to vector store
                 vector_store.add_lesson(lesson)

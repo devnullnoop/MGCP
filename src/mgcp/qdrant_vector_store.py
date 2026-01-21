@@ -64,13 +64,21 @@ class QdrantVectorStore:
         self,
         persist_path: str = DEFAULT_QDRANT_PATH,
         collection_name: str = "lessons",
+        client: QdrantClient | None = None,
     ):
         self.persist_path = Path(os.path.expanduser(persist_path))
         self.persist_path.mkdir(parents=True, exist_ok=True)
         self.collection_name = collection_name
 
-        # Initialize Qdrant in local mode (persistent, no server needed)
-        self.client = QdrantClient(path=str(self.persist_path))
+        # Use provided client or create new one
+        # IMPORTANT: Qdrant local mode only allows ONE client per path.
+        # Share clients between stores to avoid lock conflicts.
+        if client is not None:
+            self.client = client
+            self._owns_client = False
+        else:
+            self.client = QdrantClient(path=str(self.persist_path))
+            self._owns_client = True
 
         # Ensure collection exists
         self._ensure_collection()

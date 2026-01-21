@@ -321,11 +321,11 @@ class TestImportLessons:
 
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_all_lessons = AsyncMock(return_value=[])
-            mock_store.save_lesson = AsyncMock()
+            mock_store.add_lesson = AsyncMock()
             MockStore.return_value = mock_store
 
             mock_vector = MagicMock()
@@ -350,7 +350,7 @@ class TestImportLessons:
 
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_all_lessons = AsyncMock(return_value=sample_lessons)
@@ -375,12 +375,12 @@ class TestImportLessons:
 
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_all_lessons = AsyncMock(return_value=sample_lessons)
             mock_store.delete_lesson = AsyncMock()
-            mock_store.save_lesson = AsyncMock()
+            mock_store.add_lesson = AsyncMock()
             MockStore.return_value = mock_store
             MockVector.return_value = MagicMock()
 
@@ -402,11 +402,11 @@ class TestImportLessons:
 
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_all_lessons = AsyncMock(return_value=sample_lessons)
-            mock_store.save_lesson = AsyncMock()
+            mock_store.add_lesson = AsyncMock()
             MockStore.return_value = mock_store
             MockVector.return_value = MagicMock()
 
@@ -428,11 +428,11 @@ class TestImportLessons:
 
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_all_lessons = AsyncMock(return_value=[])
-            mock_store.save_lesson = AsyncMock()
+            mock_store.add_lesson = AsyncMock()
             MockStore.return_value = mock_store
             MockVector.return_value = MagicMock()
 
@@ -440,7 +440,7 @@ class TestImportLessons:
 
         assert result["dry_run"] is True
         assert result["imported"] == 1
-        mock_store.save_lesson.assert_not_called()
+        mock_store.add_lesson.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_import_with_relationships(self, temp_dir):
@@ -462,11 +462,11 @@ class TestImportLessons:
 
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_all_lessons = AsyncMock(return_value=[])
-            mock_store.save_lesson = AsyncMock()
+            mock_store.add_lesson = AsyncMock()
             MockStore.return_value = mock_store
             MockVector.return_value = MagicMock()
 
@@ -488,11 +488,11 @@ class TestImportLessons:
 
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_all_lessons = AsyncMock(return_value=[])
-            mock_store.save_lesson = AsyncMock()
+            mock_store.add_lesson = AsyncMock()
             MockStore.return_value = mock_store
             MockVector.return_value = MagicMock()
 
@@ -520,7 +520,7 @@ class TestImportLessons:
 
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_all_lessons = AsyncMock(return_value=sample_lessons)
@@ -545,7 +545,7 @@ class TestFindDuplicates:
         """Test that duplicates are returned as pairs."""
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_all_lessons = AsyncMock(return_value=sample_lessons)
@@ -571,7 +571,7 @@ class TestFindDuplicates:
         """Test that threshold filtering works."""
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_all_lessons = AsyncMock(return_value=sample_lessons)
@@ -593,7 +593,7 @@ class TestFindDuplicates:
         """Test that a lesson doesn't match itself."""
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_all_lessons = AsyncMock(return_value=sample_lessons[:1])
@@ -613,7 +613,7 @@ class TestFindDuplicates:
         """Test that results are sorted by similarity descending."""
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_all_lessons = AsyncMock(return_value=sample_lessons)
@@ -647,7 +647,7 @@ class TestSuggestTags:
         """Test that tags are suggested from similar lessons."""
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_lesson = AsyncMock(
@@ -672,7 +672,7 @@ class TestSuggestTags:
         """Test that existing tags are not suggested."""
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_lesson = AsyncMock(
@@ -696,7 +696,7 @@ class TestSuggestTags:
         """Test that max_tags limit is respected."""
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_lesson = AsyncMock(return_value=sample_lessons[0])
@@ -717,7 +717,7 @@ class TestSuggestTags:
         """Test handling of non-existent lesson."""
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore"),
+            patch("mgcp.data_ops.QdrantVectorStore"),
         ):
             mock_store = MagicMock()
             mock_store.get_lesson = AsyncMock(return_value=None)
@@ -767,7 +767,7 @@ class TestDataOpsEdgeCases:
 
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_all_lessons = AsyncMock(return_value=[])
@@ -801,7 +801,7 @@ class TestDataOpsEdgeCases:
 
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             mock_store = MagicMock()
             mock_store.get_all_lessons = AsyncMock(return_value=[])
@@ -810,7 +810,7 @@ class TestDataOpsEdgeCases:
                 nonlocal saved_lesson
                 saved_lesson = lesson
 
-            mock_store.save_lesson = AsyncMock(side_effect=capture_save)
+            mock_store.add_lesson = AsyncMock(side_effect=capture_save)
             MockStore.return_value = mock_store
             MockVector.return_value = MagicMock()
 
@@ -870,7 +870,7 @@ class TestDataOpsRegressions:
         """
         with (
             patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.VectorStore") as MockVector,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
         ):
             lesson = Lesson(id="test", trigger="test", action="test")
             mock_store = MagicMock()

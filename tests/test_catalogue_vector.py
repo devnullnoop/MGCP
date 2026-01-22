@@ -4,9 +4,6 @@ import tempfile
 
 import pytest
 
-# Mark all tests in this module as slow - embedding operations are expensive in CI
-pytestmark = pytest.mark.slow
-
 from mgcp.models import (
     ArchitecturalNote,
     Convention,
@@ -18,6 +15,9 @@ from mgcp.models import (
     SecurityNote,
 )
 from mgcp.qdrant_catalogue_store import QdrantCatalogueStore
+
+# Mark all tests in this module as slow - embedding operations are expensive in CI
+pytestmark = pytest.mark.slow
 
 
 @pytest.fixture

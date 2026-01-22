@@ -160,6 +160,7 @@ class TestGraphSmoke:
         assert "graph-smoke" in graph.graph.nodes()
 
 
+@pytest.mark.slow
 class TestVectorStoreSmoke:
     """Quick sanity checks for vector store."""
 
@@ -239,6 +240,7 @@ class TestCLISmoke:
         assert result.returncode in [0, 2]
 
 
+@pytest.mark.slow
 class TestEndToEndSmoke:
     """Quick end-to-end workflow tests."""
 

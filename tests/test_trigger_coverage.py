@@ -37,6 +37,9 @@ import pytest
 from mgcp.models import Lesson
 from mgcp.qdrant_vector_store import QdrantVectorStore
 
+# Mark all tests in this module as slow - embedding operations are expensive in CI
+pytestmark = pytest.mark.slow
+
 # Minimum relevance score to consider a match
 # Note: Short phrases against long documents yield lower semantic similarity than
 # you'd expect. Embeddings are non-deterministic (slight variance between runs) and

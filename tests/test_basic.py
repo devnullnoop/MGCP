@@ -149,6 +149,7 @@ class TestLessonGraph:
         assert "child2" in visited
 
 
+@pytest.mark.slow
 class TestQdrantVectorStore:
     """Test Qdrant vector store operations."""
 

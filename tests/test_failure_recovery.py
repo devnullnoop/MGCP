@@ -20,6 +20,9 @@ from mgcp.models import Lesson
 from mgcp.persistence import LessonStore
 from mgcp.qdrant_vector_store import QdrantVectorStore
 
+# Mark all tests in this module as slow - embedding operations are expensive in CI
+pytestmark = pytest.mark.slow
+
 
 class TestCorruptedDatabase:
     """Tests for handling corrupted database files."""

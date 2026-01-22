@@ -4,6 +4,9 @@ import tempfile
 
 import pytest
 
+# Mark all tests in this module as slow - embedding operations are expensive in CI
+pytestmark = pytest.mark.slow
+
 from mgcp.models import (
     ArchitecturalNote,
     Convention,

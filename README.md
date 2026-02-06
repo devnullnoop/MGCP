@@ -238,9 +238,11 @@ Hooks make the system proactive:
 | Hook | Trigger | Purpose |
 |------|---------|---------|
 | `session-init.py` | Session start | Load context, query lessons |
+| `user-prompt-dispatcher.py` | User messages | Phase-based workflow routing and scheduled reminders |
 | `git-reminder.py` | "commit", "push" | Query git lessons first |
 | `task-start-reminder.py` | "fix", "implement" | Activate relevant workflow |
 | `catalogue-reminder.py` | Library/security mentions | Remind to catalogue |
+| `mgcp-reminder.py` | After code edits | Prompt to capture patterns and gotchas |
 | `mgcp-precompact.py` | Before compression | Save before context lost |
 
 Without hooks, the LLM must remember to query. With hooks, it happens automatically.

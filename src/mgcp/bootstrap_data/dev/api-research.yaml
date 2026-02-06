@@ -1,0 +1,38 @@
+lessons:
+  - id: api-research
+    trigger: "When using an API, library, or package — research current documentation and verify version compatibility before writing code"
+    action: "Read official docs for the CURRENT version before writing code. Verify example code actually runs. Check changelogs for breaking changes in recent releases."
+    rationale: "Stack Overflow answers rot. APIs break between versions. Copying outdated examples embeds vulnerabilities and deprecated patterns that break later."
+    tags: [meta, research, apis]
+
+  - id: check-api-versions
+    trigger: "When working with API or library versions — check for deprecations, upgrades, or version-specific behavior before using examples from documentation"
+    action: "Check current API/library versions before using examples"
+    rationale: "Online examples may be outdated. APIs change between versions."
+    parent_id: api-research
+    tags: [apis, versions]
+    examples:
+      - label: bad
+        code: |
+          # Copy-pasted from 2019 Stack Overflow
+          requests.get(url, verify=False)
+        explanation: "Old patterns may be insecure or deprecated"
+      - label: good
+        code: |
+          # First: pip show requests -> version
+          # Then: check requests docs for current best practice
+        explanation: "Verify version and check current docs"
+
+  - id: check-breaking-changes
+    trigger: "When upgrading dependencies or migrating between versions — read changelogs for breaking changes before upgrading"
+    action: "Read changelogs before upgrading dependencies"
+    rationale: "Minor version bumps can contain breaking changes"
+    parent_id: api-research
+    tags: [apis, dependencies]
+
+  - id: verify-api-response
+    trigger: "When making API requests or fetching data — log and inspect actual responses before parsing, as APIs don't always return what documentation says"
+    action: "Log and inspect actual API responses before parsing"
+    rationale: "APIs don't always return what documentation says"
+    parent_id: api-research
+    tags: [apis, debugging]

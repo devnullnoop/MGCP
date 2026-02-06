@@ -1,0 +1,645 @@
+lessons:
+  - id: security
+    trigger: "When reviewing code for security vulnerabilities, implementing input validation, or protecting against injection attacks, XSS, and CSRF"
+    action: "Validate all input. Escape all output. Use parameterized queries. Encrypt secrets at rest. Trust nothing from outside your system boundary."
+    rationale: "Security flaws compound. A single SQL injection exposes your entire database. A single XSS enables session hijacking. Cost to fix post-breach: reputation, legal liability, user trust—all unrecoverable."
+    tags: [meta, security, quality]
+
+  - id: validate-input
+    trigger: "When handling user input from forms, requests, or query parameters — validate and sanitize all external input before use"
+    action: "Validate and sanitize all external input before use"
+    rationale: "Untrusted input is the root cause of injection attacks, XSS, and many vulnerabilities"
+    parent_id: security
+    tags: [security, input-validation]
+    examples:
+      - label: bad
+        code: |
+          query = f"SELECT * FROM users WHERE id = {user_input}"
+        explanation: "SQL injection vulnerability - user controls query"
+      - label: good
+        code: |
+          query = "SELECT * FROM users WHERE id = ?"
+          cursor.execute(query, (user_input,))
+        explanation: "Parameterized query prevents injection"
+
+  - id: no-hardcoded-secrets
+    trigger: "When handling passwords, secrets, API keys, tokens, or credentials — never hardcode them, use environment variables or secret managers"
+    action: "Never hardcode secrets - use environment variables or secret managers"
+    rationale: "Hardcoded secrets end up in version control and are easily leaked"
+    parent_id: security
+    tags: [security, secrets]
+    examples:
+      - label: bad
+        code: |
+          API_KEY = "sk-abc123secret"  # Committed to git
+        explanation: "Secret will be in git history forever"
+      - label: good
+        code: |
+          API_KEY = os.environ.get('API_KEY')
+          if not API_KEY:
+              raise ValueError('API_KEY not set')
+        explanation: "Secret comes from environment, not code"
+
+  - id: least-privilege
+    trigger: "When configuring permissions, access levels, or roles — request only the minimum privileges needed for the task"
+    action: "Request only the minimum permissions needed for the task"
+    rationale: "Excessive permissions increase attack surface and blast radius"
+    parent_id: security
+    tags: [security, permissions]
+    examples:
+      - label: bad
+        code: |
+          # Request admin access when read-only would suffice
+          conn = db.connect(role='admin')
+        explanation: "Over-privileged connection"
+      - label: good
+        code: |
+          # Use read-only connection for queries
+          conn = db.connect(role='readonly')
+        explanation: "Minimum privilege for the task"
+
+  - id: secure-error-messages
+    trigger: "When displaying error messages to users — never expose stack traces, database details, or system internals in production error responses"
+    action: "Never expose sensitive information in error messages to users"
+    rationale: "Detailed errors help attackers understand system internals"
+    parent_id: security
+    tags: [security, errors]
+    examples:
+      - label: bad
+        code: |
+          return f'Database error: {e}'  # Exposes DB details
+        explanation: "Reveals database structure to attacker"
+      - label: good
+        code: |
+          logger.error(f'DB error: {e}')  # Log internally
+          return 'An error occurred'  # Generic to user
+        explanation: "Log details internally, show generic message to user"
+
+  - id: dependency-security
+    trigger: "When adding new dependencies or packages — audit them for known vulnerabilities and supply chain risks before adding"
+    action: "Audit dependencies for known vulnerabilities before adding them"
+    rationale: "Supply chain attacks through compromised dependencies are common"
+    parent_id: security
+    tags: [security, dependencies]
+    examples:
+      - label: good
+        code: |
+          # Before adding: pip-audit, npm audit, or snyk
+          # Check: is it maintained? recent commits? known issues?
+        explanation: "Audit before trusting third-party code"
+
+  - id: escape-output
+    trigger: "When rendering output to HTML templates or displaying user-controlled content — escape output to prevent XSS attacks"
+    action: "Escape output based on context (HTML, JS, URL, etc.)"
+    rationale: "Unescaped output enables XSS attacks"
+    parent_id: security
+    tags: [security, xss, output]
+    examples:
+      - label: bad
+        code: |
+          return f'<div>{user_name}</div>'  # XSS if name contains <script>
+        explanation: "User-controlled content rendered as HTML"
+      - label: good
+        code: |
+          from html import escape
+          return f'<div>{escape(user_name)}</div>'
+        explanation: "HTML entities escaped, script tags neutralized"
+
+  # --- INPUT VALIDATION ---
+
+  - id: owasp-input-validation
+    trigger: "When validating or sanitizing user input from forms, requests, or parameters — use allowlists, not blocklists, and reject invalid input completely"
+    action: "Validate ALL input server-side using allowlists, not blocklists. Reject invalid input completely - don't attempt to sanitize and use it."
+    rationale: "Client-side validation is bypassable. Blocklists miss edge cases. Attempting to sanitize malicious input often fails. Rejection is safer than transformation."
+    parent_id: security
+    tags: [security, owasp, input-validation]
+    examples:
+      - label: bad
+        code: |
+          # Blocklist approach - will miss edge cases
+          if '<script>' not in user_input:
+              process(user_input)
+        explanation: "Blocklist misses <SCRIPT>, <scr<script>ipt>, and countless other bypasses"
+      - label: good
+        code: |
+          # Allowlist approach - only accept known-good patterns
+          import re
+          if re.match(r'^[a-zA-Z0-9_-]+$', username):
+              process(username)
+          else:
+              raise ValueError('Invalid username format')
+        explanation: "Allowlist defines exactly what's acceptable, rejects everything else"
+
+  - id: owasp-centralized-validation
+    trigger: "When implementing input validation logic — centralize validation routines rather than duplicating them across multiple handlers or middleware"
+    action: "Create centralized input validation routines shared across the application. Don't duplicate validation logic in multiple places."
+    rationale: "Duplicated validation leads to inconsistencies where one path validates and another doesn't. Centralized validation ensures consistent security controls."
+    parent_id: owasp-input-validation
+    tags: [security, owasp, input-validation, architecture]
+
+  - id: owasp-canonicalize-before-validate
+    trigger: "When handling encoded input, Unicode, or character sets — canonicalize to UTF-8 before validation to prevent encoding bypass attacks"
+    action: "Canonicalize input to a common character set (UTF-8) BEFORE validation. Decode all encoded input before checking."
+    rationale: "Attackers use encoding tricks (%2e%2e/, Unicode normalization) to bypass validation. Canonicalize first, then validate the normalized form."
+    parent_id: owasp-input-validation
+    tags: [security, owasp, input-validation, encoding]
+    examples:
+      - label: bad
+        code: |
+          # Validates before decoding - bypassable
+          if '../' not in path:
+              read_file(urllib.parse.unquote(path))  # %2e%2e%2f bypasses check
+        explanation: "Validation happens on encoded form, but decoded form is used"
+      - label: good
+        code: |
+          # Decode first, then validate
+          decoded_path = urllib.parse.unquote(path)
+          if '../' in decoded_path or not decoded_path.startswith('/safe/'):
+              raise ValueError('Invalid path')
+          read_file(decoded_path)
+        explanation: "Decode first, then validate the actual value that will be used"
+
+  # --- OUTPUT ENCODING ---
+
+  - id: owasp-contextual-output-encoding
+    trigger: "When encoding output for different contexts like HTML body, attributes, JavaScript, URLs, or CSS — each context requires different encoding to prevent XSS"
+    action: "Encode output based on the CONTEXT where it appears: HTML body, HTML attribute, JavaScript, URL, CSS. Each context requires different encoding."
+    rationale: "HTML encoding doesn't protect JavaScript contexts. URL encoding doesn't protect HTML. Wrong encoding = XSS vulnerability."
+    parent_id: security
+    tags: [security, owasp, output-encoding, xss]
+    examples:
+      - label: bad
+        code: |
+          # HTML encoding doesn't protect JS context
+          return f'<script>var name = "{html.escape(user_name)}";</script>'
+        explanation: "HTML escaping doesn't prevent JS injection via quotes or backslashes"
+      - label: good
+        code: |
+          # Use JSON encoding for JS context
+          import json
+          return f'<script>var name = {json.dumps(user_name)};</script>'
+        explanation: "JSON encoding properly escapes for JavaScript string context"
+
+  - id: owasp-encode-all-untrusted
+    trigger: "When outputting any data from outside your trust boundary — encode it before rendering, including database data and API responses, not just direct user input"
+    action: "Treat ALL data from outside your trust boundary as untrusted and encode it before output. This includes database data, API responses, and file contents - not just direct user input."
+    rationale: "Stored XSS occurs when previously-stored malicious data is rendered without encoding. Data from databases and APIs can contain injection payloads."
+    parent_id: owasp-contextual-output-encoding
+    tags: [security, owasp, output-encoding, xss]
+
+  # --- AUTHENTICATION ---
+
+  - id: owasp-authentication-fundamentals
+    trigger: "When implementing authentication, login flows, or credential handling — use standard, tested authentication libraries instead of rolling your own"
+    action: "Use standard, tested authentication libraries. Never implement your own password hashing or session management from scratch."
+    rationale: "Authentication is security-critical and easy to get wrong. Battle-tested libraries handle edge cases like timing attacks, secure comparisons, and proper hashing."
+    parent_id: security
+    tags: [security, owasp, authentication]
+    examples:
+      - label: bad
+        code: |
+          # Rolling your own password check
+          if hashlib.md5(password).hexdigest() == stored_hash:
+              login(user)
+        explanation: "MD5 is broken, no salt, vulnerable to timing attacks"
+      - label: good
+        code: |
+          # Use a proper library
+          from passlib.hash import argon2
+          if argon2.verify(password, stored_hash):
+              login(user)
+        explanation: "Argon2 is current best practice, library handles timing-safe comparison"
+
+  - id: owasp-password-storage
+    trigger: "When storing passwords — use Argon2id, bcrypt, scrypt, or PBKDF2 with high work factors, never plaintext or weak hashes like MD5"
+    action: "Store passwords using Argon2id, bcrypt, scrypt, or PBKDF2 with high work factors. Never store plaintext, MD5, SHA1, or unsalted hashes."
+    rationale: "Modern password hashing algorithms are intentionally slow and use salts to prevent rainbow table attacks. MD5/SHA1 are too fast and enable bulk cracking."
+    parent_id: owasp-authentication-fundamentals
+    tags: [security, owasp, authentication, passwords]
+    examples:
+      - label: good
+        code: |
+          # Argon2id with appropriate parameters
+          from argon2 import PasswordHasher
+          ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4)
+          hash = ph.hash(password)
+        explanation: "Argon2id with memory-hard parameters resists GPU/ASIC attacks"
+
+  - id: owasp-auth-fail-securely
+    trigger: "When handling authentication failures — use generic error messages that don't reveal whether the username or password was wrong"
+    action: "Authentication failures must not reveal which part failed. Use generic messages like 'Invalid credentials' - never 'User not found' or 'Wrong password'."
+    rationale: "Specific error messages enable username enumeration. Attackers can harvest valid usernames, then focus password attacks on confirmed accounts."
+    parent_id: owasp-authentication-fundamentals
+    tags: [security, owasp, authentication, enumeration]
+    examples:
+      - label: bad
+        code: |
+          if not user_exists(username):
+              return 'User not found'
+          if not check_password(password):
+              return 'Incorrect password'
+        explanation: "Reveals whether username exists - enables enumeration"
+      - label: good
+        code: |
+          if not authenticate(username, password):
+              return 'Invalid credentials'
+          # Same message regardless of failure reason
+        explanation: "Generic message prevents username enumeration"
+
+  - id: owasp-account-lockout
+    trigger: "When protecting against brute force attacks — implement account lockout, rate limiting, or progressive delays after failed login attempts"
+    action: "Implement account lockout or progressive delays after failed login attempts. Log all authentication failures for monitoring."
+    rationale: "Without lockout, attackers can brute-force passwords indefinitely. Progressive delays or lockouts make brute-force impractical."
+    parent_id: owasp-authentication-fundamentals
+    tags: [security, owasp, authentication, brute-force]
+
+  - id: owasp-mfa
+    trigger: "When securing sensitive accounts or operations — implement multi-factor authentication and require re-authentication for critical actions"
+    action: "Implement multi-factor authentication for sensitive accounts and operations. Require re-authentication for critical actions like password changes or financial transactions."
+    rationale: "Passwords alone are insufficient. MFA ensures account compromise requires multiple attack vectors. Re-auth for sensitive ops prevents session hijacking abuse."
+    parent_id: owasp-authentication-fundamentals
+    tags: [security, owasp, authentication, mfa]
+
+  # --- SESSION MANAGEMENT ---
+
+  - id: owasp-session-management
+    trigger: "When implementing session management — use framework-provided sessions, cryptographically random IDs, and regenerate session ID after login"
+    action: "Use framework-provided session management. Generate cryptographically random session IDs (>=128 bits entropy). Regenerate session ID after login."
+    rationale: "Weak session IDs are guessable. Session fixation attacks exploit pre-login session IDs. Framework implementations handle these edge cases."
+    parent_id: security
+    tags: [security, owasp, session]
+    examples:
+      - label: bad
+        code: |
+          # Predictable session ID
+          session_id = f'user_{user_id}_{timestamp}'
+        explanation: "Predictable pattern - attacker can guess other sessions"
+      - label: good
+        code: |
+          import secrets
+          session_id = secrets.token_urlsafe(32)  # 256 bits
+          # Regenerate after login to prevent fixation
+          request.session.regenerate()
+        explanation: "Cryptographically random, regenerated after auth state change"
+
+  - id: owasp-cookie-security
+    trigger: "When setting session cookies — configure all security attributes: Secure, HttpOnly, SameSite, and appropriate Domain/Path restrictions"
+    action: "Set ALL security attributes on session cookies: Secure (HTTPS only), HttpOnly (no JS access), SameSite=Strict or Lax (CSRF protection), and appropriate Domain/Path restrictions."
+    rationale: "Missing Secure flag allows cookie theft via MITM. Missing HttpOnly enables XSS cookie theft. Missing SameSite enables CSRF attacks."
+    parent_id: owasp-session-management
+    tags: [security, owasp, session, cookies]
+    examples:
+      - label: bad
+        code: |
+          response.set_cookie('session', token)
+        explanation: "No security attributes - vulnerable to XSS, MITM, CSRF"
+      - label: good
+        code: |
+          response.set_cookie(
+              'session', token,
+              secure=True,      # HTTPS only
+              httponly=True,    # No JS access
+              samesite='Lax',   # CSRF protection
+              max_age=3600      # 1 hour expiry
+          )
+        explanation: "All security attributes set"
+
+  - id: owasp-session-timeout
+    trigger: "When implementing session timeouts or logout — enforce both idle and absolute timeouts, and invalidate sessions server-side on logout"
+    action: "Implement both idle timeout (inactivity) and absolute timeout (max session lifetime). Terminate sessions completely on logout - invalidate server-side, not just client."
+    rationale: "Long-lived sessions increase window for session hijacking. Client-only logout leaves session valid for stolen tokens."
+    parent_id: owasp-session-management
+    tags: [security, owasp, session, timeout]
+
+  - id: owasp-session-id-exposure
+    trigger: "When transmitting session IDs — never expose them in URLs, error messages, or logs where they could be leaked to attackers"
+    action: "NEVER expose session IDs in URLs, error messages, or logs. Use POST for transmitting session data when cookies aren't possible."
+    rationale: "Session IDs in URLs appear in browser history, referrer headers, and server logs - all accessible to attackers."
+    parent_id: owasp-session-management
+    tags: [security, owasp, session, exposure]
+
+  # --- ACCESS CONTROL ---
+
+  - id: owasp-access-control
+    trigger: "When implementing authorization or access control — enforce on every request server-side, default to deny, and use centralized access control"
+    action: "Enforce authorization on EVERY request server-side. Use a centralized access control component. Default to DENY - explicitly grant access, never implicitly allow."
+    rationale: "Client-side authorization is bypassable. Scattered authorization logic leads to gaps. Implicit allow creates security holes when new resources are added."
+    parent_id: security
+    tags: [security, owasp, access-control, authorization]
+    examples:
+      - label: bad
+        code: |
+          # Authorization only on some endpoints
+          @app.route('/admin')
+          def admin():
+              if not is_admin(): abort(403)
+              ...
+
+          @app.route('/admin/users')  # Forgot auth check!
+          def admin_users():
+              return get_all_users()
+        explanation: "Scattered auth checks - easy to forget on new endpoints"
+      - label: good
+        code: |
+          # Centralized middleware
+          @app.before_request
+          def check_auth():
+              if request.path.startswith('/admin'):
+                  if not is_admin():
+                      abort(403)
+        explanation: "Centralized check applies to all matching routes"
+
+  - id: owasp-idor-prevention
+    trigger: "When accessing resources by ID — verify the requesting user is authorized to access the specific resource, not just the resource type, to prevent IDOR vulnerabilities"
+    action: "Always verify the requesting user is authorized to access the specific resource, not just the resource type. Check ownership or explicit permission grants."
+    rationale: "IDOR vulnerabilities allow accessing other users' data by changing IDs in requests. Verifying 'user can access documents' isn't enough - verify 'user can access THIS document'."
+    parent_id: owasp-access-control
+    tags: [security, owasp, access-control, idor]
+    examples:
+      - label: bad
+        code: |
+          @app.route('/documents/<doc_id>')
+          def get_document(doc_id):
+              return Document.query.get(doc_id)  # No ownership check!
+        explanation: "Any authenticated user can access any document by ID"
+      - label: good
+        code: |
+          @app.route('/documents/<doc_id>')
+          def get_document(doc_id):
+              doc = Document.query.get(doc_id)
+              if doc.owner_id != current_user.id:
+                  abort(403)
+              return doc
+        explanation: "Verify user owns or has explicit access to this specific document"
+
+  - id: owasp-privilege-escalation
+    trigger: "When handling roles or permissions — never trust client-provided role claims, verify authorization server-side and prevent self-elevation of privileges"
+    action: "Never trust client-provided role or permission claims. Verify authorization server-side. Prevent users from modifying their own privilege level."
+    rationale: "Attackers modify hidden form fields, cookies, or API parameters claiming admin roles. Server must be authoritative on permissions."
+    parent_id: owasp-access-control
+    tags: [security, owasp, access-control, privilege]
+    examples:
+      - label: bad
+        code: |
+          # Trusting client-provided role
+          user_role = request.form.get('role', 'user')
+          if user_role == 'admin':
+              grant_admin_access()
+        explanation: "Attacker adds role=admin to form submission"
+      - label: good
+        code: |
+          # Server-side role lookup
+          user_role = get_role_from_database(current_user.id)
+          if user_role == 'admin':
+              grant_admin_access()
+        explanation: "Role comes from trusted server-side source"
+
+  # --- CRYPTOGRAPHY ---
+
+  - id: owasp-cryptography
+    trigger: "When implementing encryption or cryptography — use established libraries and algorithms like AES-256-GCM and RSA-2048+, never roll your own crypto"
+    action: "Use well-established cryptographic libraries and algorithms. Never implement your own cryptography. Use AES-256-GCM for symmetric, RSA-2048+/ECDSA P-256+ for asymmetric."
+    rationale: "Cryptography is extremely easy to get wrong. Subtle implementation flaws (padding oracles, timing attacks) completely break security. Use vetted libraries."
+    parent_id: security
+    tags: [security, owasp, cryptography]
+    examples:
+      - label: bad
+        code: |
+          # Rolling your own XOR 'encryption'
+          def encrypt(data, key):
+              return bytes(a ^ b for a, b in zip(data, cycle(key)))
+        explanation: "XOR cipher is trivially breakable, no authentication"
+      - label: good
+        code: |
+          from cryptography.fernet import Fernet
+          key = Fernet.generate_key()
+          f = Fernet(key)
+          encrypted = f.encrypt(data)
+        explanation: "Established library with authenticated encryption"
+
+  - id: owasp-key-management
+    trigger: "When managing cryptographic keys — store them in secure key management systems, not in code or config files, and implement key rotation"
+    action: "Store cryptographic keys in secure key management systems (KMS, HSM, or secure vaults), not in code or config files. Implement key rotation procedures."
+    rationale: "Keys in code are exposed in version control. Keys in config files are exposed in backups and logs. Proper key management limits blast radius of compromise."
+    parent_id: owasp-cryptography
+    tags: [security, owasp, cryptography, key-management]
+
+  - id: owasp-random-generation
+    trigger: "When generating tokens, nonces, salts, or session IDs — use cryptographically secure random number generators, never math.random or similar"
+    action: "Use cryptographically secure random number generators (CSPRNG) for all security-sensitive values: tokens, session IDs, nonces, salts. Never use math.random() or similar."
+    rationale: "Non-cryptographic RNGs are predictable. Attackers can predict future values or reconstruct internal state. Use secrets module (Python), crypto.randomBytes (Node), etc."
+    parent_id: owasp-cryptography
+    tags: [security, owasp, cryptography, random]
+    examples:
+      - label: bad
+        code: |
+          import random
+          token = ''.join(random.choices('abcdef0123456789', k=32))
+        explanation: "random module is predictable - not suitable for security"
+      - label: good
+        code: |
+          import secrets
+          token = secrets.token_hex(32)  # 256 bits of entropy
+        explanation: "secrets module uses OS CSPRNG"
+
+  # --- DATA PROTECTION ---
+
+  - id: owasp-data-protection
+    trigger: "When handling sensitive data or PII — classify by sensitivity, encrypt at rest and in transit, and delete when no longer needed"
+    action: "Classify data by sensitivity. Encrypt sensitive data at rest and in transit. Implement data retention policies - delete when no longer needed."
+    rationale: "Breaches happen. Encryption limits damage. Unnecessary data retention increases exposure. Classification enables appropriate controls."
+    parent_id: security
+    tags: [security, owasp, data-protection]
+
+  - id: owasp-sensitive-data-exposure
+    trigger: "When transmitting sensitive data — never put it in URLs, logs, error messages, or client-side caches where it could be exposed"
+    action: "Never put sensitive data in URLs (GET parameters), logs, error messages, or client-side caches. Use POST for sensitive submissions. Disable autocomplete on sensitive forms."
+    rationale: "GET parameters appear in browser history, server logs, and referrer headers. Logs and caches are often less protected than primary data stores."
+    parent_id: owasp-data-protection
+    tags: [security, owasp, data-protection, exposure]
+    examples:
+      - label: bad
+        code: |
+          # Password in URL - appears in logs, history
+          redirect(f'/reset?token={token}&email={email}')
+        explanation: "Sensitive data in URL is logged and cached everywhere"
+      - label: good
+        code: |
+          # Use POST or store in session
+          session['reset_token'] = token
+          redirect('/reset')
+        explanation: "Sensitive data not exposed in URL"
+
+  - id: owasp-https-everywhere
+    trigger: "When configuring transport security — use HTTPS for all traffic, validate TLS certificates, use TLS 1.2+ with strong ciphers, and implement HSTS"
+    action: "Use HTTPS for ALL traffic, not just authentication. Validate TLS certificates properly. Use TLS 1.2+ with strong cipher suites. Implement HSTS."
+    rationale: "HTTP traffic is readable by anyone on the network path. Partial HTTPS (login only) exposes session cookies on other pages. HSTS prevents downgrade attacks."
+    parent_id: owasp-data-protection
+    tags: [security, owasp, data-protection, transport]
+
+  # --- DATABASE SECURITY ---
+
+  - id: owasp-sql-injection
+    trigger: "When writing SQL queries or database operations — always use parameterized queries or prepared statements, never concatenate user input into SQL strings"
+    action: "ALWAYS use parameterized queries or prepared statements. NEVER concatenate user input into SQL strings. Use ORM methods that parameterize automatically."
+    rationale: "SQL injection is consistently in OWASP Top 10. String concatenation allows attackers to modify query logic, extract data, or destroy databases."
+    parent_id: security
+    tags: [security, owasp, database, injection]
+    examples:
+      - label: bad
+        code: |
+          query = f"SELECT * FROM users WHERE id = {user_id}"
+          cursor.execute(query)
+        explanation: "String formatting - attacker can inject: 1 OR 1=1"
+      - label: good
+        code: |
+          query = "SELECT * FROM users WHERE id = %s"
+          cursor.execute(query, (user_id,))
+        explanation: "Parameterized query - input is escaped automatically"
+
+  - id: owasp-database-least-privilege
+    trigger: "When configuring database connections — use accounts with minimum required privileges, and read-only connections for read-only operations"
+    action: "Use database accounts with minimum required privileges. Read-only operations should use read-only connections. Never use admin/root accounts for application access."
+    rationale: "If SQL injection occurs, limited database privileges limit damage. A read-only connection can't DROP TABLES even if exploited."
+    parent_id: owasp-sql-injection
+    tags: [security, owasp, database, least-privilege]
+
+  - id: owasp-stored-procedures
+    trigger: "When designing database access patterns — consider stored procedures to abstract data access and limit what queries the application can execute"
+    action: "Consider using stored procedures to abstract data access. This adds a layer between the application and base tables, limiting what queries can do."
+    rationale: "Stored procedures can enforce business rules at the database level and limit the SQL that can be executed, reducing injection impact."
+    parent_id: owasp-sql-injection
+    tags: [security, owasp, database, architecture]
+
+  # --- FILE MANAGEMENT ---
+
+  - id: owasp-file-upload
+    trigger: "When handling file uploads — validate by content type (magic bytes), restrict allowed types, store outside web root, and rename to prevent path traversal"
+    action: "Validate uploaded files by content (magic bytes), not just extension. Restrict allowed types to business-necessary formats. Store uploads outside web root. Rename files to prevent path traversal."
+    rationale: "Extension checks are bypassable (.php.jpg). Uploads in web root can be executed. User-controlled filenames enable path traversal."
+    parent_id: security
+    tags: [security, owasp, files, upload]
+    examples:
+      - label: bad
+        code: |
+          if filename.endswith('.jpg'):
+              path = f'/uploads/{filename}'  # Path traversal: ../../../etc/passwd.jpg
+              file.save(path)
+        explanation: "Extension check only, user-controlled path"
+      - label: good
+        code: |
+          import magic
+          import uuid
+
+          mime = magic.from_buffer(file.read(1024), mime=True)
+          if mime not in ['image/jpeg', 'image/png']:
+              abort(400)
+          safe_name = f'{uuid.uuid4()}.{mime.split("/")[1]}'
+          path = os.path.join(UPLOAD_DIR, safe_name)  # Outside web root
+          file.save(path)
+        explanation: "Content validation, random filename, safe directory"
+
+  - id: owasp-path-traversal
+    trigger: "When handling user-supplied file paths — prevent path traversal attacks by using allowlists, mapping input to indices, and validating paths after canonicalization"
+    action: "Never pass user input directly to file system operations. Use allowlists of permitted files, or map user input to indices. Validate paths are within expected directory after canonicalization."
+    rationale: "Path traversal (../) allows reading arbitrary files including /etc/passwd, source code, and config files with secrets."
+    parent_id: security
+    tags: [security, owasp, files, traversal]
+    examples:
+      - label: bad
+        code: |
+          template = request.args.get('template')
+          return render_template(f'templates/{template}')
+          # Attacker: ?template=../../../etc/passwd
+        explanation: "User controls path - can escape intended directory"
+      - label: good
+        code: |
+          ALLOWED_TEMPLATES = {'home': 'home.html', 'about': 'about.html'}
+          template_key = request.args.get('template')
+          if template_key not in ALLOWED_TEMPLATES:
+              abort(404)
+          return render_template(f'templates/{ALLOWED_TEMPLATES[template_key]}')
+        explanation: "Allowlist maps user input to known-safe values"
+
+  - id: owasp-file-execution
+    trigger: "When configuring upload directories — disable script execution, serve uploads as static files only, and never store uploads in code directories"
+    action: "Disable script execution in upload directories. Configure web server to serve uploads as static files only. Never store uploads in code directories."
+    rationale: "If attackers can upload and execute code (PHP, JSP, ASPX), they gain full server control. Treating uploads as static prevents execution."
+    parent_id: owasp-file-upload
+    tags: [security, owasp, files, execution]
+
+  # --- ERROR HANDLING & LOGGING ---
+
+  - id: owasp-error-handling
+    trigger: "When implementing error handling for production — display generic messages to users, log detailed errors server-side only, and never expose stack traces"
+    action: "Display generic error messages to users. Log detailed errors server-side only. NEVER expose stack traces, SQL errors, or system paths in production."
+    rationale: "Detailed errors reveal system internals - database structure, file paths, library versions - that help attackers plan exploits."
+    parent_id: security
+    tags: [security, owasp, errors]
+    examples:
+      - label: bad
+        code: |
+          try:
+              query_database()
+          except Exception as e:
+              return f'Database error: {e}'  # Reveals DB details
+        explanation: "Error details exposed to user"
+      - label: good
+        code: |
+          try:
+              query_database()
+          except Exception as e:
+              logger.exception('Database query failed')  # Full details in log
+              return 'An error occurred. Please try again.'  # Generic to user
+        explanation: "Detailed logging, generic user message"
+
+  - id: owasp-security-logging
+    trigger: "When implementing security logging — log all authentication attempts, access control failures, and administrative actions with timestamp, user, IP, and action"
+    action: "Log all security-relevant events: authentication attempts (success AND failure), access control failures, input validation failures, and administrative actions. Include timestamp, user, IP, and action."
+    rationale: "Security logs enable incident detection and forensics. Without them, breaches go undetected and uninvestigated."
+    parent_id: security
+    tags: [security, owasp, logging, audit]
+    examples:
+      - label: good
+        code: |
+          logger.info(
+              'auth_event',
+              extra={
+                  'event_type': 'login_failed',
+                  'username': username,
+                  'ip': request.remote_addr,
+                  'reason': 'invalid_password',
+                  'timestamp': datetime.utcnow().isoformat()
+              }
+          )
+        explanation: "Structured security event with all relevant context"
+
+  - id: owasp-log-injection
+    trigger: "When logging user-supplied data — sanitize input to prevent log injection and use structured logging formats to prevent newline forging"
+    action: "Sanitize user input before logging. Prevent newline injection that could forge log entries. Use structured logging formats (JSON) rather than string concatenation."
+    rationale: "Attackers can inject fake log entries to hide their tracks or frame others. Newlines in usernames can create misleading log entries."
+    parent_id: owasp-security-logging
+    tags: [security, owasp, logging, injection]
+
+  # --- CODE REVIEW CHECKLIST ITEMS ---
+
+  - id: owasp-code-review-auth
+    trigger: "When performing a security code review focused on authentication — verify password hashing, session entropy, re-auth for sensitive ops, and account lockout"
+    action: "During code review, verify: passwords use strong hashing (Argon2/bcrypt), session tokens have sufficient entropy (>=128 bits), re-auth required for sensitive operations, account lockout implemented."
+    rationale: "Authentication flaws enable account takeover. Code review is the last line of defense before production."
+    parent_id: security
+    tags: [security, owasp, code-review, authentication]
+
+  - id: owasp-code-review-authz
+    trigger: "When performing a security code review focused on authorization — verify every endpoint has auth checks, default is deny, and no IDOR vulnerabilities exist"
+    action: "During code review, verify: every endpoint has authorization checks, authorization is enforced server-side, default is deny, no IDOR vulnerabilities (ownership verified for each resource)."
+    rationale: "Authorization bypass is a critical vulnerability class. Missing checks on even one endpoint can expose all data."
+    parent_id: security
+    tags: [security, owasp, code-review, authorization]
+
+  - id: owasp-code-review-crypto
+    trigger: "When performing a security code review focused on cryptography — verify modern algorithms, proper key management, no hardcoded keys, and CSPRNG usage"
+    action: "During code review, verify: modern algorithms (AES-256, RSA-2048+), proper key management, no hardcoded keys, CSPRNG for all random values, TLS configured correctly."
+    rationale: "Cryptographic weaknesses may not cause immediate failures but completely compromise security. Review catches weak algorithms."
+    parent_id: security
+    tags: [security, owasp, code-review, cryptography]

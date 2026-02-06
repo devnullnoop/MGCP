@@ -1,0 +1,181 @@
+lessons:
+  - id: devops-cicd
+    trigger: "When setting up CI/CD pipelines, configuring infrastructure, or managing deployment processes — ensuring reliable, repeatable, and secure delivery"
+    action: "Automate everything: builds, tests, deploys, and rollbacks. Version-control infrastructure alongside application code. Treat CI/CD pipelines as production-critical systems — they deserve tests, reviews, and monitoring too."
+    rationale: "Manual deployments are the leading cause of production incidents. Every manual step is an opportunity for human error, inconsistency, and unaudited changes. Automation turns deployment from a risky event into a routine non-event."
+    tags: [meta, devops, cicd, infrastructure]
+
+  - id: ci-pipeline-essentials
+    trigger: "When setting up or reviewing a CI pipeline — ensuring every commit is validated with tests, linting, and security scans before merge"
+    action: "Run on every commit: (1) unit and integration tests, (2) linter and formatter checks, (3) SAST for code vulnerabilities, (4) SCA for dependency vulnerabilities. Block merge on any failure. Keep pipeline config version-controlled and reviewed like application code."
+    rationale: "A CI pipeline that only runs tests catches syntax errors but misses SQL injection, outdated dependencies with CVEs, and style drift. Each layer catches a different class of defect. If it is not in the pipeline, it is not enforced."
+    parent_id: devops-cicd
+    tags: [devops, cicd, testing, security]
+    examples:
+      - label: bad
+        code: |
+          # .github/workflows/ci.yaml
+          steps:
+            - run: pytest
+        explanation: "Only runs tests — no lint, no security scan, no dependency check"
+      - label: good
+        code: |
+          # .github/workflows/ci.yaml
+          steps:
+            - run: ruff check src/
+            - run: pytest --cov=src/
+            - run: bandit -r src/          # SAST
+            - run: pip-audit              # SCA
+            - run: mypy src/              # type checking
+        explanation: "Multi-layer validation: style, correctness, security, dependencies, types"
+
+  - id: deployment-strategies
+    trigger: "When planning how to deploy new versions to production — choosing between blue-green, canary, or rolling deployment strategies"
+    action: "Choose deployment strategy based on risk tolerance: blue-green for instant rollback capability, canary for gradual validation with real traffic, rolling for resource-efficient zero-downtime updates. Never deploy 100% of traffic to untested new code at once."
+    rationale: "Big-bang deployments turn every release into a bet-the-company moment. Gradual deployment strategies limit blast radius — if the new version has a defect, only a fraction of users are affected, and rollback is immediate rather than a scramble."
+    parent_id: devops-cicd
+    tags: [devops, deployment, reliability]
+    examples:
+      - label: bad
+        code: |
+          # deploy.sh
+          kubectl set image deployment/app app=app:latest
+          # Hope for the best
+        explanation: "All-at-once deployment with no health checks, no rollback plan, using 'latest' tag"
+      - label: good
+        code: |
+          # Canary deployment: route 5% of traffic to new version
+          kubectl set image deployment/app-canary app=app:v2.1.0
+          # Monitor error rate for 15 minutes
+          # If error rate < 0.1%: promote to full rollout
+          # If error rate >= 0.1%: automatic rollback
+        explanation: "Gradual rollout with monitoring and automatic rollback on failure"
+
+  - id: infrastructure-as-code
+    trigger: "When provisioning servers, databases, networking, or cloud resources — defining infrastructure declaratively in version-controlled code"
+    action: "Define all infrastructure in code using Terraform, Pulumi, or CloudFormation. Store it in version control alongside application code. Use modules for reusable components. Never make manual changes to production infrastructure — all changes go through code review and CI."
+    rationale: "Manual infrastructure changes create 'snowflake servers' that nobody can reproduce. When the server dies, so does the knowledge of how it was configured. Infrastructure as code makes environments reproducible, auditable, and recoverable."
+    parent_id: devops-cicd
+    tags: [devops, infrastructure, iac]
+    examples:
+      - label: bad
+        code: |
+          # "I'll just SSH in and tweak the nginx config real quick"
+          ssh prod-server
+          sudo vim /etc/nginx/nginx.conf
+          sudo systemctl restart nginx
+        explanation: "Undocumented, unreviewable, unreproducible change — next deploy will overwrite it"
+      - label: good
+        code: |
+          # infrastructure/nginx.tf
+          resource "aws_lb_listener_rule" "api" {
+            listener_arn = aws_lb_listener.https.arn
+            priority     = 100
+            action {
+              type             = "forward"
+              target_group_arn = aws_lb_target_group.api.arn
+            }
+          }
+        explanation: "Infrastructure defined in code — version-controlled, reviewed, reproducible"
+
+  - id: secrets-in-ci
+    trigger: "When handling API keys, database credentials, or tokens in CI/CD pipelines — ensuring secrets are never exposed in code, logs, or environment variables"
+    action: "Store secrets in a vault service (HashiCorp Vault, AWS Secrets Manager, GitHub Encrypted Secrets). Never hardcode secrets in source code, CI config files, or plain-text environment variables. Rotate secrets on a schedule. Audit access logs. Mask secrets in CI output."
+    rationale: "A single leaked secret in a CI log or git history can compromise your entire infrastructure. Secrets in code get committed, pushed, cached, and backed up — spreading across systems where they cannot be fully revoked."
+    parent_id: devops-cicd
+    tags: [devops, security, secrets]
+    examples:
+      - label: bad
+        code: |
+          # .github/workflows/deploy.yaml
+          env:
+            DB_PASSWORD: "s3cret_passw0rd!"
+            AWS_SECRET_KEY: "AKIA..."
+        explanation: "Secrets in plain text in a version-controlled file — visible to anyone with repo access"
+      - label: good
+        code: |
+          # .github/workflows/deploy.yaml
+          env:
+            DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+            AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_KEY }}
+          # Secrets managed in GitHub Settings > Secrets
+          # Rotated quarterly via automated script
+        explanation: "Secrets stored in encrypted vault, referenced by name, never visible in plain text"
+
+  - id: conventional-commits
+    trigger: "When writing commit messages — using a structured format that enables automated changelog generation and semantic versioning"
+    action: "Use conventional commit format: type(scope): description. Types: feat (new feature), fix (bug fix), docs, style, refactor, test, chore. Include breaking changes in footer. Use this to drive automated versioning: feat = minor bump, fix = patch bump, BREAKING CHANGE = major bump."
+    rationale: "Unstructured commit messages like 'fix stuff' or 'updates' make changelogs useless, bisecting impossible, and release notes a manual chore. Conventional commits turn git history into a machine-readable record that drives automation."
+    parent_id: devops-cicd
+    tags: [devops, git, conventions]
+    examples:
+      - label: bad
+        code: |
+          git commit -m "fix stuff"
+          git commit -m "updates"
+          git commit -m "WIP"
+        explanation: "No structure, no context — useless for changelog, bisect, or blame"
+      - label: good
+        code: |
+          git commit -m "feat(auth): add OAuth2 PKCE flow for mobile clients"
+          git commit -m "fix(api): handle null response from payment gateway"
+          git commit -m "refactor(db): extract connection pooling into shared module"
+        explanation: "Type, scope, and description enable automated changelogs and versioning"
+
+  - id: branch-protection
+    trigger: "When configuring repository settings and branch policies — protecting main branches from direct pushes and unreviewed changes"
+    action: "Enable on main/production branches: (1) require pull request reviews (minimum 1 reviewer), (2) require passing CI checks before merge, (3) require signed commits, (4) disable force-push, (5) require branches to be up-to-date before merge. Apply these rules to administrators too."
+    rationale: "A single unreviewed commit to main can introduce vulnerabilities, break deployments, or corrupt data. Branch protection makes the review process mandatory rather than optional, ensuring that no single person can unilaterally modify production code."
+    parent_id: devops-cicd
+    tags: [devops, git, security, process]
+
+  - id: build-time-optimization
+    trigger: "When CI builds are taking too long — optimizing build times to keep developer feedback loops fast"
+    action: "Keep total CI time under 10 minutes. Strategies: (1) cache dependencies between runs, (2) run independent jobs in parallel, (3) use incremental builds where possible, (4) split slow integration tests into a separate pipeline, (5) use smaller base images. Measure and track build times — treat regressions as bugs."
+    rationale: "Slow builds break flow. Developers stop running tests locally when CI takes 30 minutes. They batch changes into larger, riskier PRs. They stop waiting for results and merge optimistically. Fast builds keep the feedback loop tight and the quality bar high."
+    parent_id: devops-cicd
+    tags: [devops, cicd, performance]
+    examples:
+      - label: bad
+        code: |
+          # CI takes 45 minutes
+          steps:
+            - run: pip install -r requirements.txt  # 8 min, no cache
+            - run: pytest                           # 30 min, all tests serial
+            - run: docker build .                   # 7 min, no layer cache
+        explanation: "No caching, no parallelism, no test splitting — developers stop waiting"
+      - label: good
+        code: |
+          # CI takes 7 minutes
+          steps:
+            - uses: actions/cache@v4               # Cache pip packages
+            - run: pytest -x --split-group=$GROUP  # Parallel test shards
+              strategy:
+                matrix:
+                  GROUP: [1, 2, 3, 4]
+            - run: docker build --cache-from=prev .  # Layer cache
+        explanation: "Dependency caching, parallel test shards, Docker layer caching"
+
+  - id: rollback-procedures
+    trigger: "When planning for deployment failures — ensuring automated rollback capability so failed deployments do not require manual intervention"
+    action: "Define rollback procedures BEFORE deploying: (1) automated health checks that detect failure within 2 minutes, (2) one-command rollback to the previous known-good version, (3) database migration rollback scripts tested before deploy, (4) runbook for manual intervention if automation fails. Test rollback procedures regularly."
+    rationale: "The time to figure out how to rollback is not during a production outage at 2 AM. Untested rollback procedures fail when you need them most. Automated rollback turns a potential 4-hour incident into a 5-minute non-event."
+    parent_id: devops-cicd
+    tags: [devops, deployment, reliability, incident-response]
+    examples:
+      - label: bad
+        code: |
+          # Rollback plan: "SSH into production and figure it out"
+          # Last tested: never
+        explanation: "No documented procedure, no automation, no testing — guarantees a long outage"
+      - label: good
+        code: |
+          # deploy.sh
+          PREVIOUS_VERSION=$(get_current_version)
+          deploy $NEW_VERSION
+          if ! health_check --timeout 120; then
+              echo "Health check failed, rolling back to $PREVIOUS_VERSION"
+              deploy $PREVIOUS_VERSION
+              alert_oncall "Rollback triggered for $NEW_VERSION"
+          fi
+        explanation: "Automated health check with timeout, automatic rollback, oncall notification"

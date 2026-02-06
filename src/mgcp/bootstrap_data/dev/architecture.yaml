@@ -1,0 +1,315 @@
+# =============================================================================
+# PILLAR 9: ARCHITECTURE & DESIGN
+# Sources: OWASP A06, SOLID, Clean Architecture, SSDF PW.1-2
+# =============================================================================
+
+lessons:
+  # -------------------------------------------------------------------------
+  # ROOT CATEGORY
+  # -------------------------------------------------------------------------
+  - id: architecture-design
+    trigger: "When designing systems, structuring codebases, choosing patterns, or reviewing architectural decisions — applying principles that keep software maintainable, extensible, and secure"
+    action: "Design for change. Separate concerns into cohesive modules with narrow interfaces. Depend on abstractions, not concretions. Apply defense in depth. Validate every architectural choice against the question: what happens when requirements change?"
+    rationale: "Architecture is the decisions that are expensive to reverse. Poor structure compounds into unmaintainable systems where every change risks breakage. Good architecture makes the right thing easy and the wrong thing hard."
+    tags: [meta, architecture, design, quality]
+
+  # -------------------------------------------------------------------------
+  # CHILDREN
+  # -------------------------------------------------------------------------
+  - id: solid-principles
+    trigger: "When designing classes, modules, or services — applying SOLID principles to create maintainable, extensible object-oriented code"
+    action: "Apply SOLID: (S) Each class/module has one reason to change. (O) Extend behavior without modifying existing code. (L) Subtypes must be substitutable for their base types. (I) Prefer small, focused interfaces over fat ones. (D) Depend on abstractions, not concrete implementations. Violating any one creates a cascade of coupling."
+    rationale: "SOLID violations create code where changing one thing breaks ten others. SRP violations make classes impossible to test in isolation. OCP violations require shotgun surgery. LSP violations cause runtime surprises. ISP violations force unnecessary dependencies. DIP violations make testing and swapping implementations painful."
+    parent_id: architecture-design
+    tags: [architecture, solid, oop, design-principles]
+    examples:
+      - label: bad
+        code: |
+          class UserService:
+              def create_user(self, data):
+                  # validates, saves to DB, sends email, logs audit
+                  self._validate(data)
+                  self._save_to_db(data)
+                  self._send_welcome_email(data)
+                  self._log_audit(data)
+        explanation: "Violates SRP — one class handles validation, persistence, email, and auditing"
+      - label: good
+        code: |
+          class UserService:
+              def __init__(self, repo: UserRepository, notifier: Notifier, auditor: Auditor):
+                  self._repo = repo
+                  self._notifier = notifier
+                  self._auditor = auditor
+
+              def create_user(self, data: UserData) -> User:
+                  user = User.from_validated(data)
+                  self._repo.save(user)
+                  self._notifier.welcome(user)
+                  self._auditor.log_created(user)
+                  return user
+        explanation: "Each concern is a separate collaborator injected via abstractions — easy to test and swap"
+
+  - id: separation-of-concerns
+    trigger: "When organizing code into modules, layers, or packages — separating distinct responsibilities so each unit has a clear, focused purpose"
+    action: "Group code by functionality, not by technical layer alone. Each module should own one domain concept end-to-end. Define explicit boundaries with clear interfaces between modules. Never let business logic leak into presentation or infrastructure layers."
+    rationale: "Mixed concerns create files that change for unrelated reasons, making merges painful and testing impossible without standing up the whole system. Clean boundaries let teams work in parallel and replace implementations without ripple effects."
+    parent_id: architecture-design
+    tags: [architecture, separation-of-concerns, modularity]
+    examples:
+      - label: bad
+        code: |
+          # routes.py — handles HTTP, business logic, AND database queries
+          @app.post("/orders")
+          def create_order(request):
+              if request.json["total"] < 0:
+                  return {"error": "Invalid total"}, 400
+              db.execute("INSERT INTO orders ...")
+              send_email(request.json["email"], "Order confirmed")
+              return {"status": "created"}, 201
+        explanation: "Validation, persistence, and notification all tangled in the route handler"
+      - label: good
+        code: |
+          # routes.py — only HTTP concerns
+          @app.post("/orders")
+          def create_order(request):
+              result = order_service.place_order(OrderRequest.from_dict(request.json))
+              return result.to_response()
+
+          # order_service.py — only business logic
+          class OrderService:
+              def place_order(self, req: OrderRequest) -> OrderResult:
+                  order = Order.create(req)
+                  self.repo.save(order)
+                  self.events.publish(OrderPlaced(order))
+                  return OrderResult.success(order)
+        explanation: "HTTP layer delegates to service layer; service owns business rules; events handle side effects"
+
+  - id: composition-over-inheritance
+    trigger: "When deciding between inheritance and composition for code reuse — choosing the approach that minimizes coupling and maximizes flexibility"
+    action: "Prefer composition: inject collaborators that provide needed behavior. Use inheritance only for genuine 'is-a' relationships with shared invariants. Favor interfaces/protocols over abstract base classes. Limit inheritance depth to 2-3 levels maximum."
+    rationale: "Deep inheritance hierarchies create fragile base class problems where changes to a parent break distant children. Composition lets you mix and match behaviors at runtime, makes dependencies explicit, and keeps each class testable in isolation."
+    parent_id: architecture-design
+    tags: [architecture, composition, inheritance, design-principles]
+    examples:
+      - label: bad
+        code: |
+          class Animal:
+              def move(self): ...
+          class Bird(Animal):
+              def move(self): print("fly")
+          class Penguin(Bird):
+              def move(self): print("walk")  # Penguins can't fly — LSP violation
+        explanation: "Inheritance forces Penguin to override Bird.move, breaking substitutability"
+      - label: good
+        code: |
+          from typing import Protocol
+
+          class Movable(Protocol):
+              def move(self) -> str: ...
+
+          class FlyingMovement:
+              def move(self) -> str: return "fly"
+
+          class WalkingMovement:
+              def move(self) -> str: return "walk"
+
+          class Bird:
+              def __init__(self, movement: Movable):
+                  self._movement = movement
+
+          robin = Bird(FlyingMovement())
+          penguin = Bird(WalkingMovement())
+        explanation: "Behavior injected via composition — no hierarchy to break, easy to add SwimmingMovement"
+
+  - id: api-design-patterns
+    trigger: "When designing REST APIs, GraphQL schemas, or service interfaces — establishing conventions for endpoints, status codes, versioning, and payloads"
+    action: "Use nouns for resources, HTTP verbs for actions. Return appropriate status codes (201 Created, 404 Not Found, 422 Unprocessable). Version your API from day one (URL or header). Use consistent envelope formats. Document every endpoint with request/response examples. Paginate all list endpoints."
+    rationale: "Inconsistent APIs create integration nightmares. Clients hardcode workarounds for your quirks, making every change a breaking change. Consistent conventions let consumers predict behavior without reading docs for every endpoint."
+    parent_id: architecture-design
+    tags: [architecture, api-design, rest, http]
+    examples:
+      - label: bad
+        code: |
+          POST /getUsers          # verb in URL, wrong HTTP method
+          GET /deleteUser/5       # destructive action via GET
+          POST /api/user/create   # redundant — POST already means create
+          # Returns 200 for everything, error in body:
+          {"success": false, "error": "Not found"}
+        explanation: "Misused HTTP methods, verbs in URLs, and status codes that lie to clients"
+      - label: good
+        code: |
+          GET    /api/v1/users          # list (paginated)
+          POST   /api/v1/users          # create → 201
+          GET    /api/v1/users/{id}      # read → 200 or 404
+          PATCH  /api/v1/users/{id}      # partial update → 200
+          DELETE /api/v1/users/{id}      # delete → 204
+
+          # Error response with proper status code (422):
+          {"error": {"code": "VALIDATION_FAILED", "message": "Email is required"}}
+        explanation: "RESTful conventions, proper status codes, versioned URL, consistent error format"
+
+  - id: defense-in-depth
+    trigger: "When designing security controls or access restrictions — layering multiple independent defenses so no single failure compromises the system"
+    action: "Layer security at every level: network (firewalls, segmentation), transport (TLS), application (auth, authz, input validation), data (encryption at rest), monitoring (audit logs, anomaly detection). Never rely on a single control. Assume each layer will eventually be bypassed."
+    rationale: "Single-layer security is binary: it either stops the attack or it doesn't. Layered defense means an attacker must defeat multiple independent controls. The cost of attack scales multiplicatively with each layer, while the cost of defense scales additively."
+    parent_id: architecture-design
+    tags: [architecture, security, defense-in-depth]
+
+  - id: threat-modeling
+    trigger: "When designing features that handle authentication, authorization, payment, or sensitive data — identifying threats and attack surfaces before writing code"
+    action: "Threat model before building. Use STRIDE (Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege) for each component. Document trust boundaries. Identify data flows and where they cross boundaries. Prioritize threats by impact and likelihood. Update the threat model when architecture changes."
+    rationale: "Security bolted on after development is expensive and incomplete. Threat modeling during design catches architectural flaws that are orders of magnitude cheaper to fix before code exists. It also builds shared understanding of risk across the team."
+    parent_id: architecture-design
+    tags: [architecture, security, threat-modeling]
+    examples:
+      - label: good
+        code: |
+          # Threat model for checkout flow:
+          # Trust boundary: Browser <-> API Gateway <-> Payment Service <-> Stripe
+          #
+          # STRIDE analysis:
+          # - Spoofing: Can attacker impersonate user? → Require auth token
+          # - Tampering: Can price be modified in transit? → Server-side price lookup
+          # - Repudiation: Can user deny purchase? → Audit log with timestamps
+          # - Info Disclosure: Is card data exposed? → Never store raw card data
+          # - DoS: Can checkout be flooded? → Rate limiting per user
+          # - Elevation: Can user access admin pricing? → Role-based authz check
+        explanation: "STRIDE applied to a specific flow, producing concrete security requirements"
+
+  - id: design-patterns-practical
+    trigger: "When facing recurring design problems — choosing well-known patterns that solve specific structural or behavioral challenges"
+    action: "Match the problem to the pattern, not the reverse. Factory: when object creation logic is complex or varies by context. Strategy: when an algorithm needs to be swappable at runtime. Observer: when multiple components must react to state changes. Adapter: when integrating incompatible interfaces. Avoid patterns for problems that don't exist yet."
+    rationale: "Design patterns are solutions to recurring problems, not badges of sophistication. Misapplied patterns add indirection without benefit. The right pattern eliminates conditional complexity; the wrong one creates it. Always ask: what problem does this pattern solve here?"
+    parent_id: architecture-design
+    tags: [architecture, design-patterns]
+    examples:
+      - label: bad
+        code: |
+          # AbstractSingletonProxyFactoryBean — pattern for pattern's sake
+          class NotificationFactory:
+              def create(self, type):
+                  if type == "email":
+                      return EmailNotification()
+          # ...but there's only ever one type, and it never changes
+        explanation: "Factory pattern adds indirection when a simple constructor would suffice"
+      - label: good
+        code: |
+          # Strategy pattern — genuinely swappable pricing logic
+          class PricingStrategy(Protocol):
+              def calculate(self, order: Order) -> Decimal: ...
+
+          class StandardPricing:
+              def calculate(self, order: Order) -> Decimal:
+                  return sum(item.price * item.qty for item in order.items)
+
+          class DiscountPricing:
+              def calculate(self, order: Order) -> Decimal:
+                  total = sum(item.price * item.qty for item in order.items)
+                  return total * Decimal("0.9")
+
+          class OrderService:
+              def __init__(self, pricing: PricingStrategy):
+                  self._pricing = pricing
+        explanation: "Strategy pattern solves a real problem — pricing varies by context and must be swappable"
+
+  - id: architecture-styles
+    trigger: "When choosing how to structure an application's overall architecture — selecting between MVC, Clean Architecture, Hexagonal, event-driven, or microservices"
+    action: "Choose architecture style based on problem constraints, not trends. MVC: simple web apps with clear request/response flows. Clean/Hexagonal: complex domains that must be independent of frameworks and I/O. Event-driven: systems requiring async processing, loose coupling, or audit trails. Microservices: only when team boundaries and independent deployment are genuine requirements."
+    rationale: "Architecture should serve the problem. Microservices for a 3-person team adds operational overhead without benefit. A monolith with clean boundaries is far better than distributed spaghetti. Start simple, split when the pain justifies the complexity."
+    parent_id: architecture-design
+    tags: [architecture, architecture-styles, clean-architecture, hexagonal]
+    examples:
+      - label: good
+        code: |
+          # Hexagonal / Ports & Adapters — domain logic has zero framework imports
+          # ports (interfaces the domain defines):
+          class OrderRepository(Protocol):
+              def save(self, order: Order) -> None: ...
+              def find_by_id(self, id: str) -> Order | None: ...
+
+          # domain (pure business logic):
+          class OrderService:
+              def __init__(self, repo: OrderRepository):
+                  self._repo = repo
+              def place(self, items: list[Item]) -> Order:
+                  order = Order.create(items)
+                  self._repo.save(order)
+                  return order
+
+          # adapters (infrastructure implements the ports):
+          class PostgresOrderRepository:
+              def save(self, order: Order) -> None:
+                  # SQL here — domain never sees this
+                  ...
+        explanation: "Domain defines ports; infrastructure provides adapters. Swap Postgres for DynamoDB without touching business logic."
+
+  - id: dependency-inversion
+    trigger: "When a high-level module directly depends on low-level details like database drivers, HTTP clients, or file systems — inverting the dependency direction"
+    action: "High-level modules define the interfaces they need (ports). Low-level modules implement those interfaces (adapters). Inject dependencies through constructors or configuration. Never import infrastructure packages inside domain/business logic modules."
+    rationale: "When business logic imports database drivers, you cannot test it without a database, cannot swap storage backends, and cannot reuse the logic in different contexts. Inversion makes the domain the center of gravity — everything else is pluggable."
+    parent_id: architecture-design
+    tags: [architecture, dependency-inversion, solid, dip]
+    examples:
+      - label: bad
+        code: |
+          # domain/order_service.py — directly imports infrastructure
+          import psycopg2
+          import redis
+          import boto3
+
+          class OrderService:
+              def get_order(self, id):
+                  conn = psycopg2.connect(...)
+                  cursor = conn.cursor()
+                  cursor.execute("SELECT * FROM orders WHERE id = %s", (id,))
+                  return cursor.fetchone()
+        explanation: "Business logic is welded to Postgres — cannot test without a database, cannot switch to MySQL"
+      - label: good
+        code: |
+          # domain/ports.py — domain defines what it needs
+          class OrderRepository(Protocol):
+              def find_by_id(self, order_id: str) -> Order | None: ...
+
+          # domain/order_service.py — depends only on the abstraction
+          class OrderService:
+              def __init__(self, repo: OrderRepository):
+                  self._repo = repo
+              def get_order(self, order_id: str) -> Order:
+                  order = self._repo.find_by_id(order_id)
+                  if not order:
+                      raise OrderNotFound(order_id)
+                  return order
+
+          # infrastructure/postgres_repo.py — implements the port
+          class PostgresOrderRepository:
+              def find_by_id(self, order_id: str) -> Order | None:
+                  # Postgres-specific code here
+                  ...
+        explanation: "Domain depends on its own Protocol; infrastructure implements it. Testing uses an in-memory fake."
+
+  - id: fail-fast-principle
+    trigger: "When designing error detection and reporting — deciding whether to continue with degraded data or stop immediately on encountering invalid state"
+    action: "Detect and report errors as early as possible. Validate inputs at system boundaries. Fail loudly on invalid state rather than propagating corruption. Use precondition checks at function entry. Prefer exceptions over error codes for unrecoverable conditions. Make illegal states unrepresentable through types."
+    rationale: "Silent failures propagate corrupt data through the system, making root cause analysis a needle-in-a-haystack problem. Failing fast at the source means the stack trace points directly at the bug. Every layer of propagation between the cause and the symptom multiplies debugging time."
+    parent_id: architecture-design
+    tags: [architecture, fail-fast, error-handling, defensive-programming]
+    examples:
+      - label: bad
+        code: |
+          def process_payment(amount, currency):
+              # Silently clamp negative amounts to zero
+              amount = max(amount, 0)
+              # Silently default unknown currencies
+              if currency not in VALID_CURRENCIES:
+                  currency = "USD"
+              return charge(amount, currency)
+        explanation: "Silent corrections mask bugs — caller never knows their data was wrong"
+      - label: good
+        code: |
+          def process_payment(amount: Decimal, currency: str) -> PaymentResult:
+              if amount <= 0:
+                  raise ValueError(f"Payment amount must be positive, got {amount}")
+              if currency not in VALID_CURRENCIES:
+                  raise ValueError(f"Unknown currency '{currency}', expected one of {VALID_CURRENCIES}")
+              return charge(amount, currency)
+        explanation: "Invalid input is rejected immediately with a clear message — bugs surface at the source"

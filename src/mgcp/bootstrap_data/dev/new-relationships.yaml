@@ -1,0 +1,398 @@
+relationships:
+  # =========================================================================
+  # CROSS-PILLAR RELATIONSHIPS (new pillars)
+  # These connect the 15 development pillars to each other
+  # =========================================================================
+
+  # Input Validation ↔ other security pillars
+  - source: sql-injection-prevention
+    target: input-validation-patterns
+    type: complements
+    context: "SQL injection is prevented by input validation"
+  - source: xss-prevention
+    target: output-encoding-patterns
+    type: complements
+    context: "XSS prevention requires output encoding"
+  - source: command-injection-prevention
+    target: input-validation-patterns
+    type: specializes
+    context: "Command injection is a specific input validation concern"
+  - source: code-injection-prevention
+    target: input-validation-patterns
+    type: specializes
+    context: "Code injection is a specific input validation concern"
+  - source: prompt-injection-prevention
+    target: input-validation-patterns
+    type: specializes
+    context: "Prompt injection is a specific input validation concern for LLMs"
+  - source: deserialization-safety
+    target: input-validation-patterns
+    type: specializes
+    context: "Deserialization is a specific input validation concern"
+  - source: ssrf-prevention
+    target: input-validation-patterns
+    type: specializes
+    context: "SSRF prevention requires URL input validation"
+  - source: file-upload-security
+    target: path-traversal-prevention
+    type: complements
+    context: "File uploads need path traversal protection"
+
+  # Authentication ↔ Authorization
+  - source: security-authentication
+    target: security-authorization
+    type: complements
+    context: "Authentication identifies users; authorization controls access"
+  - source: password-storage
+    target: encryption-algorithms
+    type: related
+    context: "Both involve cryptographic operations"
+  - source: session-cookie-security
+    target: security-headers
+    type: complements
+    context: "Cookie flags and security headers work together"
+  - source: jwt-security
+    target: encryption-algorithms
+    type: related
+    context: "JWT signing uses cryptographic algorithms"
+  - source: brute-force-protection
+    target: api-rate-limiting
+    type: complements
+    context: "Both involve rate limiting mechanisms"
+  - source: oauth-oidc-patterns
+    target: credential-transmission
+    type: complements
+    context: "OAuth requires secure credential transmission"
+
+  # Authorization ↔ API/Architecture
+  - source: rbac-implementation
+    target: deny-by-default
+    type: complements
+    context: "RBAC implements deny-by-default principle"
+  - source: indirect-object-references
+    target: resource-ownership
+    type: complements
+    context: "Indirect refs prevent unauthorized resource access"
+  - source: cors-security
+    target: security-headers
+    type: related
+    context: "CORS is configured via HTTP headers"
+  - source: api-rate-limiting
+    target: api-design-patterns
+    type: complements
+    context: "Rate limiting is part of good API design"
+  - source: privilege-escalation-prevention
+    target: server-side-authz
+    type: complements
+    context: "Server-side checks prevent privilege escalation"
+
+  # Cryptography ↔ other pillars
+  - source: secrets-management
+    target: secrets-in-ci
+    type: complements
+    context: "Secrets management applies to CI/CD pipelines"
+  - source: tls-configuration
+    target: communication-security
+    type: complements
+    context: "TLS is the primary communication security mechanism"
+  - source: data-at-rest-encryption
+    target: pii-handling
+    type: complements
+    context: "PII should be encrypted at rest"
+  - source: secure-random-numbers
+    target: session-management-fundamentals
+    type: complements
+    context: "Session IDs require cryptographic randomness"
+  - source: data-classification
+    target: data-minimization
+    type: complements
+    context: "Classify data to know what to minimize"
+  - source: key-rotation
+    target: secrets-management
+    type: complements
+    context: "Key rotation is part of secrets management"
+
+  # Error Handling ↔ Security/Observability
+  - source: secure-error-responses
+    target: global-exception-handlers
+    type: complements
+    context: "Both prevent information leakage through errors"
+  - source: fail-secure
+    target: deny-by-default
+    type: complements
+    context: "Both default to denying access"
+  - source: security-event-logging
+    target: structured-logging
+    type: complements
+    context: "Security events use structured logging"
+  - source: log-protection
+    target: pii-handling
+    type: complements
+    context: "Logs must not contain PII"
+  - source: circuit-breakers
+    target: circuit-breaker-pattern
+    type: related
+    context: "Same pattern viewed from security vs. performance"
+  - source: structured-logging
+    target: observability-fundamentals
+    type: complements
+    context: "Structured logging is part of observability"
+
+  # Configuration ↔ Supply Chain
+  - source: secure-defaults
+    target: default-credentials
+    type: complements
+    context: "Secure defaults includes changing default credentials"
+  - source: remove-unnecessary-features
+    target: dependency-minimization
+    type: complements
+    context: "Remove what you don't need"
+  - source: security-headers
+    target: tls-configuration
+    type: complements
+    context: "HSTS header enforces TLS usage"
+
+  # Supply Chain ↔ DevOps
+  - source: dependency-integrity
+    target: ci-cd-integrity
+    type: complements
+    context: "Package integrity is verified in CI/CD"
+  - source: dependency-monitoring
+    target: dependency-scanning-sca
+    type: complements
+    context: "Both scan dependencies for vulnerabilities"
+  - source: version-pinning
+    target: dependency-integrity
+    type: complements
+    context: "Pinning versions ensures reproducible builds"
+  - source: dependency-evaluation
+    target: dependency-minimization
+    type: complements
+    context: "Evaluate before adding, minimize overall"
+  - source: sbom-maintenance
+    target: transitive-dependency-audit
+    type: complements
+    context: "SBOM tracks the full dependency tree"
+  - source: release-verification
+    target: ci-cd-integrity
+    type: complements
+    context: "Releases are verified through CI/CD"
+
+  # LLM/AI ↔ other pillars
+  - source: llm-output-safety
+    target: output-encoding-patterns
+    type: specializes
+    context: "LLM output sanitization is specialized output encoding"
+  - source: excessive-agency-prevention
+    target: deny-by-default
+    type: specializes
+    context: "Minimal LLM permissions follows deny-by-default"
+  - source: llm-secret-leakage
+    target: secrets-management
+    type: specializes
+    context: "LLM secret handling is specialized secrets management"
+  - source: rag-pipeline-security
+    target: security-authorization
+    type: related
+    context: "RAG pipelines need access control"
+  - source: ai-supply-chain-security
+    target: security-supply-chain
+    type: specializes
+    context: "AI supply chain extends general supply chain security"
+  - source: ai-resource-management
+    target: api-rate-limiting
+    type: related
+    context: "Both involve resource usage limits"
+
+  # Architecture ↔ other pillars
+  - source: solid-principles
+    target: separation-of-concerns
+    type: complements
+    context: "SRP and SoC are closely related"
+  - source: composition-over-inheritance
+    target: dependency-inversion
+    type: complements
+    context: "Both favor loose coupling"
+  - source: defense-in-depth
+    target: fail-secure
+    type: complements
+    context: "Multiple layers and secure failure modes"
+  - source: threat-modeling
+    target: security-input-validation
+    type: related
+    context: "Threat modeling identifies validation needs"
+  - source: api-design-patterns
+    target: contract-testing
+    type: complements
+    context: "Good API design enables contract testing"
+  - source: fail-fast-principle
+    target: input-validation-patterns
+    type: complements
+    context: "Validate early, fail fast on bad input"
+
+  # Testing ↔ Security/DevOps
+  - source: security-testing-sast
+    target: ci-pipeline-essentials
+    type: complements
+    context: "SAST runs in CI pipeline"
+  - source: dependency-scanning-sca
+    target: ci-pipeline-essentials
+    type: complements
+    context: "SCA runs in CI pipeline"
+  - source: test-pyramid
+    target: test-coverage-strategy
+    type: complements
+    context: "Pyramid shapes coverage strategy"
+  - source: flaky-test-elimination
+    target: ci-pipeline-essentials
+    type: related
+    context: "Flaky tests undermine CI reliability"
+  - source: tdd-workflow
+    target: test-pyramid
+    type: complements
+    context: "TDD primarily produces unit tests (pyramid base)"
+  - source: mutation-testing
+    target: test-coverage-strategy
+    type: complements
+    context: "Mutation testing validates coverage quality"
+
+  # Performance ↔ Architecture
+  - source: n-plus-one-prevention
+    target: pagination-required
+    type: complements
+    context: "Both address database query performance"
+  - source: caching-strategy
+    target: response-time-targets
+    type: complements
+    context: "Caching helps meet response time targets"
+  - source: horizontal-scaling-design
+    target: connection-pooling
+    type: complements
+    context: "Scaled services need connection pooling"
+  - source: observability-fundamentals
+    target: structured-logging
+    type: complements
+    context: "Observability includes structured logging"
+
+  # Code Quality ↔ Architecture/Testing
+  - source: meaningful-names
+    target: self-documenting-code
+    type: complements
+    context: "Good names are self-documenting"
+  - source: function-design
+    target: solid-principles
+    type: related
+    context: "SRP applies to function design"
+  - source: code-review-standards
+    target: branch-protection
+    type: complements
+    context: "Reviews are enforced through branch protection"
+  - source: avoid-premature-abstraction
+    target: composition-over-inheritance
+    type: related
+    context: "Both favor simplicity over complexity"
+  - source: type-annotations
+    target: security-testing-sast
+    type: complements
+    context: "Type annotations improve SAST accuracy"
+  - source: documentation-strategy
+    target: api-design-patterns
+    type: complements
+    context: "APIs need documentation"
+
+  # DevOps ↔ other pillars
+  - source: conventional-commits
+    target: branch-protection
+    type: complements
+    context: "Both are git workflow standards"
+  - source: deployment-strategies
+    target: rollback-procedures
+    type: complements
+    context: "Deployment strategies include rollback plans"
+  - source: infrastructure-as-code
+    target: cloud-permissions-least-privilege
+    type: complements
+    context: "IaC defines cloud permissions"
+  - source: build-time-optimization
+    target: ci-pipeline-essentials
+    type: complements
+    context: "Fast builds keep CI effective"
+
+  # Data Privacy ↔ Security
+  - source: data-minimization
+    target: data-classification
+    type: complements
+    context: "Classify to know what to minimize"
+  - source: privacy-by-design
+    target: data-at-rest-encryption
+    type: complements
+    context: "Privacy by design includes encryption"
+  - source: data-retention-policies
+    target: data-minimization
+    type: complements
+    context: "Retention policies enforce minimization"
+  - source: database-migration-safety
+    target: backup-recovery
+    type: complements
+    context: "Backup before migrations"
+  - source: pii-handling
+    target: log-protection
+    type: complements
+    context: "PII must be excluded from logs"
+  - source: backup-recovery
+    target: data-at-rest-encryption
+    type: related
+    context: "Backups should be encrypted"
+
+  # =========================================================================
+  # ROOT CATEGORY CROSS-LINKS
+  # Connect the 15 pillars at the top level
+  # =========================================================================
+  - source: security-input-validation
+    target: security-authentication
+    type: complements
+    context: "Input validation and authentication are complementary defenses"
+  - source: security-authentication
+    target: security-authorization
+    type: sequence_next
+    context: "Authenticate first, then authorize"
+  - source: security-authorization
+    target: security-cryptography
+    type: related
+    context: "Access control and cryptography both protect data"
+  - source: security-error-logging
+    target: security-configuration
+    type: complements
+    context: "Error handling and configuration harden the system"
+  - source: security-supply-chain
+    target: security-configuration
+    type: related
+    context: "Supply chain and configuration both concern the deployment surface"
+  - source: security-llm-ai
+    target: security-input-validation
+    type: specializes
+    context: "LLM security specializes input validation for AI"
+  - source: architecture-design
+    target: testing-qa
+    type: complements
+    context: "Good architecture enables testability"
+  - source: testing-qa
+    target: devops-cicd
+    type: complements
+    context: "Tests run in CI/CD pipelines"
+  - source: performance-scalability
+    target: architecture-design
+    type: complements
+    context: "Performance requires architectural consideration"
+  - source: code-quality
+    target: architecture-design
+    type: complements
+    context: "Code quality implements architectural principles"
+  - source: data-privacy
+    target: security-cryptography
+    type: complements
+    context: "Privacy requires cryptographic protection"
+  - source: accessibility
+    target: code-quality
+    type: related
+    context: "Accessibility is a quality attribute"

@@ -1,0 +1,393 @@
+lessons:
+  # ===========================================================================
+  # PILLAR 3: AUTHORIZATION & ACCESS CONTROL
+  # Sources: OWASP A01, CWE-862/863/284/639, OWASP SCP Cat 5, LLM06
+  # ===========================================================================
+
+  - id: security-authorization
+    trigger: "When implementing or reviewing authorization logic, access control policies, role-based permissions, or resource-level security in an application or API"
+    action: "Default to deny — require explicit grants for every resource and action. Enforce authorization server-side on every request through a centralized policy engine. Apply least privilege: users and services get only the permissions they need. Verify resource ownership, not just resource type access."
+    rationale: "Broken access control is OWASP #1 for a reason. A single missing authorization check exposes protected data. Client-side enforcement is bypassable. Scattered authorization logic leads to gaps on new endpoints. Default-allow means every new resource is unprotected until explicitly locked down."
+    tags: [meta, security, authorization, access-control, owasp]
+    parent_id: security
+
+  # ---------------------------------------------------------------------------
+  # Deny by Default
+  # ---------------------------------------------------------------------------
+  - id: deny-by-default
+    trigger: "When designing access control policies, adding new endpoints, or configuring default permissions for resources and actions"
+    action: "Default to DENY for all resources and actions. Require explicit grants to allow access. When adding new endpoints or resources, they must be inaccessible until authorization rules are explicitly configured. Fail closed on authorization errors — if the policy engine fails, deny access."
+    rationale: "Default-allow means every new feature is a potential security hole until someone remembers to add restrictions. Default-deny means new features are safe by default and must be explicitly opened. This shifts the failure mode from 'insecure until secured' to 'secure until opened'."
+    tags: [security, access-control, deny-by-default, owasp, cwe-862]
+    parent_id: security-authorization
+    examples:
+      - label: bad
+        code: |
+          # Default allow — new endpoints are unprotected
+          RESTRICTED_PATHS = ["/admin", "/settings"]
+
+          @app.before_request
+          def check_auth():
+              if request.path in RESTRICTED_PATHS:
+                  if not current_user.is_authenticated:
+                      abort(401)
+              # Everything else is open — new endpoints are unprotected by default
+
+          # New endpoint added later — no one remembers to add it to RESTRICTED_PATHS
+          @app.route("/internal/reports")
+          def internal_reports():
+              return get_confidential_reports()
+        explanation: "Blocklist approach means every new endpoint is accessible by default. Developers must remember to add restrictions. Forgetting is a security vulnerability."
+      - label: good
+        code: |
+          # Default deny — only explicitly allowed paths are open
+          PUBLIC_PATHS = ["/", "/login", "/health", "/static"]
+
+          @app.before_request
+          def check_auth():
+              if request.path in PUBLIC_PATHS:
+                  return  # Explicitly public
+              if not current_user.is_authenticated:
+                  abort(401)
+              # Check role-based authorization
+              if not has_permission(current_user, request.path, request.method):
+                  abort(403)
+
+          # New endpoint is automatically protected — must explicitly open it
+          @app.route("/internal/reports")
+          @require_role("analyst")
+          def internal_reports():
+              return get_confidential_reports()
+        explanation: "Allowlist approach means only explicitly listed paths are public. New endpoints are automatically protected. Adding access requires deliberate action."
+
+  # ---------------------------------------------------------------------------
+  # Server-Side Authorization
+  # ---------------------------------------------------------------------------
+  - id: server-side-authz
+    trigger: "When enforcing access control decisions — choosing where to place authorization checks and whether to trust client-side role or permission data"
+    action: "Always enforce authorization server-side. Never trust client-side access control (hidden UI elements, disabled buttons, client-side role checks). Re-validate permissions on every API request. The server is the sole authority on what a user can access — the client only reflects decisions the server has already made."
+    rationale: "Client-side access control is trivially bypassed with browser dev tools, API clients like curl, or proxy tools. Hiding a button does not prevent the API call. Every security-relevant decision must be made on a system the user cannot modify."
+    tags: [security, authorization, server-side, owasp, cwe-863]
+    parent_id: security-authorization
+    examples:
+      - label: bad
+        code: |
+          // Client-side only — trivially bypassed
+          // React component
+          function AdminPanel({ user }) {
+              if (user.role !== "admin") {
+                  return null;  // Hidden but API is still accessible
+              }
+              return <button onClick={() => fetch("/api/admin/delete-user/123")}>Delete</button>;
+          }
+
+          # Server endpoint with no auth check
+          @app.route("/api/admin/delete-user/<user_id>", methods=["DELETE"])
+          def delete_user(user_id):
+              User.query.get(user_id).delete()  # No authorization check!
+              return {"status": "deleted"}
+        explanation: "Hiding the UI does not protect the API. Anyone can call /api/admin/delete-user/123 directly with curl or a browser extension."
+      - label: good
+        code: |
+          # Server-side enforcement on every request
+          @app.route("/api/admin/delete-user/<user_id>", methods=["DELETE"])
+          @require_authentication
+          @require_role("admin")
+          def delete_user(user_id):
+              # Even admins can't delete themselves or super-admins
+              target = User.query.get_or_404(user_id)
+              if target.id == current_user.id:
+                  abort(400, "Cannot delete yourself")
+              if target.role == "super_admin":
+                  abort(403, "Cannot delete super admin")
+
+              target.delete()
+              log_admin_action("delete_user", actor=current_user.id, target=user_id)
+              return {"status": "deleted"}
+        explanation: "Server enforces authentication, role check, and business rules. The client UI can hide the button for UX, but the server is the security authority."
+
+  # ---------------------------------------------------------------------------
+  # RBAC Implementation
+  # ---------------------------------------------------------------------------
+  - id: rbac-implementation
+    trigger: "When implementing role-based access control, defining user roles and permissions, or designing a permission model for an application"
+    action: "Define roles with the minimum permissions needed for each job function (least privilege). Assign permissions to roles, not directly to users. Support role hierarchy where appropriate but prevent circular inheritance. Audit role assignments regularly. Separate duty where possible — the person who creates data should not be the one who approves it."
+    rationale: "Direct user-to-permission mapping becomes unmanageable at scale and leads to permission creep. Role-based access groups permissions logically, simplifies auditing, and makes it easy to onboard/offboard users. Least privilege limits blast radius of account compromise."
+    tags: [security, rbac, roles, permissions, least-privilege, owasp]
+    parent_id: security-authorization
+    examples:
+      - label: bad
+        code: |
+          # Direct permission assignment — unmanageable at scale
+          user_permissions = {
+              "alice": ["read_docs", "write_docs", "delete_docs", "read_users", "admin_panel"],
+              "bob": ["read_docs", "write_docs", "read_users"],
+              # 500 more users with ad-hoc permission lists...
+          }
+        explanation: "Direct user-to-permission mapping leads to inconsistency, permission creep, and audit nightmares. No clear model of what each role should have."
+      - label: good
+        code: |
+          from enum import Enum
+          from dataclasses import dataclass
+
+          class Permission(Enum):
+              READ_DOCS = "read_docs"
+              WRITE_DOCS = "write_docs"
+              DELETE_DOCS = "delete_docs"
+              MANAGE_USERS = "manage_users"
+              VIEW_AUDIT_LOG = "view_audit_log"
+
+          ROLE_PERMISSIONS = {
+              "viewer": {Permission.READ_DOCS},
+              "editor": {Permission.READ_DOCS, Permission.WRITE_DOCS},
+              "admin": {Permission.READ_DOCS, Permission.WRITE_DOCS,
+                        Permission.DELETE_DOCS, Permission.MANAGE_USERS},
+              "auditor": {Permission.READ_DOCS, Permission.VIEW_AUDIT_LOG},
+          }
+
+          def has_permission(user, permission: Permission) -> bool:
+              return permission in ROLE_PERMISSIONS.get(user.role, set())
+
+          # Usage in endpoint
+          @app.route("/api/docs/<doc_id>", methods=["DELETE"])
+          @require_authentication
+          def delete_doc(doc_id):
+              if not has_permission(current_user, Permission.DELETE_DOCS):
+                  abort(403)
+              # ... delete logic
+        explanation: "Roles group permissions logically. Adding/removing users only requires changing their role. Auditing is straightforward — check what each role can do."
+
+  # ---------------------------------------------------------------------------
+  # Resource Ownership
+  # ---------------------------------------------------------------------------
+  - id: resource-ownership
+    trigger: "When users access, modify, or delete resources they own — verifying that the requesting user is authorized to access the specific resource instance, not just the resource type"
+    action: "Verify resource ownership on every access. Check that the requesting user owns or has explicit permission for the specific resource, not just the resource type. Filter database queries by the authenticated user's ID. Never expose resources solely based on knowing the resource ID."
+    rationale: "Insecure Direct Object Reference (IDOR, CWE-639) is one of the most common and impactful vulnerabilities. Checking 'user has access to documents' is not enough — you must check 'user has access to THIS document'. Without ownership checks, incrementing an ID in the URL exposes other users' data."
+    tags: [security, idor, ownership, access-control, owasp, cwe-639]
+    parent_id: security-authorization
+    examples:
+      - label: bad
+        code: |
+          # No ownership check — IDOR vulnerability
+          @app.route("/api/invoices/<invoice_id>")
+          @require_authentication
+          def get_invoice(invoice_id):
+              invoice = Invoice.query.get_or_404(invoice_id)
+              return invoice.to_json()
+              # Attacker changes invoice_id in URL to see other users' invoices
+        explanation: "Any authenticated user can view any invoice by changing the ID. Authentication confirms identity but does not verify authorization to the specific resource."
+      - label: good
+        code: |
+          @app.route("/api/invoices/<invoice_id>")
+          @require_authentication
+          def get_invoice(invoice_id):
+              # Filter by authenticated user — only returns their own invoices
+              invoice = Invoice.query.filter_by(
+                  id=invoice_id,
+                  user_id=current_user.id
+              ).first()
+
+              if not invoice:
+                  abort(404)  # 404, not 403 — don't reveal existence
+              return invoice.to_json()
+
+          # For shared resources, check explicit permission grants
+          @app.route("/api/projects/<project_id>")
+          @require_authentication
+          def get_project(project_id):
+              project = Project.query.get_or_404(project_id)
+              if not project.has_member(current_user.id):
+                  abort(404)  # Don't reveal existence of projects user can't access
+              return project.to_json()
+        explanation: "Database query filters by user_id, making it impossible to access another user's resources. 404 instead of 403 prevents resource enumeration."
+
+  # ---------------------------------------------------------------------------
+  # Indirect Object References
+  # ---------------------------------------------------------------------------
+  - id: indirect-object-references
+    trigger: "When exposing resource identifiers in URLs, API responses, or forms — choosing between sequential database IDs and opaque references"
+    action: "Use opaque, non-sequential identifiers (UUIDs, random tokens) instead of sequential database primary keys in URLs and API responses. Map user-visible references to internal IDs server-side. Even with opaque IDs, always enforce authorization — obscurity is not security."
+    rationale: "Sequential IDs (1, 2, 3...) are trivially enumerable — attackers iterate through all values to discover resources. UUIDs make enumeration infeasible but are not a substitute for authorization checks. Use both: opaque references AND authorization."
+    tags: [security, idor, object-references, uuid, owasp]
+    parent_id: security-authorization
+    examples:
+      - label: bad
+        code: |
+          # Sequential IDs in URLs — trivially enumerable
+          # GET /api/users/1  -> Alice
+          # GET /api/users/2  -> Bob
+          # GET /api/users/3  -> Charlie (attacker iterates)
+          @app.route("/api/users/<int:user_id>")
+          def get_user(user_id):
+              return User.query.get_or_404(user_id).to_json()
+        explanation: "Sequential integer IDs let attackers iterate through all records. Even if some are protected, the pattern reveals the total number of records and which IDs exist."
+      - label: good
+        code: |
+          import uuid
+
+          class User(db.Model):
+              id = db.Column(db.Integer, primary_key=True)  # Internal only
+              public_id = db.Column(db.String(36), default=lambda: str(uuid.uuid4()),
+                                     unique=True, index=True)
+
+          @app.route("/api/users/<public_id>")
+          @require_authentication
+          def get_user(public_id):
+              user = User.query.filter_by(public_id=public_id).first()
+              if not user or not can_view_user(current_user, user):
+                  abort(404)
+              return user.to_json()
+              # UUID: /api/users/550e8400-e29b-41d4-a716-446655440000
+              # Cannot enumerate or guess other users' IDs
+        explanation: "UUID public IDs prevent enumeration. Internal sequential IDs are never exposed in APIs. Authorization is still enforced — UUIDs alone are not sufficient security."
+
+  # ---------------------------------------------------------------------------
+  # API Rate Limiting
+  # ---------------------------------------------------------------------------
+  - id: api-rate-limiting
+    trigger: "When protecting API endpoints, public-facing services, or resource-intensive operations from abuse, scraping, or denial-of-service attacks"
+    action: "Implement rate limiting per user, per IP, and per endpoint. Use different limits for different endpoints (stricter for auth, looser for reads). Return 429 status with Retry-After header. Use sliding window or token bucket algorithms. Rate limit at the API gateway or reverse proxy level for best performance."
+    rationale: "Without rate limiting, attackers can brute-force credentials, scrape data, or overwhelm expensive operations. Per-user limits prevent individual abuse. Per-IP limits prevent distributed attacks. Per-endpoint limits protect resource-intensive operations."
+    tags: [security, rate-limiting, dos, api, owasp]
+    parent_id: security-authorization
+    examples:
+      - label: good
+        code: |
+          from flask_limiter import Limiter
+          from flask_limiter.util import get_remote_address
+
+          limiter = Limiter(
+              get_remote_address,
+              app=app,
+              default_limits=["200 per day", "50 per hour"],
+              storage_uri="redis://localhost:6379",
+          )
+
+          # Strict limits on authentication
+          @app.route("/api/login", methods=["POST"])
+          @limiter.limit("5 per minute")
+          def login():
+              ...
+
+          # Moderate limits on data access
+          @app.route("/api/search")
+          @limiter.limit("30 per minute")
+          def search():
+              ...
+
+          # Custom limit by authenticated user
+          @app.route("/api/export")
+          @limiter.limit("3 per hour", key_func=lambda: current_user.id)
+          def export():
+              ...
+
+          # Return proper 429 response
+          @app.errorhandler(429)
+          def rate_limit_handler(e):
+              return {"error": "Rate limit exceeded", "retry_after": e.description}, 429
+        explanation: "Different limits for different endpoints based on sensitivity and cost. Authentication endpoints get strictest limits. Redis-backed storage enables distributed rate limiting across multiple application instances."
+
+  # ---------------------------------------------------------------------------
+  # CORS Security
+  # ---------------------------------------------------------------------------
+  - id: cors-security
+    trigger: "When configuring Cross-Origin Resource Sharing, setting CORS headers, or allowing cross-origin API access from browser-based clients"
+    action: "Never use Access-Control-Allow-Origin: * for endpoints that require authentication or return sensitive data. Allowlist specific origins. Do not reflect the Origin header without validation. Set Access-Control-Allow-Credentials only with specific origins, never with wildcards. Restrict Access-Control-Allow-Methods and Access-Control-Allow-Headers to what is actually needed."
+    rationale: "Overly permissive CORS allows any website to make authenticated requests to your API and read responses. Reflecting the Origin header without validation is equivalent to a wildcard. Wildcard with credentials is rejected by browsers, but reflecting Origin with credentials achieves the same insecure effect."
+    tags: [security, cors, cross-origin, api, owasp]
+    parent_id: security-authorization
+    examples:
+      - label: bad
+        code: |
+          # Wildcard — any site can read responses
+          @app.after_request
+          def add_cors(response):
+              response.headers["Access-Control-Allow-Origin"] = "*"
+              return response
+
+          # Reflecting Origin — equivalent to wildcard
+          @app.after_request
+          def add_cors(response):
+              origin = request.headers.get("Origin")
+              response.headers["Access-Control-Allow-Origin"] = origin  # Any origin!
+              response.headers["Access-Control-Allow-Credentials"] = "true"
+              return response
+        explanation: "Wildcard allows any website to read API responses. Reflecting Origin with credentials lets any site make authenticated requests and read data — a complete access control bypass."
+      - label: good
+        code: |
+          ALLOWED_ORIGINS = {
+              "https://app.example.com",
+              "https://admin.example.com",
+          }
+
+          @app.after_request
+          def add_cors(response):
+              origin = request.headers.get("Origin")
+              if origin in ALLOWED_ORIGINS:
+                  response.headers["Access-Control-Allow-Origin"] = origin
+                  response.headers["Access-Control-Allow-Credentials"] = "true"
+                  response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE"
+                  response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+                  response.headers["Access-Control-Max-Age"] = "3600"
+              return response
+        explanation: "Only pre-approved origins receive CORS headers. Credentials are allowed only with specific origins. Methods and headers are restricted to what the API actually needs."
+
+  # ---------------------------------------------------------------------------
+  # Privilege Escalation Prevention
+  # ---------------------------------------------------------------------------
+  - id: privilege-escalation-prevention
+    trigger: "When handling role changes, permission updates, or any operation that modifies a user's access level — preventing users from elevating their own privileges"
+    action: "Validate all role transitions server-side. Prevent users from modifying their own role or permission level. Require higher-privileged users to approve elevation. Log all privilege changes. Verify that the acting user has permission to grant the target role — users cannot grant permissions they do not have."
+    rationale: "Privilege escalation occurs when users can modify their own access level through hidden form fields, API parameter tampering, or mass-assignment vulnerabilities. The server must be the sole authority on role transitions, and every change must be logged for audit."
+    tags: [security, privilege-escalation, access-control, owasp, cwe-269]
+    parent_id: security-authorization
+    examples:
+      - label: bad
+        code: |
+          # Mass assignment — user can set their own role
+          @app.route("/api/profile", methods=["PUT"])
+          @require_authentication
+          def update_profile():
+              current_user.update(**request.json)
+              # Attacker sends: {"name": "Eve", "role": "admin"}
+              db.session.commit()
+              return current_user.to_json()
+        explanation: "Mass assignment from request body allows users to set any field, including role. Attacker adds role=admin to the request JSON."
+      - label: good
+        code: |
+          # Allowlisted fields for self-update
+          SELF_UPDATABLE_FIELDS = {"name", "email", "avatar_url"}
+
+          @app.route("/api/profile", methods=["PUT"])
+          @require_authentication
+          def update_profile():
+              updates = {k: v for k, v in request.json.items()
+                         if k in SELF_UPDATABLE_FIELDS}
+              current_user.update(**updates)
+              db.session.commit()
+              return current_user.to_json()
+
+          # Role changes require admin and cannot self-elevate
+          @app.route("/api/users/<user_id>/role", methods=["PUT"])
+          @require_authentication
+          @require_role("admin")
+          def change_role(user_id):
+              if user_id == str(current_user.id):
+                  abort(400, "Cannot change your own role")
+
+              target = User.query.get_or_404(user_id)
+              new_role = request.json["role"]
+
+              # Admin cannot grant super_admin
+              if new_role == "super_admin" and current_user.role != "super_admin":
+                  abort(403, "Insufficient privilege to grant this role")
+
+              log_admin_action("role_change",
+                  actor=current_user.id, target=user_id,
+                  old_role=target.role, new_role=new_role)
+
+              target.role = new_role
+              db.session.commit()
+              return target.to_json()
+        explanation: "Self-update uses an allowlist of safe fields. Role changes require admin privilege, prevent self-elevation, and enforce that you can only grant roles at or below your own level. All changes are logged."

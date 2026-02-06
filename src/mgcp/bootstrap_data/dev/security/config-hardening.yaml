@@ -1,0 +1,229 @@
+# =============================================================================
+# PILLAR 6: CONFIGURATION & HARDENING
+# Sources: OWASP A02, CWE-770, OWASP SCP Cat 10, SSDF PW.8
+# =============================================================================
+
+lessons:
+  - id: security-configuration
+    trigger: "When deploying applications, configuring servers, or setting up infrastructure — ensuring security is enabled by default and unnecessary features are removed"
+    action: "Harden all configurations before deployment. Enable security features by default. Remove unnecessary components. Change all vendor defaults. Automate configuration validation."
+    rationale: "OWASP A05 (Security Misconfiguration) is one of the most common vulnerability classes. Default configurations prioritize ease of setup over security, leaving debug modes, default credentials, and unnecessary features exposed."
+    tags: [security, configuration, hardening]
+    parent_id: security
+
+  - id: secure-defaults
+    trigger: "When designing or configuring software settings — deciding whether security features should be opt-in or opt-out"
+    action: "Ship with security features ENABLED by default. Require explicit opt-in to disable security controls. Make the insecure path require deliberate configuration, not the secure path. Document security implications of every configurable option."
+    rationale: "Most users never change defaults. If debug mode, open CORS, or verbose errors are the default, most deployments will be insecure. Secure-by-default means even careless deployments are protected."
+    tags: [security, configuration, defaults, secure-by-default]
+    parent_id: security-configuration
+    examples:
+      - label: bad
+        code: |
+          # Insecure defaults - security must be manually enabled
+          class AppConfig:
+              DEBUG = True
+              CORS_ORIGINS = "*"
+              CSRF_PROTECTION = False
+              SECURE_COOKIES = False
+        explanation: "Every deployment that forgets to change these is vulnerable"
+      - label: good
+        code: |
+          # Secure defaults - insecurity must be explicitly opted into
+          class AppConfig:
+              DEBUG = False
+              CORS_ORIGINS = []  # No cross-origin by default
+              CSRF_PROTECTION = True
+              SECURE_COOKIES = True
+
+          class DevConfig(AppConfig):
+              DEBUG = True  # Explicitly opted in for development only
+        explanation: "Production-safe defaults; developers must explicitly relax for local dev"
+
+  - id: security-headers
+    trigger: "When configuring HTTP responses for a web application — setting security headers to protect against XSS, clickjacking, MIME sniffing, and other browser-based attacks"
+    action: "Set all essential security headers: Content-Security-Policy (CSP) to restrict resource loading, Strict-Transport-Security (HSTS) to enforce HTTPS, X-Frame-Options to prevent clickjacking, X-Content-Type-Options: nosniff to prevent MIME sniffing, and Permissions-Policy to restrict browser features."
+    rationale: "Security headers are a defense-in-depth layer that mitigates entire attack classes at the browser level. Missing headers leave applications vulnerable to XSS exploitation, clickjacking, and protocol downgrade attacks even when application code is secure."
+    tags: [security, configuration, headers, csp, hsts]
+    parent_id: security-configuration
+    examples:
+      - label: bad
+        code: |
+          @app.route('/page')
+          def page():
+              return render_template('page.html')
+              # No security headers set - browser uses permissive defaults
+        explanation: "Missing headers allow XSS, clickjacking, MIME sniffing, and downgrade attacks"
+      - label: good
+        code: |
+          @app.after_request
+          def set_security_headers(response):
+              response.headers['Content-Security-Policy'] = "default-src 'self'"
+              response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+              response.headers['X-Frame-Options'] = 'DENY'
+              response.headers['X-Content-Type-Options'] = 'nosniff'
+              response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+              return response
+        explanation: "Comprehensive headers applied to all responses via middleware"
+
+  - id: remove-unnecessary-features
+    trigger: "When preparing an application for production deployment — identifying and removing debug endpoints, test code, sample data, and unused components"
+    action: "Remove or disable before production: (1) debug endpoints and admin panels, (2) test accounts and sample data, (3) directory listings, (4) unused frameworks and libraries, (5) default error pages that reveal server info, (6) server version headers. Automate this with deployment checklists."
+    rationale: "Every unnecessary feature is attack surface. Debug endpoints bypass authentication. Test accounts have known credentials. Directory listings reveal application structure. Unused components have unpatched vulnerabilities."
+    tags: [security, configuration, attack-surface, deployment]
+    parent_id: security-configuration
+    examples:
+      - label: bad
+        code: |
+          # Left in production
+          @app.route('/debug/users')
+          def debug_users():
+              return jsonify([u.to_dict() for u in User.query.all()])
+
+          @app.route('/test/reset-db')
+          def reset_db():
+              db.drop_all()
+              db.create_all()
+        explanation: "Debug and test endpoints accessible in production - full data dump and DB wipe available"
+      - label: good
+        code: |
+          if app.config['ENV'] == 'development':
+              @app.route('/debug/users')
+              def debug_users():
+                  return jsonify([u.to_dict() for u in User.query.all()])
+
+          # Or better: use a separate debug blueprint not registered in production
+          # app.register_blueprint(debug_bp)  # Only in dev
+        explanation: "Debug routes only registered in development; production has no exposure"
+
+  - id: default-credentials
+    trigger: "When deploying databases, message queues, admin panels, or any infrastructure component — ensuring all vendor default usernames and passwords are changed"
+    action: "Change ALL default credentials before deployment. Use strong, unique passwords generated by a password manager. Remove or disable default accounts entirely where possible. Automate credential rotation. Scan for default credentials in CI/CD."
+    rationale: "Default credentials are the first thing attackers try. Lists of default credentials for every product are publicly available. A single unchanged admin/admin on an internal service often leads to full network compromise."
+    tags: [security, configuration, credentials, defaults]
+    parent_id: security-configuration
+    examples:
+      - label: bad
+        code: |
+          # docker-compose.yml with defaults
+          services:
+            postgres:
+              image: postgres
+              environment:
+                POSTGRES_USER: postgres
+                POSTGRES_PASSWORD: postgres
+            redis:
+              image: redis
+              # No password set - open to anyone on the network
+        explanation: "Default postgres/postgres credentials and passwordless Redis are trivially exploitable"
+      - label: good
+        code: |
+          # docker-compose.yml with proper credentials
+          services:
+            postgres:
+              image: postgres
+              environment:
+                POSTGRES_USER: ${DB_USER}
+                POSTGRES_PASSWORD: ${DB_PASSWORD}  # From .env, not committed
+            redis:
+              image: redis
+              command: redis-server --requirepass ${REDIS_PASSWORD}
+        explanation: "Credentials from environment variables, never hardcoded or default values"
+
+  - id: cloud-permissions-least-privilege
+    trigger: "When configuring IAM roles, cloud permissions, or service account access — scoping permissions to the minimum required for each service or function"
+    action: "Apply least privilege to all cloud IAM: (1) never use wildcard (*) permissions, (2) scope to specific resources with ARNs/paths, (3) use separate service accounts per function, (4) audit permissions regularly, (5) use temporary credentials over long-lived keys. Prefer managed policies over inline."
+    rationale: "Overly permissive IAM is the leading cause of cloud breaches. A compromised Lambda with s3:* can exfiltrate every bucket. The same Lambda with s3:GetObject on one specific bucket limits blast radius to that bucket alone."
+    tags: [security, configuration, cloud, iam, least-privilege]
+    parent_id: security-configuration
+    examples:
+      - label: bad
+        code: |
+          {
+            "Effect": "Allow",
+            "Action": "*",
+            "Resource": "*"
+          }
+        explanation: "God-mode permissions - if this role is compromised, the entire AWS account is compromised"
+      - label: good
+        code: |
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetObject",
+              "s3:PutObject"
+            ],
+            "Resource": "arn:aws:s3:::my-app-uploads/*"
+          }
+        explanation: "Scoped to specific actions on a specific bucket - compromise limits damage to that bucket"
+
+  - id: database-hardening
+    trigger: "When configuring database servers for production — securing connection strings, disabling unnecessary features, and enforcing least-privilege access"
+    action: "Harden databases: (1) use least-privilege accounts per application role (read-only, read-write, admin), (2) disable remote root access, (3) encrypt connections with TLS, (4) disable unused features (external scripts, file system access), (5) never embed credentials in connection strings committed to source control, (6) enable audit logging."
+    rationale: "Databases hold the most valuable data. Over-privileged connections turn SQL injection into full database takeover. Unencrypted connections expose data on the network. Remote root access is the most common database breach vector."
+    tags: [security, configuration, database, hardening]
+    parent_id: security-configuration
+    examples:
+      - label: bad
+        code: |
+          # Connection string with root credentials in source code
+          DATABASE_URL = "postgresql://root:rootpassword@db.prod.internal:5432/myapp"
+        explanation: "Root access, plaintext credentials in source, no TLS, no privilege separation"
+      - label: good
+        code: |
+          # Separate credentials per role, from environment
+          DB_READ_URL = os.environ["DB_READ_URL"]    # read-only user
+          DB_WRITE_URL = os.environ["DB_WRITE_URL"]  # read-write user
+          # Connection string includes sslmode=verify-full
+          # e.g., postgresql://app_reader:***@db:5432/myapp?sslmode=verify-full
+        explanation: "Separate least-privilege users, credentials from environment, TLS enforced"
+
+  - id: http-method-restrictions
+    trigger: "When configuring web server or API route handlers — restricting HTTP methods to only those needed for each endpoint"
+    action: "Explicitly allow only required HTTP methods per endpoint. Disable TRACE (enables XST attacks) and OPTIONS (if not needed for CORS) globally. Return 405 Method Not Allowed for unsupported methods. Configure web server to reject unexpected methods before they reach application code."
+    rationale: "Unrestricted HTTP methods expand attack surface. TRACE enables cross-site tracing to steal credentials. PUT/DELETE on endpoints designed for GET can cause data modification. Explicit method restrictions enforce expected behavior."
+    tags: [security, configuration, http, methods]
+    parent_id: security-configuration
+    examples:
+      - label: bad
+        code: |
+          @app.route('/api/users')
+          def users():  # Accepts ALL HTTP methods by default
+              return get_users()
+        explanation: "Accepts GET, POST, PUT, DELETE, TRACE, etc. - any method reaches the handler"
+      - label: good
+        code: |
+          @app.route('/api/users', methods=['GET'])
+          def list_users():
+              return get_users()
+
+          @app.route('/api/users', methods=['POST'])
+          def create_user():
+              return add_user(request.json)
+        explanation: "Each endpoint explicitly declares allowed methods; all others get 405"
+
+  - id: xml-processing-security
+    trigger: "When parsing XML input from users or external sources — preventing XML External Entity (XXE) injection and billion laughs attacks"
+    action: "Disable external entity processing in ALL XML parsers by default. Use defusedxml (Python), disable DOCTYPE declarations, and reject DTDs. If XML is not required, prefer JSON. For SOAP services, validate against strict schemas."
+    rationale: "XXE injection allows attackers to read arbitrary files from the server, perform SSRF, or cause denial of service via billion laughs expansion. Most XML parsers enable external entities by default, making every XML endpoint vulnerable unless explicitly hardened."
+    tags: [security, configuration, xml, xxe, injection]
+    parent_id: security-configuration
+    examples:
+      - label: bad
+        code: |
+          from xml.etree.ElementTree import parse
+          # Default parser allows XXE
+          tree = parse(user_uploaded_file)
+          # Attacker's XML: <!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+        explanation: "Standard library XML parser allows external entities - attacker can read server files"
+      - label: good
+        code: |
+          import defusedxml.ElementTree as ET
+          # defusedxml blocks XXE, DTDs, and entity expansion by default
+          tree = ET.parse(user_uploaded_file)
+
+          # Or if using lxml:
+          from lxml import etree
+          parser = etree.XMLParser(resolve_entities=False, no_network=True)
+          tree = etree.parse(user_uploaded_file, parser)
+        explanation: "defusedxml or hardened parser configuration blocks all XXE attack vectors"

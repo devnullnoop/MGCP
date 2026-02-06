@@ -1,0 +1,294 @@
+# =============================================================================
+# PILLAR 10: TESTING & QUALITY ASSURANCE
+# Sources: SSDF PW.6-7, Test Pyramid, Security Testing
+# =============================================================================
+
+lessons:
+  # -------------------------------------------------------------------------
+  # ROOT CATEGORY
+  # -------------------------------------------------------------------------
+  - id: testing-qa
+    trigger: "When planning test strategy, writing tests, or setting up quality assurance pipelines — choosing the right testing approaches and maintaining test suite health"
+    action: "Build a layered test strategy: many fast unit tests, fewer integration tests, minimal E2E tests. Automate security scanning in CI. Measure coverage on critical paths, not vanity totals. Eliminate flaky tests immediately. Every bug that reaches production should result in a regression test."
+    rationale: "Quality is not an afterthought — it is a design constraint. A test suite you cannot trust is worse than no tests because it gives false confidence. Investing in test infrastructure pays compound interest: fast feedback, safe refactoring, and fearless deployments."
+    tags: [meta, testing, quality-assurance]
+
+  # -------------------------------------------------------------------------
+  # CHILDREN
+  # -------------------------------------------------------------------------
+  - id: test-pyramid
+    trigger: "When deciding how many unit tests, integration tests, and end-to-end tests to write — balancing test coverage, speed, and maintenance cost"
+    action: "Follow the test pyramid: many fast unit tests (70-80%), fewer integration tests (15-20%), minimal E2E tests (5-10%). Unit tests validate logic in isolation. Integration tests verify component boundaries. E2E tests confirm critical user journeys only. If your test suite takes more than 10 minutes, the pyramid is inverted."
+    rationale: "Inverted pyramids (mostly E2E, few unit tests) are slow, flaky, and expensive to maintain. A failing E2E test tells you something is broken but not what. A failing unit test points to the exact line. Fast feedback loops require a solid base of unit tests."
+    parent_id: testing-qa
+    tags: [testing, test-pyramid, test-strategy]
+    examples:
+      - label: bad
+        code: |
+          # Test suite: 5 unit tests, 3 integration tests, 50 Selenium tests
+          # CI takes 45 minutes, 3 tests are flaky
+          # Developers skip tests locally because they're too slow
+        explanation: "Inverted pyramid — slow, flaky, and developers avoid running tests"
+      - label: good
+        code: |
+          # Test suite: 200 unit tests (2s), 30 integration tests (30s), 5 E2E tests (2m)
+          # CI completes in under 5 minutes
+          # Developers run unit tests on every save
+          pytest tests/unit/          # <2 seconds
+          pytest tests/integration/   # <30 seconds
+          pytest tests/e2e/           # <2 minutes, runs in CI only
+        explanation: "Proper pyramid — fast local feedback, thorough CI verification"
+
+  - id: tdd-workflow
+    trigger: "When starting to implement a new feature or fix a bug — using test-driven development to write the test before the implementation"
+    action: "Follow Red-Green-Refactor: (1) Write a failing test that defines the expected behavior. (2) Write the minimum code to make it pass. (3) Refactor while keeping tests green. Resist the urge to write implementation first. Each cycle should take minutes, not hours."
+    rationale: "TDD forces you to think about the interface before the implementation. The failing test is a specification. Writing code to pass it guarantees testability. The refactor step prevents technical debt from accumulating. Without TDD, tests often mirror implementation rather than verifying behavior."
+    parent_id: testing-qa
+    tags: [testing, tdd, red-green-refactor]
+    examples:
+      - label: good
+        code: |
+          # Step 1: RED — write the failing test
+          def test_calculate_discount_for_premium_user():
+              user = User(tier="premium")
+              order = Order(total=Decimal("100.00"))
+              assert calculate_discount(user, order) == Decimal("15.00")
+
+          # Step 2: GREEN — minimal implementation
+          def calculate_discount(user: User, order: Order) -> Decimal:
+              if user.tier == "premium":
+                  return order.total * Decimal("0.15")
+              return Decimal("0")
+
+          # Step 3: REFACTOR — improve without changing behavior
+          DISCOUNT_RATES = {"premium": Decimal("0.15"), "standard": Decimal("0.05")}
+
+          def calculate_discount(user: User, order: Order) -> Decimal:
+              rate = DISCOUNT_RATES.get(user.tier, Decimal("0"))
+              return order.total * rate
+        explanation: "Each step is distinct — test first, then implement, then clean up"
+
+  - id: property-based-testing
+    trigger: "When unit tests with hand-picked examples might miss edge cases — generating random inputs to discover unexpected failures"
+    action: "Use property-based testing (Hypothesis, QuickCheck) for functions with large input spaces. Define properties that must hold for ALL inputs (e.g., encode then decode returns original, sort output is always ordered, serialization round-trips). Let the framework find counterexamples. Save failing cases as regression tests."
+    rationale: "Hand-picked test cases reflect the developer's assumptions — the same assumptions that caused the bug. Property-based testing explores input spaces no human would think to test, finding edge cases in minutes that would take weeks to discover manually."
+    parent_id: testing-qa
+    tags: [testing, property-based-testing, hypothesis]
+    examples:
+      - label: good
+        code: |
+          from hypothesis import given, strategies as st
+
+          @given(st.text())
+          def test_json_roundtrip(s):
+              """Any string should survive JSON encode/decode."""
+              assert json.loads(json.dumps(s)) == s
+
+          @given(st.lists(st.integers()))
+          def test_sort_is_idempotent(xs):
+              """Sorting twice gives the same result as sorting once."""
+              assert sorted(sorted(xs)) == sorted(xs)
+
+          @given(st.integers(min_value=0), st.integers(min_value=1))
+          def test_division_inverse(a, b):
+              """Multiplying by b and dividing by b returns original."""
+              assert (a * b) // b == a
+        explanation: "Properties hold for all inputs — Hypothesis finds counterexamples automatically"
+
+  - id: security-testing-sast
+    trigger: "When setting up CI/CD pipelines or reviewing code for security vulnerabilities — running static analysis tools to catch security flaws before deployment"
+    action: "Integrate SAST tools into CI (Bandit for Python, Semgrep for polyglot, ESLint security plugins for JS). Run on every pull request. Block merges on high-severity findings. Tune rules to reduce false positives — noisy scanners get ignored. Review findings weekly, not just when they block."
+    rationale: "Static analysis catches entire categories of bugs (SQL injection, hardcoded secrets, insecure deserialization) that code review routinely misses. Running in CI means every change is scanned automatically. The cost of a false negative (missed vulnerability) far exceeds the cost of a false positive (developer spends 5 minutes triaging)."
+    parent_id: testing-qa
+    tags: [testing, security, sast, static-analysis, ci-cd]
+    examples:
+      - label: good
+        code: |
+          # .github/workflows/security.yaml
+          security-scan:
+            runs-on: ubuntu-latest
+            steps:
+              - uses: actions/checkout@v4
+              - name: Run Bandit (Python SAST)
+                run: bandit -r src/ -ll --format json -o bandit-report.json
+              - name: Run Semgrep
+                run: semgrep --config=p/python --config=p/owasp-top-ten src/
+              - name: Check for secrets
+                run: trufflehog filesystem --directory=. --only-verified
+        explanation: "Three layers of static analysis: language-specific, OWASP rules, and secret detection"
+
+  - id: security-testing-dast
+    trigger: "When testing running applications for security vulnerabilities — performing dynamic analysis against live or staging endpoints"
+    action: "Run DAST tools (OWASP ZAP, Burp Suite, Nuclei) against staging environments before production releases. Test authentication flows, authorization boundaries, and injection points. Automate baseline scans in CI. Perform manual penetration testing quarterly on critical systems."
+    rationale: "SAST finds bugs in code; DAST finds bugs in running systems. Configuration errors, misconfigured CORS, missing security headers, and authentication bypasses only manifest at runtime. DAST catches what SAST cannot: the assembled system's actual attack surface."
+    parent_id: testing-qa
+    tags: [testing, security, dast, dynamic-analysis, penetration-testing]
+    examples:
+      - label: good
+        code: |
+          # CI stage: DAST scan after deployment to staging
+          dast-scan:
+            needs: deploy-staging
+            steps:
+              - name: OWASP ZAP Baseline Scan
+                uses: zaproxy/action-baseline@v0.10.0
+                with:
+                  target: "https://staging.example.com"
+                  rules_file_name: "zap-rules.tsv"
+                  fail_action: "warn"
+
+              - name: Check security headers
+                run: |
+                  curl -sI https://staging.example.com | grep -E \
+                    "Strict-Transport-Security|Content-Security-Policy|X-Content-Type-Options"
+        explanation: "Automated DAST in CI catches misconfigurations before they reach production"
+
+  - id: dependency-scanning-sca
+    trigger: "When managing third-party dependencies — scanning for known vulnerabilities (CVEs) in libraries, frameworks, and transitive dependencies"
+    action: "Enable automated dependency scanning (Dependabot, Snyk, pip-audit, npm audit). Run on every PR and on a daily schedule. Pin dependency versions. Review and update critical CVEs within 48 hours. Audit transitive dependencies — your direct dependencies pull in dozens more. Maintain a SBOM for compliance."
+    rationale: "Your application is only as secure as its weakest dependency. Supply chain attacks (SolarWinds, Log4Shell, event-stream) prove that trusted packages can become attack vectors overnight. Automated scanning catches known CVEs before attackers exploit them."
+    parent_id: testing-qa
+    tags: [testing, security, sca, dependency-scanning, supply-chain]
+    examples:
+      - label: good
+        code: |
+          # pyproject.toml — pin versions for reproducibility
+          [project]
+          dependencies = [
+              "fastapi==0.109.0",
+              "pydantic==2.5.3",
+              "sqlalchemy==2.0.25",
+          ]
+
+          # CI: audit dependencies
+          audit-deps:
+            steps:
+              - run: pip-audit --strict --desc
+              - run: pip-audit -r requirements.txt --fix --dry-run
+              # Also check for yanked packages
+              - run: pip install --dry-run --report report.json -r requirements.txt
+        explanation: "Pinned versions for reproducibility, automated audit catches CVEs in CI"
+
+  - id: test-coverage-strategy
+    trigger: "When measuring test coverage or deciding coverage targets — using coverage data as a diagnostic tool rather than a vanity metric"
+    action: "Target 80%+ coverage on critical paths (auth, payment, data mutation). Use coverage to find untested code, not as a quality score. Measure branch coverage, not just line coverage. Never game coverage with assertion-free tests. Exempt generated code and config files. Review coverage diffs on PRs to catch regressions."
+    rationale: "100% line coverage with no assertions proves nothing. 60% coverage with thoughtful tests on critical paths prevents real bugs. Coverage is a diagnostic tool: it reveals what you forgot to test, not how well you tested. Branch coverage catches the subtle bugs that line coverage misses."
+    parent_id: testing-qa
+    tags: [testing, coverage, test-strategy, quality-metrics]
+    examples:
+      - label: bad
+        code: |
+          # Gaming coverage — calls the function but asserts nothing
+          def test_process_order():
+              process_order(mock_order)  # no assert — just exercises code paths
+              # Coverage says 95% — but we verified nothing
+        explanation: "High coverage number with zero verification value"
+      - label: good
+        code: |
+          # Meaningful coverage — verifies behavior on critical path
+          def test_process_order_applies_discount():
+              order = create_order(items=[item(price=100)], coupon="SAVE10")
+              result = process_order(order)
+              assert result.total == Decimal("90.00")
+              assert result.discount_applied == "SAVE10"
+              assert result.status == OrderStatus.CONFIRMED
+
+          # .coveragerc — focus on what matters
+          [run]
+          branch = True
+          source = src/
+
+          [report]
+          exclude_lines =
+              pragma: no cover
+              if TYPE_CHECKING:
+              if __name__ == .__main__.:
+        explanation: "Assertions verify behavior; branch coverage enabled; generated code excluded"
+
+  - id: mutation-testing
+    trigger: "When evaluating whether a test suite is actually catching bugs — verifying test effectiveness beyond code coverage metrics"
+    action: "Run mutation testing (mutmut for Python, Stryker for JS/TS) on critical modules. Mutation testing modifies your code (swaps operators, removes statements, changes constants) and checks if tests catch the mutations. Surviving mutants reveal tests that pass regardless of correctness. Target <20% surviving mutants on critical code."
+    rationale: "Code coverage tells you which lines execute during tests; mutation testing tells you which lines the tests actually verify. A test that executes a line but doesn't assert its result provides false confidence. Mutation testing is the test of your tests."
+    parent_id: testing-qa
+    tags: [testing, mutation-testing, test-effectiveness]
+    examples:
+      - label: good
+        code: |
+          # Run mutation testing on critical pricing module
+          # mutmut modifies code and checks if tests catch it:
+          $ mutmut run --paths-to-mutate=src/pricing.py
+
+          # Example mutations mutmut applies:
+          # Original:  total = price * quantity
+          # Mutant 1:  total = price + quantity    (operator swap)
+          # Mutant 2:  total = price / quantity    (operator swap)
+          # Mutant 3:  total = 0                   (constant replacement)
+          #
+          # If tests pass with mutant 1, your tests don't verify multiplication
+          # Fix: add test asserting price=10, qty=3 → total=30 (not 13)
+
+          $ mutmut results
+          # Killed: 47  Survived: 3  Timeout: 1
+          # Survival rate: 5.9% — good coverage effectiveness
+        explanation: "Mutation testing reveals that tests execute code but don't actually verify its correctness"
+
+  - id: contract-testing
+    trigger: "When multiple services communicate via APIs — verifying that provider and consumer agree on the interface contract"
+    action: "Use contract testing (Pact, Schemathesis) between services. Consumer defines expected request/response pairs. Provider verifies it satisfies those expectations. Run contract tests in CI on both sides. Update contracts before changing APIs. Contract tests replace fragile E2E tests for service integration."
+    rationale: "Integration tests between services are slow, flaky, and require both services running. Contract tests run independently: the consumer tests against a mock, the provider verifies against the contract. This catches breaking changes before deployment without the overhead of full E2E environments."
+    parent_id: testing-qa
+    tags: [testing, contract-testing, api-testing, microservices]
+    examples:
+      - label: good
+        code: |
+          # Consumer side (user-service expects order-service API)
+          from pact import Consumer, Provider
+
+          pact = Consumer("user-service").has_pact_with(Provider("order-service"))
+
+          def test_get_user_orders():
+              expected = {"orders": [{"id": "123", "total": 42.00}]}
+              pact.given("user 1 has orders")
+                  .upon_receiving("a request for user orders")
+                  .with_request("GET", "/api/v1/users/1/orders")
+                  .will_respond_with(200, body=expected)
+
+              with pact:
+                  result = order_client.get_user_orders(user_id="1")
+                  assert result[0].id == "123"
+
+          # Provider side verifies the same contract
+          # If order-service changes the response shape, contract test fails
+        explanation: "Consumer defines expectations; provider verifies them. Breaking changes caught without E2E tests."
+
+  - id: flaky-test-elimination
+    trigger: "When tests pass and fail intermittently without code changes — identifying and eliminating sources of test flakiness"
+    action: "Treat flaky tests as bugs with high priority. Quarantine flaky tests immediately — do not let them erode trust in the suite. Common causes: shared mutable state, time-dependent logic, network calls, race conditions, test ordering dependencies. Fix by isolating state, using deterministic clocks, mocking external services, and ensuring test independence. Track flakiness rate as a team metric."
+    rationale: "A test suite with 5% flakiness teaches developers to ignore failures. After a few 'just re-run it' incidents, real failures get dismissed too. Flaky tests are worse than no tests because they destroy the signal that tests provide. Zero-tolerance is the only sustainable policy."
+    parent_id: testing-qa
+    tags: [testing, flaky-tests, test-reliability, ci-cd]
+    examples:
+      - label: bad
+        code: |
+          def test_user_created_recently():
+              user = create_user()
+              # Flaky: if test runs at 23:59:59.999, date changes mid-test
+              assert user.created_at.date() == date.today()
+
+          def test_api_response():
+              # Flaky: real network call can timeout, 500, or return different data
+              response = requests.get("https://api.example.com/data")
+              assert response.status_code == 200
+        explanation: "Time-dependent assertions and real network calls cause intermittent failures"
+      - label: good
+        code: |
+          def test_user_created_recently(frozen_time):
+              with freeze_time("2024-06-15 12:00:00"):
+                  user = create_user()
+                  assert user.created_at == datetime(2024, 6, 15, 12, 0, 0)
+
+          def test_api_response(httpx_mock):
+              httpx_mock.add_response(json={"data": "value"})
+              response = client.get_data()
+              assert response == {"data": "value"}
+        explanation: "Frozen time eliminates date flakiness; mocked HTTP eliminates network flakiness"

@@ -1,0 +1,220 @@
+# =============================================================================
+# PILLAR 5: ERROR HANDLING & LOGGING (Security Perspective)
+# Sources: OWASP A09/A10, CWE-200, OWASP SCP Cat 7
+# =============================================================================
+
+lessons:
+  - id: security-error-logging
+    trigger: "When implementing error handling or logging in a security-sensitive application — ensuring errors don't leak information and security events are properly recorded"
+    action: "Design error handling to fail secure and log security events comprehensively. Never expose internals to users. Protect logs as security-critical assets."
+    rationale: "Error handling and logging are two sides of the same coin: errors must hide internals from attackers while logs must capture enough detail for incident response. Get either wrong and you're blind to attacks or helping them succeed."
+    tags: [security, error-handling, logging]
+    parent_id: security
+
+  - id: secure-error-responses
+    trigger: "When returning error responses to users or API consumers — ensuring detailed diagnostic information stays in server logs while users see only generic messages"
+    action: "Return generic error messages to users (e.g., 'Something went wrong'). Log full details server-side including stack trace, request context, and correlation ID. Map internal errors to safe external codes."
+    rationale: "Detailed errors reveal database schemas, file paths, library versions, and internal logic. Attackers use this reconnaissance to craft targeted exploits. CWE-200 (Exposure of Sensitive Information) is a top weakness."
+    tags: [security, error-handling, information-disclosure]
+    parent_id: security-error-logging
+    examples:
+      - label: bad
+        code: |
+          @app.errorhandler(Exception)
+          def handle_error(e):
+              return jsonify({
+                  "error": str(e),
+                  "traceback": traceback.format_exc(),
+                  "query": request.args.to_dict()
+              }), 500
+        explanation: "Exposes exception details, stack trace, and request parameters to the caller"
+      - label: good
+        code: |
+          @app.errorhandler(Exception)
+          def handle_error(e):
+              error_id = uuid.uuid4().hex[:8]
+              logger.exception("Unhandled error", extra={"error_id": error_id})
+              return jsonify({
+                  "error": "An internal error occurred",
+                  "reference": error_id
+              }), 500
+        explanation: "Correlation ID links user-visible error to detailed server log without leaking internals"
+
+  - id: global-exception-handlers
+    trigger: "When configuring production error handling — ensuring unhandled exceptions never expose raw stack traces to end users"
+    action: "Install global exception handlers for all entry points (HTTP, WebSocket, background tasks, CLI). Catch-all handlers must log the exception and return a safe generic response. Disable debug mode and detailed error pages in production."
+    rationale: "A single unhandled exception path bypasses all your careful error sanitization. Framework debug modes (Flask DEBUG, Django DEBUG=True, Express stack traces) are the most common source of information disclosure in production."
+    tags: [security, error-handling, production]
+    parent_id: security-error-logging
+    examples:
+      - label: bad
+        code: |
+          # Flask with debug mode in production
+          app.run(debug=True, host='0.0.0.0')
+        explanation: "Debug mode shows interactive debugger with full source code to anyone who triggers an error"
+      - label: good
+        code: |
+          # Production configuration
+          app.config['DEBUG'] = False
+          app.config['PROPAGATE_EXCEPTIONS'] = False
+
+          @app.errorhandler(Exception)
+          def catch_all(e):
+              logger.exception("Unhandled exception")
+              return "Internal Server Error", 500
+        explanation: "Debug disabled, global handler catches everything, no details leak"
+
+  - id: fail-secure
+    trigger: "When designing error recovery paths — deciding what happens when a security check throws an exception or a dependency is unavailable"
+    action: "Default to DENY on error. If an authorization check throws an exception, deny access. If a validation service is unavailable, reject the request. Never fall through to 'allow' on error."
+    rationale: "Fail-open errors are exploitable: crash the auth service and all requests bypass authorization. Fail-secure means an outage is an inconvenience, not a breach. OWASP explicitly warns against fail-open error handling."
+    tags: [security, error-handling, fail-secure, authorization]
+    parent_id: security-error-logging
+    examples:
+      - label: bad
+        code: |
+          def check_permission(user, resource):
+              try:
+                  return auth_service.is_allowed(user, resource)
+              except AuthServiceError:
+                  # Service is down, let them through
+                  return True
+        explanation: "Fail-open: if auth service crashes, everyone gets access"
+      - label: good
+        code: |
+          def check_permission(user, resource):
+              try:
+                  return auth_service.is_allowed(user, resource)
+              except AuthServiceError as e:
+                  logger.error(f"Auth service unavailable: {e}")
+                  return False  # Deny on error
+        explanation: "Fail-secure: if auth service is unavailable, deny access and log the failure"
+
+  - id: resource-cleanup-on-error
+    trigger: "When handling exceptions in code that opens file handles, database connections, network sockets, or allocates significant memory"
+    action: "Use context managers (with statements), try/finally blocks, or RAII patterns to guarantee resource cleanup on error. Never rely on garbage collection for security-sensitive resources like temp files with secrets or database transactions."
+    rationale: "Leaked file handles cause denial of service. Unclosed database connections exhaust connection pools. Temp files with secrets that aren't cleaned up persist on disk. Resource leaks under error conditions are a classic availability and confidentiality risk."
+    tags: [security, error-handling, resources, availability]
+    parent_id: security-error-logging
+    examples:
+      - label: bad
+        code: |
+          def process_upload(file_path):
+              f = open(file_path, 'rb')
+              conn = db.connect()
+              data = f.read()
+              conn.execute("INSERT INTO uploads ...", data)
+              conn.commit()
+              f.close()       # Never reached if execute() throws
+              conn.close()    # Never reached if execute() throws
+        explanation: "If any step fails, file handle and connection leak"
+      - label: good
+        code: |
+          def process_upload(file_path):
+              with open(file_path, 'rb') as f:
+                  with db.connect() as conn:
+                      data = f.read()
+                      conn.execute("INSERT INTO uploads ...", data)
+                      conn.commit()
+        explanation: "Context managers guarantee cleanup regardless of exceptions"
+
+  - id: security-event-logging
+    trigger: "When deciding what events to log for security monitoring — ensuring authentication, authorization, and validation events are captured for incident detection"
+    action: "Log these security events at minimum: (1) authentication successes and failures, (2) authorization failures, (3) input validation failures, (4) administrative actions, (5) data access to sensitive resources. Include timestamp, user identity, source IP, action, resource, and outcome."
+    rationale: "Without security event logging, breaches go undetected for months (industry average is 207 days). OWASP A09 (Security Logging and Monitoring Failures) exists because most organizations can't detect or investigate attacks due to insufficient logging."
+    tags: [security, logging, monitoring, audit, owasp-a09]
+    parent_id: security-error-logging
+    examples:
+      - label: good
+        code: |
+          import structlog
+          security_log = structlog.get_logger("security")
+
+          def login(username, password, request):
+              user = authenticate(username, password)
+              if user:
+                  security_log.info("auth.login.success",
+                      user_id=user.id, ip=request.remote_addr)
+              else:
+                  security_log.warning("auth.login.failure",
+                      username=username, ip=request.remote_addr,
+                      reason="invalid_credentials")
+        explanation: "Structured security log captures both successes and failures with full context"
+
+  - id: log-protection
+    trigger: "When configuring logging infrastructure or writing log statements — ensuring logs don't contain PII or secrets and are protected from injection and unauthorized access"
+    action: "Never log passwords, tokens, credit card numbers, or PII. Sanitize user input before logging to prevent log injection. Restrict log file access to authorized personnel. Use append-only storage where possible to prevent tampering."
+    rationale: "Logs become a secondary data breach vector if they contain secrets or PII. Log injection lets attackers forge entries to hide their tracks or frame others. Unrestricted log access violates principle of least privilege."
+    tags: [security, logging, pii, log-injection]
+    parent_id: security-error-logging
+    examples:
+      - label: bad
+        code: |
+          logger.info(f"User login: {username}, password: {password}")
+          logger.info(f"API call with key: {api_key}")
+          logger.info(f"Processing request from {user_input}")  # Newline injection
+        explanation: "Logs secrets and unsanitized input - password/key exposed, user_input could inject fake log lines"
+      - label: good
+        code: |
+          logger.info("User login attempt", extra={"username": username})
+          logger.info("API call", extra={"key_suffix": api_key[-4:]})
+          # Structured logging prevents injection automatically
+          logger.info("Processing request",
+              extra={"user_input": user_input.replace('\n', '\\n')})
+        explanation: "No secrets logged, structured format prevents injection, only key suffix for debugging"
+
+  - id: structured-logging
+    trigger: "When setting up logging for an application — choosing between plain text and structured formats for machine-processable, searchable log output"
+    action: "Use structured logging (JSON format) with consistent field names. Include correlation IDs to trace requests across services. Use severity levels consistently. Make logs machine-processable for aggregation tools (ELK, Datadog, Splunk)."
+    rationale: "Plain text logs are hard to search, filter, and aggregate at scale. Structured logs enable automated alerting on security events, correlation across services, and efficient incident investigation."
+    tags: [security, logging, structured-logging, observability]
+    parent_id: security-error-logging
+    examples:
+      - label: bad
+        code: |
+          logging.info(f"[{datetime.now()}] User {user} accessed {resource} from {ip}")
+        explanation: "Unstructured text is hard to parse, search, and alert on programmatically"
+      - label: good
+        code: |
+          import structlog
+          logger = structlog.get_logger()
+
+          logger.info("resource.accessed",
+              user_id=user.id,
+              resource=resource,
+              ip=request.remote_addr,
+              correlation_id=request.headers.get("X-Request-ID"))
+        explanation: "Structured fields enable filtering, alerting, and cross-service correlation"
+
+  - id: circuit-breakers
+    trigger: "When calling external services or dependencies that may fail — preventing cascading failures from overwhelming downstream systems or your own application"
+    action: "Implement circuit breakers for external service calls. Track failure rates and open the circuit (stop calling) when failures exceed a threshold. Allow periodic probe requests to detect recovery. Set timeouts on all external calls."
+    rationale: "Without circuit breakers, a failing downstream service causes request pile-up, thread exhaustion, and cascading failure across your entire system. From a security perspective, this is a denial-of-service vector: attackers can crash one service to take down everything."
+    tags: [security, resilience, circuit-breaker, availability]
+    parent_id: security-error-logging
+    examples:
+      - label: bad
+        code: |
+          def call_payment_service(data):
+              # No timeout, no circuit breaker
+              # If payment service is down, every request hangs
+              return requests.post("https://payments.internal/charge", json=data)
+        explanation: "Hanging requests exhaust thread pool, taking down the entire application"
+      - label: good
+        code: |
+          from circuitbreaker import circuit
+
+          @circuit(failure_threshold=5, recovery_timeout=30)
+          def call_payment_service(data):
+              return requests.post(
+                  "https://payments.internal/charge",
+                  json=data,
+                  timeout=5  # 5 second timeout
+              )
+
+          # Caller handles CircuitBreakerError gracefully
+          try:
+              result = call_payment_service(data)
+          except CircuitBreakerError:
+              return {"status": "payment_unavailable"}, 503
+        explanation: "Circuit opens after 5 failures, stops calling for 30s, timeout prevents hanging"

@@ -1,0 +1,290 @@
+# =============================================================================
+# PILLAR 11: PERFORMANCE & SCALABILITY
+# Sources: ISO 25010, Golden Signals, Scalability Patterns
+# =============================================================================
+
+lessons:
+  # -------------------------------------------------------------------------
+  # ROOT CATEGORY
+  # -------------------------------------------------------------------------
+  - id: performance-scalability
+    trigger: "When designing systems for performance, optimizing response times, or planning for scale — making decisions that affect throughput, latency, and resource utilization"
+    action: "Measure before optimizing. Set performance budgets for critical paths. Eliminate N+1 queries, unbounded result sets, and missing connection pools. Cache strategically at multiple layers. Design stateless services for horizontal scaling. Monitor golden signals: latency, traffic, errors, saturation."
+    rationale: "Premature optimization wastes effort on non-bottlenecks. But ignoring performance until production means architectural rewrites under pressure. Set targets early, measure continuously, and optimize the measured bottleneck — not the suspected one."
+    tags: [meta, performance, scalability, quality]
+
+  # -------------------------------------------------------------------------
+  # CHILDREN
+  # -------------------------------------------------------------------------
+  - id: n-plus-one-prevention
+    trigger: "When loading related data in a loop — detecting and eliminating N+1 query patterns that make one query per related record"
+    action: "Detect N+1 patterns: if you query inside a loop, you have one. Fix with eager loading (SQL JOINs, ORM prefetch_related/selectinload), batch queries (WHERE id IN (...)), or dataloaders. Monitor query counts in development — a page should not generate more than 5-10 queries regardless of data volume."
+    rationale: "N+1 queries scale linearly with data: 100 users = 101 queries, 10,000 users = 10,001 queries. What works in development with 5 records becomes a production outage with 5,000. The fix is always the same: load related data in bulk."
+    parent_id: performance-scalability
+    tags: [performance, database, n-plus-one, queries]
+    examples:
+      - label: bad
+        code: |
+          # N+1: 1 query for users + N queries for orders
+          users = db.query(User).all()                  # 1 query
+          for user in users:
+              orders = db.query(Order).filter_by(user_id=user.id).all()  # N queries
+              user.order_count = len(orders)
+        explanation: "100 users = 101 queries; 10,000 users = 10,001 queries"
+      - label: good
+        code: |
+          # Eager loading: 1-2 queries regardless of user count
+          users = db.query(User).options(selectinload(User.orders)).all()
+          for user in users:
+              user.order_count = len(user.orders)  # Already loaded, no query
+
+          # Or batch query with aggregation: exactly 2 queries
+          users = db.query(User).all()
+          counts = db.query(Order.user_id, func.count()).group_by(Order.user_id).all()
+          count_map = dict(counts)
+          for user in users:
+              user.order_count = count_map.get(user.id, 0)
+        explanation: "Eager loading or batch aggregation — constant query count regardless of data volume"
+
+  - id: caching-strategy
+    trigger: "When repeated computations or data fetches are slowing down the system — implementing caching at the appropriate layer"
+    action: "Cache at multiple layers: CDN for static assets and public pages, application cache (Redis/Memcached) for computed results and session data, database query cache for expensive queries. Set TTLs based on data freshness requirements. Implement cache invalidation explicitly — stale data is a feature when intentional, a bug when accidental. Use cache-aside pattern for most cases."
+    rationale: "Every layer of caching reduces load on the layer below it. CDN caching prevents requests from reaching your servers. Application caching prevents database queries. But cache invalidation is genuinely hard — get it wrong and users see stale data. Always define explicit invalidation rules."
+    parent_id: performance-scalability
+    tags: [performance, caching, redis, cdn, scalability]
+    examples:
+      - label: bad
+        code: |
+          # Cache everything forever with no invalidation strategy
+          @cache(ttl=None)
+          def get_user_profile(user_id):
+              return db.query(User).get(user_id)
+          # User updates their name → cache still shows old name
+          # No way to invalidate without server restart
+        explanation: "No TTL and no invalidation — users see stale data indefinitely"
+      - label: good
+        code: |
+          # Cache-aside with explicit TTL and invalidation
+          def get_user_profile(user_id: str) -> UserProfile:
+              cache_key = f"user:{user_id}"
+              cached = redis.get(cache_key)
+              if cached:
+                  return UserProfile.model_validate_json(cached)
+              user = db.query(User).get(user_id)
+              redis.setex(cache_key, timedelta(minutes=15), user.model_dump_json())
+              return user
+
+          def update_user_profile(user_id: str, data: UpdateData) -> UserProfile:
+              user = db.update(User, user_id, data)
+              redis.delete(f"user:{user_id}")   # Explicit invalidation
+              return user
+        explanation: "15-minute TTL as safety net; explicit invalidation on writes"
+
+  - id: connection-pooling
+    trigger: "When making repeated connections to databases, HTTP services, or external APIs — reusing connections instead of creating new ones per request"
+    action: "Pool all external connections: database (SQLAlchemy pool, pgBouncer), HTTP clients (httpx with connection pooling, requests.Session), Redis (connection pool). Set pool size based on expected concurrency. Configure idle timeouts to reclaim unused connections. Monitor pool utilization and wait times. Never create connections inside request handlers."
+    rationale: "TCP connection setup costs 1-3ms (plus TLS handshake). Under load, creating a new database connection per request exhausts connection limits, causes timeouts, and adds latency. Connection pools amortize setup cost across thousands of requests."
+    parent_id: performance-scalability
+    tags: [performance, connection-pooling, database, http]
+    examples:
+      - label: bad
+        code: |
+          # New connection per request — 3ms overhead + connection exhaustion
+          def get_user(user_id):
+              conn = psycopg2.connect(host="db", dbname="app")  # new connection
+              cursor = conn.cursor()
+              cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+              result = cursor.fetchone()
+              conn.close()  # connection discarded
+              return result
+        explanation: "Connection created and destroyed per request — unscalable under load"
+      - label: good
+        code: |
+          # Shared connection pool — connections reused across requests
+          from sqlalchemy import create_engine
+
+          engine = create_engine(
+              "postgresql://user:pass@db/app",
+              pool_size=20,           # 20 persistent connections
+              max_overflow=10,        # 10 additional under burst
+              pool_timeout=30,        # Wait 30s for connection before error
+              pool_recycle=1800,      # Recycle connections after 30 minutes
+          )
+
+          def get_user(user_id):
+              with engine.connect() as conn:   # Borrows from pool
+                  result = conn.execute(text("SELECT * FROM users WHERE id = :id"),
+                                       {"id": user_id})
+                  return result.fetchone()
+              # Connection returned to pool, not closed
+        explanation: "Pool manages 20 persistent connections; requests borrow and return without setup cost"
+
+  - id: pagination-required
+    trigger: "When returning lists of records from an API or querying collections from a database — preventing unbounded result sets"
+    action: "Paginate every list endpoint. Set a default page size (20-50) and a maximum (100-200). Support both offset/limit and cursor-based pagination. Always return total count or has_next indicator. Apply pagination at the database level (LIMIT/OFFSET or keyset), never in application code. Reject requests without pagination parameters on large collections."
+    rationale: "An endpoint that returns all 2 million users will time out, consume all memory, and crash the process. Even if it works today with 50 records, it will fail silently when data grows. Pagination is not optional — it is a safety mechanism."
+    parent_id: performance-scalability
+    tags: [performance, pagination, api-design, database]
+    examples:
+      - label: bad
+        code: |
+          @app.get("/api/users")
+          def list_users():
+              # Returns ALL users — works with 50, crashes with 50,000
+              return db.query(User).all()
+        explanation: "No pagination — response size grows linearly with data, eventually causing OOM"
+      - label: good
+        code: |
+          @app.get("/api/users")
+          def list_users(page: int = 1, per_page: int = 20):
+              per_page = min(per_page, 100)  # Cap maximum page size
+              offset = (page - 1) * per_page
+              total = db.query(func.count(User.id)).scalar()
+              users = db.query(User).offset(offset).limit(per_page).all()
+              return {
+                  "data": users,
+                  "pagination": {
+                      "page": page,
+                      "per_page": per_page,
+                      "total": total,
+                      "has_next": offset + per_page < total,
+                  }
+              }
+        explanation: "Bounded result set with metadata — safe regardless of data volume"
+
+  - id: response-time-targets
+    trigger: "When setting performance budgets or diagnosing slow responses — establishing measurable latency targets for different operation types"
+    action: "Set explicit targets: API responses <100ms p95, page loads <200ms server-side (TTFB), simple DB queries <50ms, complex reports <2s. Measure at the 95th and 99th percentile, not the average — averages hide tail latency. Set up alerts when p99 exceeds 2x the target. Profile the slowest endpoints weekly."
+    rationale: "Without targets, performance degrades invisibly. Each feature adds 10ms, and after 20 features the API takes 200ms. Percentile targets catch the worst-case experience that averages hide. A user who waits 5 seconds does not care that the average is 100ms."
+    parent_id: performance-scalability
+    tags: [performance, latency, sla, monitoring]
+    examples:
+      - label: good
+        code: |
+          # Performance budget enforcement in tests
+          import time
+
+          def test_user_list_performance(client, seed_1000_users):
+              start = time.perf_counter()
+              response = client.get("/api/v1/users?per_page=50")
+              elapsed_ms = (time.perf_counter() - start) * 1000
+
+              assert response.status_code == 200
+              assert elapsed_ms < 100, f"User list took {elapsed_ms:.0f}ms (budget: 100ms)"
+
+          # Monitoring: alert on p99 latency
+          # prometheus rule:
+          # histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m])) > 0.5
+          # → Alert: p99 latency exceeded 500ms
+        explanation: "Performance budgets enforced in tests and monitored in production"
+
+  - id: horizontal-scaling-design
+    trigger: "When designing services that must handle growing load — ensuring applications can scale by adding more instances rather than bigger machines"
+    action: "Design stateless services: no in-memory sessions, no local file storage for shared data, no instance-specific caches that must be consistent. Store state in external systems (database, Redis, S3). Use shared-nothing architecture. Ensure any request can be handled by any instance. Design idempotent operations for safe retries behind load balancers."
+    rationale: "Vertical scaling hits a ceiling (biggest machine available) and is expensive. Horizontal scaling is theoretically unlimited and cost-efficient. But it requires stateless design — if a service stores state locally, adding instances creates inconsistency. Session affinity (sticky sessions) is a band-aid that defeats the purpose of load balancing."
+    parent_id: performance-scalability
+    tags: [performance, scalability, horizontal-scaling, stateless, architecture]
+    examples:
+      - label: bad
+        code: |
+          # Stateful service — breaks with multiple instances
+          user_sessions = {}  # In-memory dictionary
+
+          @app.post("/login")
+          def login(credentials):
+              token = create_token(credentials)
+              user_sessions[token] = {"user_id": credentials.user_id}  # Instance-local
+              return {"token": token}
+
+          @app.get("/profile")
+          def profile(token):
+              session = user_sessions.get(token)  # Fails if load balancer routes to different instance
+              return get_user(session["user_id"])
+        explanation: "In-memory sessions — second instance has no sessions, users get 401 randomly"
+      - label: good
+        code: |
+          # Stateless service — works with N instances behind a load balancer
+          @app.post("/login")
+          def login(credentials):
+              token = create_jwt(credentials.user_id, secret=CONFIG.jwt_secret)
+              return {"token": token}  # State encoded in token, not stored on server
+
+          @app.get("/profile")
+          def profile(token: str = Depends(verify_jwt)):
+              return get_user(token.user_id)  # Any instance can verify the JWT
+        explanation: "JWT encodes state in the token — any instance can serve any request"
+
+  - id: circuit-breaker-pattern
+    trigger: "When calling external services that might be slow or failing — preventing cascade failures by stopping calls to unhealthy dependencies"
+    action: "Wrap external service calls with a circuit breaker. Track failure rate over a rolling window. Open the circuit (stop calling) when failures exceed threshold (e.g., 50% over 30 seconds). Return fallback responses or cached data while circuit is open. Half-open periodically to test recovery. Log circuit state changes for observability."
+    rationale: "Without a circuit breaker, a failing dependency causes all callers to hang waiting for timeouts. 10 services calling a dead service with 30-second timeout = 10 services responding in 30+ seconds = cascading failure. Circuit breakers fail fast and protect the rest of the system."
+    parent_id: performance-scalability
+    tags: [performance, circuit-breaker, resilience, fault-tolerance]
+    examples:
+      - label: bad
+        code: |
+          # No circuit breaker — if payment service is down, every request hangs
+          def process_checkout(order):
+              try:
+                  result = requests.post(PAYMENT_URL, json=order.to_dict(), timeout=30)
+              except requests.Timeout:
+                  raise  # After waiting 30 seconds, user sees an error
+              # 100 concurrent users × 30s timeout = 100 threads blocked = service down
+        explanation: "30-second timeout per request cascades into service-wide unavailability"
+      - label: good
+        code: |
+          import circuitbreaker
+
+          @circuitbreaker.circuit(
+              failure_threshold=5,        # Open after 5 failures
+              recovery_timeout=30,        # Try again after 30 seconds
+              expected_exception=RequestException,
+          )
+          def call_payment_service(order):
+              return requests.post(PAYMENT_URL, json=order.to_dict(), timeout=5)
+
+          def process_checkout(order):
+              try:
+                  result = call_payment_service(order)
+              except circuitbreaker.CircuitBreakerError:
+                  # Circuit is open — fail fast, don't wait
+                  return CheckoutResult.deferred("Payment service unavailable, order queued")
+        explanation: "After 5 failures, circuit opens — subsequent calls fail instantly with a fallback response"
+
+  - id: observability-fundamentals
+    trigger: "When setting up monitoring, debugging production issues, or understanding system behavior — implementing structured logging, distributed tracing, and metrics"
+    action: "Implement the three pillars of observability: (1) Structured logging with JSON, correlation IDs, and log levels — not print statements. (2) Distributed tracing (OpenTelemetry) across service boundaries with span context propagation. (3) Metrics with golden signals: latency (histogram), traffic (counter), errors (counter), saturation (gauge). Alert on symptoms (high error rate), not causes (high CPU)."
+    rationale: "You cannot fix what you cannot see. Console.log debugging in production is impossible. Without correlation IDs, tracing a request across 5 services requires manual timestamp matching. Without metrics, you discover performance degradation when users complain. Observability is not optional infrastructure — it is the difference between 5-minute resolution and 5-hour incidents."
+    parent_id: performance-scalability
+    tags: [performance, observability, monitoring, logging, tracing, metrics]
+    examples:
+      - label: bad
+        code: |
+          # Unstructured logging — impossible to query or correlate
+          print(f"Processing order {order_id}")
+          print("Something went wrong")
+          print(f"Done in {elapsed}s")
+        explanation: "No structure, no correlation ID, no severity — useless in production"
+      - label: good
+        code: |
+          import structlog
+
+          logger = structlog.get_logger()
+
+          def process_order(order_id: str, request_id: str):
+              log = logger.bind(order_id=order_id, request_id=request_id)
+              log.info("order.processing_started")
+
+              try:
+                  result = charge_payment(order_id)
+                  log.info("order.payment_charged", amount=result.amount)
+              except PaymentError as e:
+                  log.error("order.payment_failed", error=str(e), error_type=type(e).__name__)
+                  raise
+
+              log.info("order.processing_complete", duration_ms=elapsed_ms)
+
+          # Output (JSON, queryable):
+          # {"event": "order.processing_started", "order_id": "123", "request_id": "abc", "level": "info"}
+          # {"event": "order.payment_failed", "order_id": "123", "error": "Card declined", "level": "error"}
+        explanation: "Structured JSON logs with correlation IDs — queryable in any log aggregator"

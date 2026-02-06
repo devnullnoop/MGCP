@@ -1,0 +1,498 @@
+# =============================================================================
+# CORE RELATIONSHIPS
+# Cross-links between MGCP lessons to demonstrate graph connectivity
+# =============================================================================
+
+relationships:
+  # Override and authority relationships (CRITICAL)
+  - source: mgcp-overrides-defaults
+    target: hooks-are-authoritative
+    type: prerequisite
+    context: "Understand override principle before hooks"
+  - source: mgcp-overrides-defaults
+    target: query-lessons-while-planning
+    type: prerequisite
+    context: "Override principle requires querying during planning"
+  - source: mgcp-overrides-defaults
+    target: mgcp-usage
+    type: prerequisite
+    context: "Override principle is foundational to all MGCP usage"
+  - source: mgcp-overrides-defaults
+    target: mgcp-query-before-action
+    type: complements
+    context: "Override principle requires querying to work"
+  - source: query-lessons-while-planning
+    target: hooks-are-authoritative
+    type: complements
+    context: "Query while planning ensures hooks are followed"
+  - source: query-lessons-while-planning
+    target: mgcp-query-before-action
+    type: complements
+    context: "Both concern when to query - planning emphasizes timing"
+  - source: hooks-are-authoritative
+    target: mgcp-session-start
+    type: related
+    context: "Both concern following MGCP instructions"
+
+  # Core usage relationships
+  - source: mgcp-usage
+    target: mgcp-save-before-commit
+    type: prerequisite
+    context: "Understand MGCP usage before specific triggers"
+  - source: mgcp-usage
+    target: mgcp-save-on-shutdown
+    type: prerequisite
+    context: "Understand MGCP usage before specific triggers"
+  - source: mgcp-usage
+    target: mgcp-record-decisions
+    type: prerequisite
+    context: "Understand MGCP usage before catalogue tools"
+  - source: mgcp-usage
+    target: mgcp-record-couplings
+    type: prerequisite
+    context: "Understand MGCP usage before catalogue tools"
+  - source: mgcp-usage
+    target: mgcp-record-gotchas
+    type: prerequisite
+    context: "Understand MGCP usage before catalogue tools"
+  - source: mgcp-usage
+    target: mgcp-add-reusable-lessons
+    type: prerequisite
+    context: "Understand MGCP usage before adding lessons"
+  - source: mgcp-save-before-commit
+    target: mgcp-save-on-shutdown
+    type: related
+    context: "Both concern saving context at key moments"
+  - source: mgcp-record-decisions
+    target: mgcp-record-gotchas
+    type: complements
+    context: "Decisions and gotchas both capture architectural knowledge"
+  - source: mgcp-record-couplings
+    target: mgcp-record-gotchas
+    type: complements
+    context: "Couplings and gotchas both capture maintenance knowledge"
+  - source: mgcp-add-reusable-lessons
+    target: mgcp-save-before-commit
+    type: sequence_next
+    context: "After adding lessons, save context before committing"
+
+  # Knowledge storage type relationships
+  - source: mgcp-usage
+    target: mgcp-knowledge-storage-types
+    type: prerequisite
+    context: "Understand MGCP usage before storage type distinctions"
+  - source: mgcp-knowledge-storage-types
+    target: lessons-are-generic-knowledge
+    type: prerequisite
+    context: "Understand storage types before lesson guidelines"
+  - source: mgcp-knowledge-storage-types
+    target: catalogue-for-project-specific
+    type: prerequisite
+    context: "Understand storage types before catalogue guidelines"
+  - source: mgcp-knowledge-storage-types
+    target: workflow-links-for-process-guidance
+    type: prerequisite
+    context: "Understand storage types before workflow guidelines"
+  - source: lessons-are-generic-knowledge
+    target: catalogue-for-project-specific
+    type: complements
+    context: "Lessons and catalogue work together - one for generic, one for specific"
+  - source: lessons-are-generic-knowledge
+    target: mgcp-add-reusable-lessons
+    type: related
+    context: "Both concern when and how to add lessons"
+  - source: catalogue-for-project-specific
+    target: mgcp-record-decisions
+    type: related
+    context: "Both concern project-specific knowledge storage"
+  - source: catalogue-for-project-specific
+    target: mgcp-record-gotchas
+    type: related
+    context: "Both concern project-specific knowledge storage"
+  - source: catalogue-for-project-specific
+    target: mgcp-record-couplings
+    type: related
+    context: "Both concern project-specific knowledge storage"
+
+  # Session lifecycle relationships
+  - source: mgcp-usage
+    target: mgcp-session-start
+    type: prerequisite
+    context: "Understand MGCP before session start procedures"
+  - source: mgcp-usage
+    target: mgcp-query-before-action
+    type: prerequisite
+    context: "Understand MGCP before query patterns"
+  - source: mgcp-session-start
+    target: mgcp-query-before-action
+    type: sequence_next
+    context: "After session start, query before each action"
+  - source: mgcp-session-start
+    target: mgcp-save-on-shutdown
+    type: complements
+    context: "Session start and shutdown are bookends"
+  - source: mgcp-query-before-action
+    target: mgcp-check-before-adding
+    type: complements
+    context: "Query before acting, check before storing"
+
+  # Maintenance relationships
+  - source: mgcp-usage
+    target: mgcp-check-before-adding
+    type: prerequisite
+    context: "Understand MGCP before maintenance practices"
+  - source: mgcp-usage
+    target: mgcp-refine-not-duplicate
+    type: prerequisite
+    context: "Understand MGCP before refinement"
+  - source: mgcp-usage
+    target: mgcp-link-related-lessons
+    type: prerequisite
+    context: "Understand MGCP before linking"
+  - source: mgcp-usage
+    target: mgcp-spider-for-context
+    type: prerequisite
+    context: "Understand MGCP before graph traversal"
+  - source: mgcp-usage
+    target: mgcp-verify-storage
+    type: prerequisite
+    context: "Understand MGCP before verification"
+  - source: mgcp-check-before-adding
+    target: mgcp-refine-not-duplicate
+    type: sequence_next
+    context: "Check for duplicates, then refine if found"
+  - source: mgcp-refine-not-duplicate
+    target: mgcp-link-related-lessons
+    type: sequence_next
+    context: "After refining, link to related lessons"
+  - source: mgcp-link-related-lessons
+    target: mgcp-spider-for-context
+    type: complements
+    context: "Linking enables spider traversal"
+  - source: mgcp-add-reusable-lessons
+    target: mgcp-verify-storage
+    type: sequence_next
+    context: "After adding, verify it was stored"
+  - source: lessons-are-generic-knowledge
+    target: mgcp-check-before-adding
+    type: complements
+    context: "Check existing before adding new"
+
+  # Catalogue item relationships
+  - source: mgcp-usage
+    target: mgcp-record-security-notes
+    type: prerequisite
+    context: "Understand MGCP before security notes"
+  - source: mgcp-usage
+    target: mgcp-record-conventions
+    type: prerequisite
+    context: "Understand MGCP before conventions"
+  - source: mgcp-usage
+    target: mgcp-record-error-patterns
+    type: prerequisite
+    context: "Understand MGCP before error patterns"
+  - source: mgcp-usage
+    target: mgcp-record-dependencies
+    type: prerequisite
+    context: "Understand MGCP before dependencies"
+  - source: catalogue-for-project-specific
+    target: mgcp-record-security-notes
+    type: related
+    context: "Security notes are project-specific"
+  - source: catalogue-for-project-specific
+    target: mgcp-record-conventions
+    type: related
+    context: "Conventions are project-specific"
+  - source: catalogue-for-project-specific
+    target: mgcp-record-error-patterns
+    type: related
+    context: "Error patterns are project-specific"
+  - source: catalogue-for-project-specific
+    target: mgcp-record-dependencies
+    type: related
+    context: "Dependencies are project-specific"
+  - source: mgcp-record-security-notes
+    target: mgcp-record-gotchas
+    type: related
+    context: "Both document important project knowledge"
+  - source: mgcp-record-conventions
+    target: mgcp-record-gotchas
+    type: related
+    context: "Conventions and gotchas both guide behavior"
+  - source: mgcp-record-error-patterns
+    target: mgcp-record-gotchas
+    type: related
+    context: "Error patterns often capture gotchas"
+
+  # Workflow management relationships
+  - source: mgcp-usage
+    target: mgcp-workflow-management
+    type: prerequisite
+    context: "Understand MGCP before workflow management"
+  - source: mgcp-workflow-management
+    target: mgcp-query-workflows-first
+    type: prerequisite
+    context: "Understand workflows before querying them"
+  - source: mgcp-workflow-management
+    target: mgcp-create-custom-workflows
+    type: prerequisite
+    context: "Understand workflows before creating them"
+  - source: mgcp-workflow-management
+    target: mgcp-update-workflow-triggers
+    type: prerequisite
+    context: "Understand workflows before updating triggers"
+  - source: mgcp-query-workflows-first
+    target: mgcp-query-before-action
+    type: complements
+    context: "Query workflows and query lessons both happen before action"
+  - source: mgcp-create-custom-workflows
+    target: mgcp-update-workflow-triggers
+    type: sequence_next
+    context: "Create workflow, then refine triggers over time"
+  - source: mgcp-update-workflow-triggers
+    target: mgcp-refine-not-duplicate
+    type: related
+    context: "Both concern iterative improvement of existing knowledge"
+  - source: workflow-links-for-process-guidance
+    target: mgcp-create-custom-workflows
+    type: related
+    context: "Both concern workflow structure and guidance"
+
+  # Reminder system relationships
+  - source: mgcp-workflow-management
+    target: schedule-reminder-at-step-end
+    type: prerequisite
+    context: "Understand workflows before reminder scheduling"
+  - source: schedule-reminder-at-step-end
+    target: pre-response-reminder-check
+    type: complements
+    context: "Both ensure reminders are scheduled at right times"
+  - source: schedule-reminder-at-step-end
+    target: bootstrap-reminder-at-session-start
+    type: complements
+    context: "Bootstrap reminder catches missed step reminders"
+  - source: schedule-reminder-at-step-end
+    target: reminder-format-forceful
+    type: prerequisite
+    context: "Understand when to remind before how to write reminders"
+  - source: pre-response-reminder-check
+    target: reminder-format-forceful
+    type: sequence_next
+    context: "Check if reminder needed, then write it forcefully"
+  - source: bootstrap-reminder-at-session-start
+    target: mgcp-session-start
+    type: complements
+    context: "Both concern session initialization"
+  - source: resume-active-workflow
+    target: mgcp-session-start
+    type: complements
+    context: "Both concern resuming work at session start"
+  - source: resume-active-workflow
+    target: schedule-reminder-at-step-end
+    type: related
+    context: "Both ensure workflow continuity"
+
+  # Clarification and quality relationships
+  - source: mgcp-usage
+    target: mgcp-clarify-before-storing
+    type: prerequisite
+    context: "Understand MGCP before quality guidelines"
+  - source: mgcp-usage
+    target: mgcp-actionable-triggers
+    type: prerequisite
+    context: "Understand MGCP before trigger quality"
+  - source: mgcp-usage
+    target: mgcp-imperative-actions
+    type: prerequisite
+    context: "Understand MGCP before action quality"
+  - source: mgcp-clarify-before-storing
+    target: lessons-are-generic-knowledge
+    type: complements
+    context: "Clarify before storing, then choose correct storage"
+  - source: mgcp-clarify-before-storing
+    target: mgcp-check-before-adding
+    type: sequence_next
+    context: "Clarify first, then check for duplicates"
+  - source: mgcp-actionable-triggers
+    target: mgcp-imperative-actions
+    type: complements
+    context: "Good triggers and good actions make good lessons"
+  - source: mgcp-actionable-triggers
+    target: mgcp-add-reusable-lessons
+    type: related
+    context: "Trigger quality is key to lesson utility"
+  - source: mgcp-imperative-actions
+    target: mgcp-add-reusable-lessons
+    type: related
+    context: "Action quality is key to lesson utility"
+
+  # Feedback and retrospective relationships
+  - source: mgcp-usage
+    target: mgcp-feedback-loops
+    type: prerequisite
+    context: "Understand MGCP before feedback mechanisms"
+  - source: mgcp-feedback-loops
+    target: mgcp-post-task-retrospective
+    type: prerequisite
+    context: "Understand feedback before retrospectives"
+  - source: mgcp-feedback-loops
+    target: retrospective-on-user-confirmation
+    type: prerequisite
+    context: "Understand feedback before auto-retrospectives"
+  - source: mgcp-feedback-loops
+    target: mgcp-learn-from-mistakes
+    type: prerequisite
+    context: "Understand feedback before mistake learning"
+  - source: mgcp-feedback-loops
+    target: mgcp-learn-from-success
+    type: prerequisite
+    context: "Understand feedback before success learning"
+  - source: mgcp-feedback-loops
+    target: mgcp-session-end-review
+    type: prerequisite
+    context: "Understand feedback before session review"
+  - source: mgcp-feedback-loops
+    target: mgcp-workflow-feedback
+    type: prerequisite
+    context: "Understand feedback before workflow feedback"
+  - source: mgcp-feedback-loops
+    target: mgcp-continuous-improvement
+    type: prerequisite
+    context: "Understand feedback before continuous improvement"
+  - source: mgcp-post-task-retrospective
+    target: retrospective-on-user-confirmation
+    type: complements
+    context: "Both trigger retrospectives at task completion"
+  - source: mgcp-post-task-retrospective
+    target: mgcp-learn-from-mistakes
+    type: complements
+    context: "Retrospective surfaces mistakes to capture"
+  - source: mgcp-post-task-retrospective
+    target: mgcp-learn-from-success
+    type: complements
+    context: "Retrospective surfaces successes to capture"
+  - source: mgcp-learn-from-mistakes
+    target: mgcp-add-reusable-lessons
+    type: sequence_next
+    context: "After identifying mistake, create lesson"
+  - source: mgcp-learn-from-success
+    target: mgcp-add-reusable-lessons
+    type: sequence_next
+    context: "After identifying success pattern, create lesson"
+  - source: mgcp-session-end-review
+    target: mgcp-save-on-shutdown
+    type: complements
+    context: "Review and save both happen at session end"
+  - source: mgcp-session-end-review
+    target: mgcp-post-task-retrospective
+    type: related
+    context: "Both are reflection practices"
+  - source: mgcp-workflow-feedback
+    target: mgcp-update-workflow-triggers
+    type: sequence_next
+    context: "Workflow feedback leads to trigger updates"
+  - source: mgcp-workflow-feedback
+    target: mgcp-create-custom-workflows
+    type: related
+    context: "Both concern workflow improvement"
+  - source: mgcp-continuous-improvement
+    target: mgcp-check-before-adding
+    type: complements
+    context: "Quality review and duplicate checking"
+  - source: mgcp-continuous-improvement
+    target: mgcp-refine-not-duplicate
+    type: related
+    context: "Both concern knowledge quality"
+
+  # New lesson relationships (Session 30)
+  # Hierarchical browsing
+  - source: mgcp-usage
+    target: mgcp-browse-lesson-hierarchy
+    type: prerequisite
+    context: "Understand MGCP before browsing lessons"
+  - source: mgcp-browse-lesson-hierarchy
+    target: mgcp-spider-for-context
+    type: complements
+    context: "Browsing and spidering are complementary discovery methods"
+  - source: mgcp-browse-lesson-hierarchy
+    target: mgcp-query-before-action
+    type: alternative
+    context: "Browse for discovery, query for specific needs"
+
+  # Todo tracking
+  - source: mgcp-usage
+    target: mgcp-todo-tracking
+    type: prerequisite
+    context: "Understand MGCP before todo tracking"
+  - source: mgcp-todo-tracking
+    target: mgcp-save-on-shutdown
+    type: complements
+    context: "Todos persist in project context saved on shutdown"
+  - source: mgcp-todo-tracking
+    target: mgcp-session-start
+    type: related
+    context: "Todos load at session start via get_project_context"
+
+  # Multi-project
+  - source: mgcp-usage
+    target: mgcp-multi-project
+    type: prerequisite
+    context: "Understand MGCP before multi-project workflows"
+  - source: mgcp-multi-project
+    target: mgcp-session-start
+    type: complements
+    context: "Multi-project discovery happens at session start"
+  - source: mgcp-multi-project
+    target: catalogue-for-project-specific
+    type: related
+    context: "Each project has isolated catalogue"
+
+  # Custom catalogue items
+  - source: mgcp-usage
+    target: mgcp-custom-catalogue-items
+    type: prerequisite
+    context: "Understand MGCP before custom catalogue items"
+  - source: catalogue-for-project-specific
+    target: mgcp-custom-catalogue-items
+    type: related
+    context: "Custom items extend project catalogue"
+  - source: mgcp-custom-catalogue-items
+    target: mgcp-record-dependencies
+    type: related
+    context: "Both are catalogue item types"
+  - source: mgcp-custom-catalogue-items
+    target: mgcp-record-error-patterns
+    type: related
+    context: "Both are catalogue item types"
+
+  # Catalogue cleanup
+  - source: mgcp-usage
+    target: mgcp-catalogue-cleanup
+    type: prerequisite
+    context: "Understand MGCP before catalogue cleanup"
+  - source: mgcp-catalogue-cleanup
+    target: mgcp-continuous-improvement
+    type: complements
+    context: "Cleanup is part of continuous improvement"
+  - source: mgcp-catalogue-cleanup
+    target: mgcp-check-before-adding
+    type: related
+    context: "Check before adding, clean up when stale"
+  - source: mgcp-catalogue-cleanup
+    target: catalogue-for-project-specific
+    type: related
+    context: "Cleanup applies to project catalogue"
+
+  # Reminder reset
+  - source: schedule-reminder-at-step-end
+    target: mgcp-reminder-reset
+    type: complements
+    context: "Reset when reminders malfunction"
+  - source: mgcp-reminder-reset
+    target: bootstrap-reminder-at-session-start
+    type: related
+    context: "Both are reminder system utilities"
+  - source: mgcp-reminder-reset
+    target: pre-response-reminder-check
+    type: related
+    context: "Reset if reminder scheduling goes wrong"

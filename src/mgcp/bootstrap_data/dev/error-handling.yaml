@@ -1,0 +1,44 @@
+lessons:
+  - id: error-handling
+    trigger: "When handling errors, exceptions, or failures — catching specific exceptions and providing actionable context in error messages"
+    action: "Catch specific exceptions by type. Include context in messages: what failed, which value, where to look. Log stack traces internally. Return generic messages externally."
+    rationale: "'Error occurred' is useless. 'User 4521 not found in auth_db during login' is actionable. The difference is hours of debugging vs. minutes."
+    tags: [meta, errors, quality]
+
+  - id: specific-exceptions
+    trigger: "When catching exceptions — use specific exception types, not bare except clauses that hide bugs"
+    action: "Catch specific exceptions, not bare except"
+    rationale: "Bare except hides bugs and catches KeyboardInterrupt"
+    parent_id: error-handling
+    tags: [errors, exceptions]
+    examples:
+      - label: bad
+        code: |
+          try:
+              risky()
+          except:
+              pass
+        explanation: "Catches everything, hides real errors"
+      - label: good
+        code: |
+          try:
+              risky()
+          except ValueError as e:
+              logger.error(f'Invalid value: {e}')
+        explanation: "Specific exception, logged with context"
+
+  - id: error-context
+    trigger: "When writing error messages or logging exceptions — include full context about what failed, which value, and where to look"
+    action: "Include context in error messages (what, where, why)"
+    rationale: "'Error occurred' is useless. Context enables debugging."
+    parent_id: error-handling
+    tags: [errors, debugging]
+    examples:
+      - label: bad
+        code: |
+          raise ValueError('Invalid input')
+        explanation: "No context about what input or why invalid"
+      - label: good
+        code: |
+          raise ValueError(f'User ID {user_id} not found in database {db_name}')
+        explanation: "What failed, which value, where to look"

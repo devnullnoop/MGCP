@@ -1,0 +1,171 @@
+lessons:
+  - id: code-quality
+    trigger: "When writing, reviewing, or refactoring code — ensuring readability, maintainability, and adherence to clean code principles"
+    action: "Write code that reads like well-structured prose. Use meaningful names, keep functions focused, annotate types, and let the code explain 'what' while comments explain 'why'."
+    rationale: "Code is read 10x more than it is written. Every shortcut in clarity compounds into hours of confusion for future readers — including your future self. Maintainable code is the highest-leverage investment a team can make."
+    tags: [meta, code-quality, maintainability]
+
+  - id: meaningful-names
+    trigger: "When naming variables, functions, classes, or modules — choosing names that reveal intent and make code self-explanatory"
+    action: "Choose names that reveal intent. Variables should describe what they hold, functions should describe what they do, classes should describe what they represent. Avoid abbreviations, single-letter names (except loop counters), and generic names like 'data', 'info', 'temp'."
+    rationale: "A name is a micro-documentation. 'elapsed_time_in_days' tells you everything; 'd' tells you nothing. Good names eliminate the need for comments and reduce cognitive load when scanning code."
+    parent_id: code-quality
+    tags: [code-quality, naming, readability]
+    examples:
+      - label: bad
+        code: |
+          def calc(d, r):
+              return d * r / 365
+        explanation: "Unclear what d, r, or 365 represent — requires reading the caller to understand"
+      - label: good
+        code: |
+          def calculate_daily_interest(principal: float, annual_rate: float) -> float:
+              DAYS_PER_YEAR = 365
+              return principal * annual_rate / DAYS_PER_YEAR
+        explanation: "Names reveal intent, magic number is a named constant, types are annotated"
+
+  - id: function-design
+    trigger: "When designing or refactoring functions — keeping them short, focused on a single responsibility, and limiting parameters"
+    action: "Keep functions under 20 lines. Each function should do exactly one thing. Limit parameters to 0-3; if you need more, group them into an object or dataclass. Extract nested logic into well-named helper functions."
+    rationale: "Long functions with many parameters are hard to test, hard to name, and hard to reuse. A function that does one thing can be understood in seconds, tested in one assertion, and composed freely with other functions."
+    parent_id: code-quality
+    tags: [code-quality, functions, design]
+    examples:
+      - label: bad
+        code: |
+          def process_order(user_id, product_id, quantity, discount_code,
+                            shipping_addr, billing_addr, payment_method,
+                            gift_wrap, note):
+              # 80 lines of mixed validation, calculation, and persistence
+              ...
+        explanation: "Too many parameters, too many responsibilities, impossible to test in isolation"
+      - label: good
+        code: |
+          def process_order(order: Order) -> OrderResult:
+              validated = validate_order(order)
+              total = calculate_total(validated)
+              return submit_payment(validated, total)
+        explanation: "Parameters grouped into a dataclass, each step is a focused function"
+
+  - id: code-review-standards
+    trigger: "When submitting or reviewing pull requests — following best practices for PR size, review turnaround, and review focus areas"
+    action: "Keep PRs under 400 lines of changed code. Review within 24 hours. Focus reviews on: security implications, edge cases, error handling, and naming clarity — not style preferences covered by linters."
+    rationale: "PRs over 400 lines get rubber-stamped — reviewers cannot maintain attention across thousands of lines. Fast turnaround keeps developers unblocked. Focusing on substance over style makes reviews valuable instead of adversarial."
+    parent_id: code-quality
+    tags: [code-quality, code-review, process]
+    examples:
+      - label: bad
+        code: |
+          # PR: "Refactor everything" — 2,400 lines changed across 47 files
+          # Review comment: "Looks good to me" (after 3 minutes)
+        explanation: "Too large to review meaningfully, approved without real scrutiny"
+      - label: good
+        code: |
+          # PR: "Add input validation to /api/users endpoint" — 180 lines
+          # Review comments focus on:
+          #   - "What happens if email contains unicode?"
+          #   - "Should we rate-limit this endpoint?"
+          #   - "Missing test for empty payload"
+        explanation: "Small PR, substantive review comments on security and edge cases"
+
+  - id: documentation-strategy
+    trigger: "When deciding what to document — balancing between too much documentation that rots and too little that leaves teammates guessing"
+    action: "Document these and nothing else: (1) public API contracts with parameter types and return values, (2) architectural decisions via ADRs, (3) setup/onboarding instructions, (4) non-obvious 'why' explanations. Let tests document behavior and types document interfaces."
+    rationale: "Documentation that restates code rots instantly and misleads. Documentation that captures decisions and context remains valuable for years. Focus documentation effort where it has the highest shelf life."
+    parent_id: code-quality
+    tags: [code-quality, documentation, process]
+
+  - id: type-annotations
+    trigger: "When writing code in dynamically typed languages like Python or TypeScript — adding type hints for function signatures, return values, and complex data structures"
+    action: "Add type annotations to all function signatures and return values. Use typed containers (list[str], dict[str, int]) instead of bare list/dict. Use dataclasses or TypedDict for complex structures. Run a type checker (mypy, pyright) in CI."
+    rationale: "Type annotations catch entire categories of bugs before runtime — wrong argument order, None where a value is expected, incorrect return types. They also serve as machine-verifiable documentation that never goes stale."
+    parent_id: code-quality
+    tags: [code-quality, types, safety]
+    examples:
+      - label: bad
+        code: |
+          def get_users(ids, active=True):
+              results = []
+              for id in ids:
+                  u = db.find(id)
+                  if u and (not active or u.active):
+                      results.append(u)
+              return results
+        explanation: "No indication what 'ids' is (list? set? generator?), what db.find returns, or what get_users returns"
+      - label: good
+        code: |
+          def get_users(ids: list[int], active: bool = True) -> list[User]:
+              results: list[User] = []
+              for user_id in ids:
+                  user: User | None = db.find(user_id)
+                  if user and (not active or user.active):
+                      results.append(user)
+              return results
+        explanation: "Types make the contract explicit — callers know exactly what to pass and what they get back"
+
+  - id: dependency-minimization
+    trigger: "When adding a new dependency or library to a project — evaluating whether the dependency is worth the long-term cost"
+    action: "Before adding a dependency, ask: (1) Can I implement this in <50 lines? (2) Is this actively maintained (commits in last 6 months)? (3) How many transitive dependencies does it pull in? (4) What is the project's security track record? Prefer standard library solutions and small, focused packages over large frameworks."
+    rationale: "Every dependency is a liability — it can introduce vulnerabilities (supply chain attacks), break on upgrade, become abandoned, or conflict with other packages. The cost of a dependency is not just installation; it is perpetual maintenance, security monitoring, and upgrade coordination."
+    parent_id: code-quality
+    tags: [code-quality, dependencies, security]
+
+  - id: avoid-premature-abstraction
+    trigger: "When tempted to create an abstraction, base class, or shared utility before having multiple concrete use cases — resisting the urge to generalize too early"
+    action: "Wait for three concrete instances before abstracting. Duplicate code is cheaper than the wrong abstraction. When you do abstract, extract from working code — never design abstractions in advance. Prefer composition over inheritance."
+    rationale: "Premature abstraction creates rigid, hard-to-change code that serves imagined future needs instead of real current ones. Three similar lines of code are easier to understand and modify than one wrong abstraction that everything depends on."
+    parent_id: code-quality
+    tags: [code-quality, abstraction, design]
+    examples:
+      - label: bad
+        code: |
+          # First use case: send email
+          class AbstractNotificationStrategy(ABC):
+              @abstractmethod
+              def format(self): ...
+              @abstractmethod
+              def send(self): ...
+              @abstractmethod
+              def retry(self): ...
+
+          class EmailStrategy(AbstractNotificationStrategy):
+              ...  # 50 lines to implement the interface
+        explanation: "Abstracted on the first use case — now the interface is shaped by email and will poorly fit SMS or Slack"
+      - label: good
+        code: |
+          # First use case: just send the email
+          def send_email(to: str, subject: str, body: str) -> None:
+              smtp.send(to, subject, body)
+
+          # Second use case: just send the SMS
+          def send_sms(to: str, message: str) -> None:
+              twilio.send(to, message)
+
+          # Third use case: NOW abstract, informed by real patterns
+        explanation: "Concrete implementations first — abstraction later when you know what they have in common"
+
+  - id: self-documenting-code
+    trigger: "When writing comments or deciding whether code needs explanation — using comments for 'why' and letting code express 'what'"
+    action: "Write code that explains itself through clear naming, small functions, and explicit types. Reserve comments for: (1) explaining WHY a non-obvious approach was chosen, (2) linking to external references (RFCs, issue trackers), (3) warning about consequences. Delete comments that restate what the code does."
+    rationale: "Comments that say 'what' become lies when code changes but comments do not. Comments that say 'why' remain true regardless of refactoring. The best comment is a well-named function that makes the comment unnecessary."
+    parent_id: code-quality
+    tags: [code-quality, comments, readability]
+    examples:
+      - label: bad
+        code: |
+          # Increment counter by one
+          counter += 1
+
+          # Check if user is admin
+          if user.role == 'admin':
+              ...
+        explanation: "Comments restate what the code already says — they add noise and will rot"
+      - label: good
+        code: |
+          # Compensate for off-by-one in legacy billing API (see JIRA-4521)
+          counter += 1
+
+          # Admin bypass required by SOC2 audit requirement §4.3
+          if user.role == 'admin':
+              ...
+        explanation: "Comments explain WHY — the non-obvious reasoning that code alone cannot convey"

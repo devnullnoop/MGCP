@@ -1,0 +1,48 @@
+lessons:
+  - id: git-practices
+    trigger: "When working with git — committing, pushing, branching, or merging — follow atomic commit practices and review diffs before committing"
+    action: "One logical change per commit. Write messages that explain WHY, not WHAT. Run git diff before commit to catch debug code and secrets. Never force-push shared branches."
+    rationale: "Atomic commits enable git bisect to pinpoint bugs. 'Fixed bug' is useless; 'Fix null check in auth middleware causing 500 on expired tokens' is searchable. Force-pushing shared branches rewrites history others depend on."
+    tags: [meta, git, workflow]
+
+  - id: query-before-git-operations
+    trigger: "When about to perform git operations like committing, pushing, or creating a pull request — query lessons first for project-specific git conventions"
+    action: "BEFORE performing any git operation (commit, push, PR), call query_lessons with 'git commit' or 'git workflow' to surface project-specific preferences like attribution rules, commit message formats, or branch conventions."
+    rationale: "Different projects have different git conventions. Querying first surfaces any project-specific rules that override defaults."
+    parent_id: git-practices
+    tags: [git, workflow, proactive]
+
+  - id: lint-before-commit
+    trigger: "When about to commit code — run linting locally first to catch issues while context is fresh, rather than debugging lint failures in CI later"
+    action: "Run linting (ruff check, eslint, etc.) BEFORE committing code changes, not after CI fails. Catch issues while the code is fresh in context rather than debugging lint failures later."
+    rationale: "Lint errors discovered in CI require context switching back to code you've already mentally moved on from. Running linter locally catches issues immediately when they're trivial to fix."
+    parent_id: git-practices
+    tags: [git, linting, code-quality, ci]
+    examples:
+      - label: bad
+        code: |
+          # Write code, commit, push
+          # CI fails with lint errors
+          # Now have to context-switch back
+        explanation: "Delayed feedback loop wastes time and mental energy"
+      - label: good
+        code: |
+          # Write code
+          # Run: ruff check src/
+          # Fix any issues immediately
+          # Commit clean code
+        explanation: "Immediate feedback, issues fixed while context is fresh"
+
+  - id: verify-before-push
+    trigger: "When about to push code — run tests locally, check linter, review diff for debug code and secrets, and verify the correct branch"
+    action: "Before pushing: (1) run tests locally, (2) run linter, (3) check git diff for debug code or secrets, (4) verify you're pushing to the correct branch. Pushing broken code blocks others."
+    rationale: "Pushing untested code to shared branches breaks CI and blocks teammates. A few minutes of local verification saves hours of team disruption."
+    parent_id: git-practices
+    tags: [git, verification, ci]
+
+  - id: pre-commit-documentation-review
+    trigger: "When committing code changes — verify that documentation is updated alongside code to prevent stale docs, including CLAUDE.md, README, and CHANGELOG"
+    action: "BEFORE committing changes, verify documentation is updated: (1) Check if code changes require doc updates, (2) Update CLAUDE.md if architecture or conventions changed, (3) Update README if user-facing behavior changed, (4) Add to CHANGELOG if user-visible. Never commit code changes that make docs stale."
+    rationale: "Stale documentation is worse than no documentation - it actively misleads. Documentation debt compounds: the longer you wait, the harder it is to remember what changed and why. Commit docs with code, not 'later'."
+    parent_id: git-practices
+    tags: [git, documentation, workflow, quality]

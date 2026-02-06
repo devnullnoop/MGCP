@@ -361,7 +361,45 @@ async def get_graph_data() -> dict[str, Any]:
                     "weight": 0.8 if lesson_link.priority == 1 else 0.5,
                 })
 
+    # Add community_id to lesson nodes if graph has enough data
+    try:
+        communities = graph.detect_communities()
+        lesson_to_community = {}
+        for c in communities:
+            for member_id in c["members"]:
+                lesson_to_community[member_id] = c["community_id"]
+
+        # Annotate nodes with community_id
+        for node in nodes:
+            if node["id"] in lesson_to_community:
+                node["community"] = lesson_to_community[node["id"]]
+    except Exception as e:
+        logger.warning(f"Failed to annotate communities on graph: {e}")
+
     return {"nodes": nodes, "links": links}
+
+
+@app.get("/api/communities")
+async def get_communities(resolution: float = 1.0) -> list[dict[str, Any]]:
+    """Get auto-detected lesson communities with optional summaries."""
+    await ensure_initialized()
+
+    communities = graph.detect_communities(resolution=resolution)
+
+    # Enrich with summaries from DB
+    for c in communities:
+        summary = await store.get_community_summary(c["community_id"])
+        if summary:
+            c["summary"] = summary.model_dump(mode="json")
+            # Staleness check
+            current_members = set(c["members"])
+            snapshot_members = set(summary.member_ids)
+            c["is_stale"] = current_members != snapshot_members
+        else:
+            c["summary"] = None
+            c["is_stale"] = False
+
+    return communities
 
 
 @app.get("/api/sessions")

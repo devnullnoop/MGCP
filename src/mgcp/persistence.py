@@ -12,6 +12,7 @@ from pathlib import Path
 import aiosqlite
 
 from .models import (
+    CommunitySummary,
     Example,
     Lesson,
     ProjectCatalogue,
@@ -106,6 +107,16 @@ CREATE TABLE IF NOT EXISTS workflows (
 );
 
 CREATE INDEX IF NOT EXISTS idx_workflow_tags ON workflows(tags);
+
+CREATE TABLE IF NOT EXISTS community_summaries (
+    community_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    member_ids JSON NOT NULL DEFAULT '[]',
+    member_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -555,4 +566,82 @@ class LessonStore:
             tags=json.loads(row["tags"]) if row["tags"] else [],
             created_at=datetime.fromisoformat(row["created_at"]),
             version=row["version"],
+        )
+
+    # =========================================================================
+    # Community Summary Methods
+    # =========================================================================
+
+    async def save_community_summary(self, summary: CommunitySummary) -> str:
+        """Save or update a community summary (upsert)."""
+        async with self._connection(commit=True) as conn:
+            await conn.execute(
+                """
+                INSERT INTO community_summaries (
+                    community_id, title, summary, member_ids,
+                    member_count, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(community_id) DO UPDATE SET
+                    title = excluded.title,
+                    summary = excluded.summary,
+                    member_ids = excluded.member_ids,
+                    member_count = excluded.member_count,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    summary.community_id,
+                    summary.title,
+                    summary.summary,
+                    json.dumps(summary.member_ids),
+                    summary.member_count,
+                    summary.created_at.isoformat(),
+                    summary.updated_at.isoformat(),
+                ),
+            )
+            logger.debug(f"Saved community summary: {summary.community_id}")
+            return summary.community_id
+
+    async def get_community_summary(self, community_id: str) -> CommunitySummary | None:
+        """Get a community summary by ID."""
+        async with self._connection() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM community_summaries WHERE community_id = ?",
+                (community_id,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_community_summary(row)
+
+    async def get_all_community_summaries(self) -> list[CommunitySummary]:
+        """Get all community summaries."""
+        async with self._connection() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM community_summaries ORDER BY member_count DESC"
+            )
+            rows = await cursor.fetchall()
+            return [self._row_to_community_summary(row) for row in rows]
+
+    async def delete_community_summary(self, community_id: str) -> bool:
+        """Delete a community summary. Returns True if deleted."""
+        async with self._connection(commit=True) as conn:
+            cursor = await conn.execute(
+                "DELETE FROM community_summaries WHERE community_id = ?",
+                (community_id,),
+            )
+            deleted = cursor.rowcount > 0
+            if deleted:
+                logger.info(f"Deleted community summary: {community_id}")
+            return deleted
+
+    def _row_to_community_summary(self, row: aiosqlite.Row) -> CommunitySummary:
+        """Convert database row to CommunitySummary model."""
+        return CommunitySummary(
+            community_id=row["community_id"],
+            title=row["title"],
+            summary=row["summary"],
+            member_ids=json.loads(row["member_ids"]) if row["member_ids"] else [],
+            member_count=row["member_count"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
         )

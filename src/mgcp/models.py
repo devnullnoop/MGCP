@@ -183,6 +183,23 @@ class GenericCatalogueItem(BaseModel):
 
 
 # ============================================================================
+# COMMUNITY MODELS
+# ============================================================================
+
+
+class CommunitySummary(BaseModel):
+    """Summary of an auto-detected lesson community (cluster)."""
+
+    community_id: str = Field(..., description="Deterministic hash of sorted member IDs")
+    title: str = Field(..., description="Short descriptive title")
+    summary: str = Field(..., description="LLM-generated description of this community")
+    member_ids: list[str] = Field(default_factory=list, description="Snapshot of members at summary creation time")
+    member_count: int = Field(default=0, description="Count at creation time")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+# ============================================================================
 # WORKFLOW MODELS
 # ============================================================================
 

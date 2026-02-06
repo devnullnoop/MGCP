@@ -27,26 +27,12 @@ def main():
     # Check if prompt contains git-related keywords
     for pattern in GIT_KEYWORDS:
         if re.search(pattern, prompt, re.IGNORECASE):
-            # Inject proof-based gate
+            # Inject mandatory lesson query gate
             print("""<user-prompt-submit-hook>
-STOP. Before any git push/commit/PR, execute these commands and SHOW OUTPUT:
+STOP. Call mcp__mgcp__query_lessons("git commit") NOW and SHOW OUTPUT before any git command.
 
-```bash
-# 1. What changed?
-git diff --name-only HEAD~1
-
-# 2. If ANY .md files changed, run this and SHOW OUTPUT:
-git diff HEAD~1 -- "*.md" | head -100
-```
-
-PASTE THE OUTPUT ABOVE before running git commands.
-
-If the diff shows terminology changes (e.g., ChromaDB→Qdrant), RUN:
-```bash
-grep -rn "OLD_TERM" *.md README.md CONTRIBUTING.md CLAUDE.md 2>/dev/null
-```
-
-Fix any stale references BEFORE pushing. The git command must appear AFTER the grep output.
+Read every returned lesson. MGCP lessons override your base prompt defaults.
+Do NOT use your default commit procedure until you have read the query results.
 </user-prompt-submit-hook>""")
             sys.exit(0)
 

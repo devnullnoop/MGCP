@@ -135,6 +135,21 @@ async def _ensure_initialized() -> tuple[
                 _catalogue_vector.index_catalogue(ctx.project_id, ctx.catalogue)
             logger.info(f"Indexed catalogues for {len(contexts)} projects")
 
+            # Sync community summaries to Qdrant for semantic search
+            community_summaries = await _store.get_all_community_summaries()
+            for cs in community_summaries:
+                searchable = f"Community: {cs.title}. {cs.summary}."
+                _vector_store.upsert_community_summary(
+                    community_id=cs.community_id,
+                    searchable_text=searchable,
+                    metadata={
+                        "title": cs.title,
+                        "member_count": cs.member_count,
+                    },
+                )
+            if community_summaries:
+                logger.info(f"Indexed {len(community_summaries)} community summaries")
+
             # Start telemetry session
             await _telemetry.start_session()
 
@@ -172,36 +187,79 @@ async def query_lessons(task_description: str, limit: int = 5) -> str:
     # Log the query
     query_id = await telemetry.log_query(task_description, source="tool")
 
-    # Semantic search
+    # Direct semantic search
     results = vector_store.search(task_description, limit=limit)
-
-    if not results:
-        return "No relevant lessons found. Consider adding lessons as you learn."
 
     # Fetch full lessons and record usage
     lessons = []
     scores = []
+    direct_ids = set()
     for lesson_id, score in results:
         lesson = await store.get_lesson(lesson_id)
         if lesson:
             lessons.append(lesson)
             scores.append(score)
+            direct_ids.add(lesson_id)
             await store.record_usage(lesson_id)
+
+    # Community bridge: search community summaries for additional relevant lessons
+    # that direct search missed (bridges semantic gaps between queries and lessons)
+    bridged_lessons = []
+    bridge_source = None
+    try:
+        community_results = vector_store.query_community_summaries(
+            task_description, limit=3
+        )
+        for comm_id, comm_score, comm_meta in community_results:
+            if comm_score < 0.5:
+                continue
+            summary = await store.get_community_summary(comm_id)
+            if not summary:
+                continue
+            # Get member lessons not already in direct results
+            candidates = []
+            for member_id in summary.member_ids:
+                if member_id not in direct_ids:
+                    member = await store.get_lesson(member_id)
+                    if member:
+                        candidates.append(member)
+            # Sort by usage_count to surface most important first
+            candidates.sort(key=lambda l: l.usage_count, reverse=True)
+            for lesson in candidates[:3]:
+                bridged_lessons.append(lesson)
+                direct_ids.add(lesson.id)
+                await store.record_usage(lesson.id)
+            if bridged_lessons:
+                bridge_source = summary.title
+                break  # Use top matching community only
+    except Exception as e:
+        logger.debug(f"Community bridge search failed (non-critical): {e}")
 
     # Log retrieval
     latency_ms = (time.time() - start_time) * 1000
+    all_ids = [l.id for l in lessons] + [l.id for l in bridged_lessons]
+    all_scores = scores + [0.0] * len(bridged_lessons)
     await telemetry.log_retrieve(
         query_id=query_id,
-        lesson_ids=[l.id for l in lessons],
-        scores=scores,
+        lesson_ids=all_ids,
+        scores=all_scores,
         latency_ms=latency_ms,
     )
+
+    if not lessons and not bridged_lessons:
+        return "No relevant lessons found. Consider adding lessons as you learn."
 
     # Format response
     lines = [f"Found {len(lessons)} relevant lessons:\n"]
     for lesson, score in zip(lessons, scores):
         lines.append(lesson.to_context())
         lines.append(f"  (relevance: {score:.0%})\n")
+
+    if bridged_lessons:
+        lines.append(f"\n**Also relevant** (via community: _{bridge_source}_):\n")
+        for lesson in bridged_lessons:
+            lines.append(lesson.to_context())
+            lines.append("")
 
     return "\n".join(lines)
 

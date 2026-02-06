@@ -1,0 +1,184 @@
+lessons:
+  - id: data-privacy
+    trigger: "When collecting, storing, processing, or deleting user data — ensuring compliance with privacy regulations and responsible data stewardship"
+    action: "Collect only what you need, encrypt what you store, delete what you no longer use. Build privacy controls into the architecture from day one — retrofitting consent management and data deletion into a live system is orders of magnitude harder than designing it in."
+    rationale: "Privacy violations carry existential consequences: GDPR fines up to 4% of global revenue, CCPA statutory damages, class-action lawsuits, and irreparable reputation damage. Beyond compliance, responsible data handling is an ethical obligation to the people whose data you hold."
+    tags: [meta, data-privacy, compliance, security]
+
+  - id: data-minimization
+    trigger: "When designing data collection, forms, or API request schemas — deciding what user data to collect and how long to keep it"
+    action: "Collect only the data strictly necessary for the stated purpose. For each field, ask: 'What breaks if we remove this?' If nothing breaks, do not collect it. Set a retention period at collection time. Implement automated deletion when the retention period expires."
+    rationale: "Data you do not collect cannot be breached, subpoenaed, or misused. Every additional field increases storage cost, compliance burden, and attack surface. Minimization is the strongest privacy and security measure — it eliminates risk at the source."
+    parent_id: data-privacy
+    tags: [data-privacy, data-minimization, compliance]
+    examples:
+      - label: bad
+        code: |
+          class UserRegistration:
+              email: str
+              password: str
+              full_name: str
+              date_of_birth: str      # Not needed for the service
+              phone_number: str       # Not needed for the service
+              home_address: str       # Not needed for the service
+              social_security: str    # Absolutely not needed
+        explanation: "Collecting data 'just in case' — each unnecessary field is a liability"
+      - label: good
+        code: |
+          class UserRegistration:
+              email: str              # Required for login
+              password: str           # Required for authentication
+              display_name: str       # Required for UI personalization
+              # Nothing else — if we need more later, we ask then
+        explanation: "Only fields required for the service to function — minimal attack surface"
+
+  - id: privacy-by-design
+    trigger: "When designing systems that handle personal data — building consent management, anonymization, and privacy controls into the architecture from the start"
+    action: "Implement privacy controls architecturally: (1) consent management with granular opt-in/opt-out per purpose, (2) pseudonymization of identifiers in analytics pipelines, (3) anonymization for data shared with third parties, (4) purpose limitation — tag data with why it was collected and restrict usage to that purpose."
+    rationale: "Bolting privacy onto an existing system requires rewriting data flows, storage layers, and APIs — often taking months. Designing privacy in from the start costs a fraction of the effort and produces a cleaner architecture. GDPR Article 25 explicitly requires data protection by design."
+    parent_id: data-privacy
+    tags: [data-privacy, privacy-by-design, architecture]
+    examples:
+      - label: bad
+        code: |
+          # Analytics event — raw PII sent to third-party service
+          analytics.track("purchase", {
+              "user_email": user.email,
+              "user_name": user.full_name,
+              "item": product.name,
+              "price": product.price
+          })
+        explanation: "PII sent directly to third-party analytics — no pseudonymization, no consent check"
+      - label: good
+        code: |
+          if user.has_consent("analytics"):
+              analytics.track("purchase", {
+                  "user_id": hash(user.id + salt),  # Pseudonymized
+                  "item_category": product.category, # Aggregated
+                  "price_bucket": bucket(product.price),
+              })
+        explanation: "Consent checked, identifier pseudonymized, data minimized to what analytics needs"
+
+  - id: data-retention-policies
+    trigger: "When defining how long data is stored — implementing automated deletion schedules that comply with GDPR, CCPA, and other privacy regulations"
+    action: "Define retention periods for every data category at design time. Implement automated deletion jobs that run on schedule. Log deletions for audit trails. Retention periods must align with legal requirements: GDPR requires deletion when purpose is fulfilled, CCPA grants deletion rights within 45 days."
+    rationale: "Data that outlives its purpose is a liability with zero value. Stale data increases breach impact, storage costs, and compliance risk. Automated retention enforcement eliminates the human error of 'we forgot to delete it' — the most common cause of retention violations."
+    parent_id: data-privacy
+    tags: [data-privacy, retention, compliance, gdpr]
+    examples:
+      - label: bad
+        code: |
+          # "We keep everything forever, just in case"
+          # 8 years of user data, including deleted accounts
+          # No deletion jobs, no retention policy documented
+        explanation: "Unbounded retention — maximizes breach impact and violates GDPR storage limitation principle"
+      - label: good
+        code: |
+          RETENTION_POLICIES = {
+              "session_logs": timedelta(days=30),
+              "user_accounts": timedelta(days=365),  # After account deletion
+              "payment_records": timedelta(days=2555),  # 7 years, tax law
+              "analytics_events": timedelta(days=90),
+          }
+
+          async def enforce_retention():
+              for data_type, max_age in RETENTION_POLICIES.items():
+                  cutoff = datetime.utcnow() - max_age
+                  deleted = await db.delete_older_than(data_type, cutoff)
+                  audit_log.info(f"Retention: deleted {deleted} {data_type} records")
+        explanation: "Explicit retention periods per data type, automated enforcement, audit logging"
+
+  - id: database-migration-safety
+    trigger: "When writing or running database migrations — ensuring they are versioned, reversible, and safe to run on production data"
+    action: "Make every migration reversible with a tested down-migration. Run migrations in a transaction where possible. Test migrations against a copy of production data before deploying. Never drop columns or tables in the same release that stops writing to them — use a two-phase approach: stop writing first, drop in the next release."
+    rationale: "Irreversible migrations turn deployment failures into data loss events. A migration that works on an empty test database can lock a production table with millions of rows for hours. The two-phase approach prevents data loss if rollback is needed."
+    parent_id: data-privacy
+    tags: [data-privacy, database, migrations, reliability]
+    examples:
+      - label: bad
+        code: |
+          # migration_042.py
+          def upgrade():
+              op.drop_column('users', 'legacy_email')  # Data gone forever
+
+          def downgrade():
+              pass  # "We'll figure it out"
+        explanation: "Irreversible migration, no downgrade path — if deploy fails, data is lost"
+      - label: good
+        code: |
+          # Phase 1: migration_042.py (deploy with code that stops writing to legacy_email)
+          def upgrade():
+              op.add_column('users', sa.Column('email_v2', sa.String))
+              op.execute("UPDATE users SET email_v2 = legacy_email")
+
+          def downgrade():
+              op.drop_column('users', 'email_v2')
+
+          # Phase 2: migration_043.py (next release, after confirming Phase 1 is stable)
+          def upgrade():
+              op.drop_column('users', 'legacy_email')
+        explanation: "Two-phase migration: copy data first, drop old column only after confirming stability"
+
+  - id: backup-recovery
+    trigger: "When designing backup strategies or disaster recovery procedures — ensuring data can be restored reliably after failures"
+    action: "Implement the 3-2-1 backup rule: 3 copies, 2 different media types, 1 offsite. Test restores monthly — an untested backup is not a backup. Measure and document Recovery Time Objective (RTO) and Recovery Point Objective (RPO). Automate backup verification with checksums."
+    rationale: "Backups that have never been restored are Schrodinger's backups — they might work or might not, and you will only find out during the worst possible moment. Regular restore testing is the only way to ensure recoverability. Every hour of RTO costs real money in downtime."
+    parent_id: data-privacy
+    tags: [data-privacy, backup, disaster-recovery, reliability]
+    examples:
+      - label: bad
+        code: |
+          # "We have backups"
+          # Last backup test: unknown
+          # Backup location: same server as production database
+          # RTO/RPO: "hopefully fast"
+        explanation: "Untested backup on the same server — if the server dies, both production and backup are gone"
+      - label: good
+        code: |
+          # backup_config.yaml
+          schedule: "0 */6 * * *"       # Every 6 hours (RPO: 6 hours)
+          destinations:
+            - local: /backups/db/       # Copy 1: local disk
+            - s3: s3://backups/db/      # Copy 2: cloud storage
+            - offsite: rsync://dr-site/ # Copy 3: disaster recovery site
+          verification:
+            checksum: sha256
+            restore_test: monthly
+            alert_on_failure: true
+          rto_target: "2 hours"
+          rpo_target: "6 hours"
+        explanation: "3-2-1 backups, automated scheduling, checksum verification, monthly restore tests"
+
+  - id: pii-handling
+    trigger: "When storing, processing, or transmitting personally identifiable information — encrypting PII, preventing it from appearing in logs, and supporting export and deletion"
+    action: "Encrypt PII columns at rest using application-level encryption (not just disk encryption). Never log PII — use structured logging with PII fields redacted or replaced with pseudonyms. Implement data subject rights: export (GDPR Article 20) and deletion (GDPR Article 17) as API endpoints, not manual processes."
+    rationale: "PII in logs is the most common source of accidental data exposure — logs are shared freely, stored in multiple systems, and rarely access-controlled. Application-level encryption ensures PII is protected even if database backups or replicas are compromised. Automated export/deletion prevents the compliance bottleneck of manual data subject requests."
+    parent_id: data-privacy
+    tags: [data-privacy, pii, encryption, compliance, gdpr]
+    examples:
+      - label: bad
+        code: |
+          # Logging PII
+          logger.info(f"User login: {user.email}, IP: {user.ip_address}")
+
+          # Storing PII unencrypted
+          db.execute("INSERT INTO users (email, ssn) VALUES (?, ?)",
+                     user.email, user.ssn)
+        explanation: "PII in logs gets shipped to log aggregators, searchable by support staff; SSN stored in plain text"
+      - label: good
+        code: |
+          # Structured logging with PII redacted
+          logger.info("User login", extra={
+              "user_id": user.id,          # Non-PII identifier
+              "event": "login_success",
+          })
+
+          # PII encrypted at application level
+          db.execute("INSERT INTO users (email_encrypted, ssn_encrypted) VALUES (?, ?)",
+                     encrypt(user.email), encrypt(user.ssn))
+
+          # Data subject rights as API endpoints
+          @app.delete("/api/users/{user_id}/data")
+          async def delete_user_data(user_id: str):
+              await gdpr_service.erase_user(user_id)
+        explanation: "No PII in logs, application-level encryption, automated deletion endpoint"

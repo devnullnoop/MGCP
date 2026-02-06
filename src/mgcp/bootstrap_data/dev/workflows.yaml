@@ -1,0 +1,540 @@
+workflows:
+  - id: feature-development
+    name: "Feature Development"
+    description: "Use when implementing a new feature or significant change. Ensures research, planning, documentation, and testing."
+    trigger: >-
+      implement, add, build, create, develop, make, write, set up, wire up, connect,
+      new feature, add feature, add functionality, add capability, add support for,
+      enhance, improve, optimize, upgrade, modernize, update, redesign, rework,
+      refactor, restructure, reorganize, clean up, simplify,
+      style, styling, UI, UX, interface, design, layout, component, view, screen, page,
+      make it faster, speed up, performance, optimize queries,
+      integrate, integration, hook up, plug in,
+      build out, build the, create a, create new, develop the, work on,
+      put together, get working, set this up
+    tags: [development, feature, standard]
+    steps:
+      - id: research
+        name: "Research"
+        order: 1
+        description: "Understand the task, existing code, and relevant APIs/libraries before writing any code."
+        guidance: "Read existing code first. Check API documentation for current versions. Search for similar patterns in the codebase."
+        checklist:
+          - "Read relevant existing code"
+          - "Check API/library documentation"
+          - "Verify versions of dependencies"
+          - "Identify files that will be modified"
+          - "Understand edge cases"
+        outputs:
+          - "understanding of scope"
+          - "list of files to modify"
+          - "identified risks"
+        lessons:
+          - lesson_id: api-research
+            relevance: "Must research APIs before using them"
+            priority: 1
+          - lesson_id: check-api-versions
+            relevance: "Version mismatches cause subtle bugs"
+            priority: 1
+          - lesson_id: verify-api-response
+            relevance: "Log actual responses during research"
+            priority: 2
+          - lesson_id: dependency-security
+            relevance: "Check dependencies for vulnerabilities"
+            priority: 2
+
+      - id: plan
+        name: "Plan"
+        order: 2
+        description: "Design the implementation approach before coding. Identify potential issues and dependencies."
+        guidance: "Break down into small steps. Identify which files change together. Consider rollback strategy."
+        checklist:
+          - "Break task into implementable steps"
+          - "Identify file dependencies/couplings"
+          - "Plan error handling approach"
+          - "Consider edge cases in design"
+          - "Plan test coverage"
+        outputs:
+          - "step-by-step plan"
+          - "file change list"
+          - "risk mitigation"
+        lessons:
+          - lesson_id: verification
+            relevance: "Plan what needs verification at each step"
+            priority: 2
+          - lesson_id: error-handling
+            relevance: "Design error handling into the plan"
+            priority: 2
+
+      - id: document
+        name: "Document Plan"
+        order: 3
+        description: "Record the plan with sources. This prevents re-research and enables review."
+        guidance: "Write down what you learned in research. Cite API docs and version numbers."
+        checklist:
+          - "Document approach in code comments or project docs"
+          - "Record API versions and doc links"
+          - "Note any assumptions being made"
+          - "Record decisions and rationale"
+        outputs:
+          - "documented plan"
+          - "cited sources"
+          - "recorded assumptions"
+        lessons:
+          - lesson_id: error-context
+            relevance: "Document context for future debugging"
+            priority: 3
+
+      - id: execute
+        name: "Execute"
+        order: 4
+        description: "Implement step-by-step, testing as you go. Don't write everything then test at the end."
+        guidance: "Implement one piece, test it, commit. Don't batch large changes."
+        checklist:
+          - "Implement incrementally"
+          - "Test each piece before moving on"
+          - "Commit working increments"
+          - "Handle errors as they arise"
+          - "Verify assumptions in code"
+        outputs:
+          - "working implementation"
+          - "incremental commits"
+        lessons:
+          - lesson_id: api-research
+            relevance: "Re-verify API behavior during implementation"
+            priority: 1
+          - lesson_id: verify-api-response
+            relevance: "Log responses to debug issues"
+            priority: 1
+          - lesson_id: testing
+            relevance: "Test with known inputs as you implement"
+            priority: 1
+          - lesson_id: verify-before-assert
+            relevance: "Add verification checks in code"
+            priority: 2
+          - lesson_id: specific-exceptions
+            relevance: "Catch specific exceptions"
+            priority: 2
+          - lesson_id: error-context
+            relevance: "Include full context in error messages"
+            priority: 2
+          - lesson_id: owasp-sql-injection
+            relevance: "ALWAYS use parameterized queries"
+            priority: 1
+          - lesson_id: owasp-input-validation
+            relevance: "Validate ALL input server-side"
+            priority: 1
+          - lesson_id: owasp-contextual-output-encoding
+            relevance: "Encode output based on context"
+            priority: 1
+          - lesson_id: owasp-authentication-fundamentals
+            relevance: "Use secure auth patterns"
+            priority: 2
+          - lesson_id: owasp-access-control
+            relevance: "Check authorization on EVERY endpoint"
+            priority: 2
+
+      - id: test
+        name: "Test"
+        order: 5
+        description: "Comprehensive testing including edge cases. Verify the feature works as intended."
+        guidance: "Test happy path, error cases, and edge cases. Verify error messages are helpful."
+        checklist:
+          - "Happy path works"
+          - "Error cases handled gracefully"
+          - "Edge cases covered (empty, null, boundary)"
+          - "Error messages are informative"
+          - "No regressions in existing functionality"
+        outputs:
+          - "passing tests"
+          - "verified behavior"
+        lessons:
+          - lesson_id: testing
+            relevance: "Test with known inputs"
+            priority: 1
+          - lesson_id: test-known-inputs
+            relevance: "Known pairs make changes obvious"
+            priority: 1
+          - lesson_id: test-edge-cases
+            relevance: "Edge cases cause most bugs"
+            priority: 1
+          - lesson_id: verification
+            relevance: "Verify all assumptions"
+            priority: 2
+
+      - id: review
+        name: "Review"
+        order: 6
+        description: "Self-review before commit. Check for obvious issues, code quality, and documentation."
+        guidance: "Review diff before committing. Look for debug code, TODOs, and incomplete error handling."
+        checklist:
+          - "Review diff for obvious issues"
+          - "Remove debug code and print statements"
+          - "Verify error handling is complete"
+          - "Check documentation is updated"
+          - "Ensure tests are committed"
+          - "Check for hardcoded secrets"
+          - "Verify .env files are gitignored"
+        outputs:
+          - "clean commit"
+          - "complete feature"
+        lessons:
+          - lesson_id: verification
+            relevance: "Final verification of assumptions"
+            priority: 2
+          - lesson_id: error-handling
+            relevance: "Verify error handling is complete"
+            priority: 2
+          - lesson_id: no-hardcoded-secrets
+            relevance: "Check for committed secrets"
+            priority: 1
+          - lesson_id: pre-commit-documentation-review
+            relevance: "Verify docs are updated"
+            priority: 1
+
+  - id: bug-fix
+    name: "Bug Fix"
+    description: "Use when fixing a bug. Ensures understanding the root cause before applying a fix."
+    trigger: >-
+      bug, fix, debug, issue, problem, defect, flaw,
+      broken, not working, doesn't work, stopped working, fails, failing, failed,
+      error, exception, crash, crashed, crashing, throws, throwing,
+      investigate, troubleshoot, diagnose, figure out, track down,
+      wrong, incorrect, unexpected, weird, strange,
+      something's broken, it's broken, not right, acting up,
+      what's wrong, having a problem, there's an issue,
+      repair, resolve, address, correct, patch,
+      regression, behavior changed, used to work
+    tags: [development, bugfix, debugging]
+    steps:
+      - id: reproduce
+        name: "Reproduce"
+        order: 1
+        description: "Reliably reproduce the bug before attempting to fix it."
+        guidance: "Create a minimal reproduction case. Document exact steps to trigger the bug."
+        checklist:
+          - "Can reproduce the bug consistently"
+          - "Documented reproduction steps"
+          - "Identified exact error message/behavior"
+        outputs:
+          - "reproduction steps"
+          - "error details"
+        lessons:
+          - lesson_id: verification
+            relevance: "Verify you can reproduce before fixing"
+            priority: 1
+          - lesson_id: test-edge-cases
+            relevance: "Check if bug occurs at boundaries"
+            priority: 2
+
+      - id: investigate
+        name: "Investigate"
+        order: 2
+        description: "Find the root cause. Don't just fix the symptom."
+        guidance: "Use logging or debugger to trace execution. Find where behavior diverges from expected."
+        checklist:
+          - "Identified root cause (not just symptom)"
+          - "Understood why the bug occurs"
+          - "Checked for similar issues elsewhere"
+        outputs:
+          - "root cause identified"
+          - "understanding of failure mode"
+        lessons:
+          - lesson_id: verify-api-response
+            relevance: "Log actual values to see divergence"
+            priority: 1
+          - lesson_id: error-context
+            relevance: "Add context to understand the full picture"
+            priority: 2
+
+      - id: fix
+        name: "Fix"
+        order: 3
+        description: "Apply the fix. Keep it minimal - don't refactor while fixing."
+        guidance: "Fix only the bug. Don't add features or refactor. That's scope creep."
+        checklist:
+          - "Fix addresses root cause"
+          - "Fix is minimal (no scope creep)"
+          - "Added defensive checks if appropriate"
+        outputs:
+          - "fix applied"
+          - "minimal diff"
+        lessons:
+          - lesson_id: specific-exceptions
+            relevance: "Add specific exception handling"
+            priority: 2
+          - lesson_id: verify-before-assert
+            relevance: "Add verification for the condition"
+            priority: 2
+          - lesson_id: validate-input
+            relevance: "Ensure validation is correct"
+            priority: 2
+          - lesson_id: owasp-sql-injection
+            relevance: "Use parameterized queries"
+            priority: 2
+          - lesson_id: secure-error-messages
+            relevance: "Don't expose sensitive details"
+            priority: 2
+
+      - id: verify
+        name: "Verify"
+        order: 4
+        description: "Confirm the fix works and doesn't break anything else."
+        guidance: "Test the fix with the original reproduction case. Run full test suite."
+        checklist:
+          - "Original bug no longer reproduces"
+          - "Added test to prevent regression"
+          - "Existing tests still pass"
+          - "No new issues introduced"
+        outputs:
+          - "verified fix"
+          - "regression test"
+        lessons:
+          - lesson_id: testing
+            relevance: "Test with reproduction case"
+            priority: 1
+          - lesson_id: test-known-inputs
+            relevance: "Add regression test"
+            priority: 1
+
+  - id: secure-code-review
+    name: "Secure Code Review"
+    description: "Use when performing a security-focused code review. Based on OWASP Code Review Guide."
+    trigger: "security review, code review, security audit, vulnerability check, pen test prep, OWASP review, secure code"
+    tags: [security, review, owasp]
+    steps:
+      - id: input-validation
+        name: "Input Validation Review"
+        order: 1
+        description: "Check all input handling for injection vulnerabilities."
+        guidance: "Look for user input that flows into SQL, system commands, file paths, or HTML."
+        checklist:
+          - "All user inputs validated server-side"
+          - "Using allowlists, not blocklists"
+          - "Input canonicalized before validation"
+          - "SQL uses parameterized queries"
+          - "No command injection paths"
+          - "File paths validated against traversal"
+        outputs:
+          - "input validation findings"
+          - "injection vulnerability list"
+        lessons:
+          - lesson_id: owasp-input-validation
+            relevance: "Core input validation principles"
+            priority: 1
+          - lesson_id: owasp-sql-injection
+            relevance: "Check all database queries"
+            priority: 1
+          - lesson_id: owasp-path-traversal
+            relevance: "Check file operations"
+            priority: 1
+          - lesson_id: owasp-canonicalize-before-validate
+            relevance: "Check encoding handling"
+            priority: 2
+
+      - id: output-encoding
+        name: "Output Encoding Review"
+        order: 2
+        description: "Check all output contexts for proper encoding to prevent XSS."
+        guidance: "Trace untrusted data to output points. Verify context-appropriate encoding."
+        checklist:
+          - "HTML output properly escaped"
+          - "JavaScript contexts use JSON encoding"
+          - "URL parameters properly encoded"
+          - "Database data treated as untrusted"
+          - "Template engine auto-escaping enabled"
+          - "No raw HTML rendering of user data"
+        outputs:
+          - "XSS vulnerability findings"
+          - "encoding gaps"
+        lessons:
+          - lesson_id: owasp-contextual-output-encoding
+            relevance: "Different contexts need different encoding"
+            priority: 1
+          - lesson_id: owasp-encode-all-untrusted
+            relevance: "DB and API data is also untrusted"
+            priority: 1
+          - lesson_id: escape-output
+            relevance: "Basic output escaping"
+            priority: 2
+
+      - id: authentication
+        name: "Authentication Review"
+        order: 3
+        description: "Review authentication mechanisms for weaknesses."
+        guidance: "Check password storage, session ID generation, login failure messages, brute force protection."
+        checklist:
+          - "Passwords use Argon2/bcrypt/scrypt"
+          - "Session IDs cryptographically random (>=128 bits)"
+          - "Session regenerated after login"
+          - "Generic error messages (no enumeration)"
+          - "Account lockout or rate limiting"
+          - "MFA available for sensitive accounts"
+          - "Credentials transmitted over HTTPS only"
+        outputs:
+          - "authentication weaknesses"
+          - "password storage findings"
+        lessons:
+          - lesson_id: owasp-authentication-fundamentals
+            relevance: "Use tested libraries"
+            priority: 1
+          - lesson_id: owasp-password-storage
+            relevance: "Verify password hashing"
+            priority: 1
+          - lesson_id: owasp-auth-fail-securely
+            relevance: "Check error messages"
+            priority: 1
+          - lesson_id: owasp-account-lockout
+            relevance: "Verify brute force protection"
+            priority: 2
+          - lesson_id: owasp-session-management
+            relevance: "Check session ID generation"
+            priority: 1
+
+      - id: authorization
+        name: "Authorization Review"
+        order: 4
+        description: "Review access control for bypasses and IDOR vulnerabilities."
+        guidance: "Check every endpoint for authorization. Look for IDOR by tracing resource IDs."
+        checklist:
+          - "Every endpoint has authorization check"
+          - "Authorization enforced server-side"
+          - "Default is DENY, not ALLOW"
+          - "Resource ownership verified (IDOR check)"
+          - "No client-provided role/permission trust"
+          - "Privilege changes require re-auth"
+          - "Admin functions properly protected"
+        outputs:
+          - "authorization bypasses"
+          - "IDOR vulnerabilities"
+          - "privilege escalation paths"
+        lessons:
+          - lesson_id: owasp-access-control
+            relevance: "Centralized, server-side, default deny"
+            priority: 1
+          - lesson_id: owasp-idor-prevention
+            relevance: "Verify ownership for each resource"
+            priority: 1
+          - lesson_id: owasp-privilege-escalation
+            relevance: "Don't trust client-provided roles"
+            priority: 1
+          - lesson_id: least-privilege
+            relevance: "Minimum permissions needed"
+            priority: 2
+
+      - id: cryptography
+        name: "Cryptography Review"
+        order: 5
+        description: "Review cryptographic implementations for weak algorithms and key management."
+        guidance: "Check for weak algorithms (MD5, SHA1, DES). Verify key storage. Check random generation."
+        checklist:
+          - "Modern algorithms (AES-256, RSA-2048+)"
+          - "No MD5/SHA1 for security purposes"
+          - "Keys not hardcoded in source"
+          - "Keys stored in KMS/vault/env vars"
+          - "CSPRNG for all security random values"
+          - "TLS 1.2+ with strong ciphers"
+          - "Proper key rotation procedures"
+        outputs:
+          - "weak crypto findings"
+          - "key management issues"
+        lessons:
+          - lesson_id: owasp-cryptography
+            relevance: "Use established libraries"
+            priority: 1
+          - lesson_id: owasp-key-management
+            relevance: "Keys in KMS/vault, not code"
+            priority: 1
+          - lesson_id: owasp-random-generation
+            relevance: "CSPRNG for all security values"
+            priority: 1
+          - lesson_id: no-hardcoded-secrets
+            relevance: "No secrets in source code"
+            priority: 1
+
+      - id: data-protection
+        name: "Data Protection Review"
+        order: 6
+        description: "Review handling of sensitive data including storage, transmission, and exposure."
+        guidance: "Identify sensitive data flows. Check encryption at rest and in transit."
+        checklist:
+          - "Sensitive data classified and identified"
+          - "Encrypted at rest"
+          - "HTTPS for all transmission"
+          - "Not in URLs or GET parameters"
+          - "Not in logs or error messages"
+          - "Proper data retention/deletion"
+          - "HSTS header set"
+        outputs:
+          - "data exposure findings"
+          - "encryption gaps"
+        lessons:
+          - lesson_id: owasp-data-protection
+            relevance: "Classify, encrypt, minimize retention"
+            priority: 1
+          - lesson_id: owasp-sensitive-data-exposure
+            relevance: "No sensitive data in URLs, logs, errors"
+            priority: 1
+          - lesson_id: owasp-https-everywhere
+            relevance: "HTTPS for all traffic"
+            priority: 1
+          - lesson_id: owasp-cookie-security
+            relevance: "Secure, HttpOnly, SameSite on cookies"
+            priority: 2
+
+      - id: error-logging
+        name: "Error Handling & Logging Review"
+        order: 7
+        description: "Review error handling for information disclosure and logging for security events."
+        guidance: "Check error messages shown to users. Verify security events are logged."
+        checklist:
+          - "Generic errors to users"
+          - "Detailed errors logged server-side"
+          - "No stack traces in production"
+          - "Auth failures logged with IP/user"
+          - "Access control failures logged"
+          - "Log injection prevented"
+          - "Structured logging format"
+        outputs:
+          - "error disclosure findings"
+          - "logging gaps"
+        lessons:
+          - lesson_id: owasp-error-handling
+            relevance: "Generic to users, detailed in logs"
+            priority: 1
+          - lesson_id: owasp-security-logging
+            relevance: "Log all security-relevant events"
+            priority: 1
+          - lesson_id: owasp-log-injection
+            relevance: "Sanitize before logging"
+            priority: 2
+          - lesson_id: secure-error-messages
+            relevance: "Don't expose internals"
+            priority: 2
+
+      - id: file-handling
+        name: "File Handling Review"
+        order: 8
+        description: "Review file uploads, downloads, and filesystem access for vulnerabilities."
+        guidance: "Check file upload validation. Verify upload storage is outside web root."
+        checklist:
+          - "Upload content validated (magic bytes)"
+          - "Uploads stored outside web root"
+          - "Files renamed (no user-controlled names)"
+          - "No script execution in upload dirs"
+          - "Path traversal prevented"
+          - "File type restrictions enforced"
+          - "Download authorization checked"
+        outputs:
+          - "file handling vulnerabilities"
+          - "upload security findings"
+        lessons:
+          - lesson_id: owasp-file-upload
+            relevance: "Validate content, safe storage, rename files"
+            priority: 1
+          - lesson_id: owasp-path-traversal
+            relevance: "No user input in file paths"
+            priority: 1
+          - lesson_id: owasp-file-execution
+            relevance: "No script execution in upload directories"
+            priority: 2

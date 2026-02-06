@@ -1,8 +1,9 @@
 """Bootstrap runner - seeds the MGCP database with lessons and workflows.
 
-This module orchestrates the bootstrap process by importing and combining:
-- bootstrap_core: MGCP tool usage lessons (task-agnostic)
-- bootstrap_dev: Software development lessons and workflows (domain-specific)
+This module orchestrates the bootstrap process by loading lessons, workflows,
+and relationships from YAML files in bootstrap_data/:
+- core/: MGCP tool usage lessons (task-agnostic)
+- dev/: Software development lessons, security practices, and workflows
 
 Usage:
     mgcp-bootstrap           # Seed all (core + dev)
@@ -13,8 +14,7 @@ Usage:
 
 import asyncio
 
-from .bootstrap_core import CORE_LESSONS, CORE_RELATIONSHIPS
-from .bootstrap_dev import DEV_LESSONS, DEV_RELATIONSHIPS, DEV_WORKFLOWS
+from .bootstrap_loader import load_lessons, load_relationships, load_workflows
 from .graph import LessonGraph
 from .models import Relationship
 from .persistence import LessonStore
@@ -184,15 +184,20 @@ async def seed_database(core_only: bool = False, dev_only: bool = False) -> None
     workflows_to_seed = []
 
     if not dev_only:
-        lessons_to_seed.extend(CORE_LESSONS)
-        relationships_to_seed.extend(CORE_RELATIONSHIPS)
-        print(f"Core: {len(CORE_LESSONS)} lessons, {len(CORE_RELATIONSHIPS)} relationships")
+        core_lessons = load_lessons("core")
+        core_rels = load_relationships("core")
+        lessons_to_seed.extend(core_lessons)
+        relationships_to_seed.extend(core_rels)
+        print(f"Core: {len(core_lessons)} lessons, {len(core_rels)} relationships")
 
     if not core_only:
-        lessons_to_seed.extend(DEV_LESSONS)
-        relationships_to_seed.extend(DEV_RELATIONSHIPS)
-        workflows_to_seed.extend(DEV_WORKFLOWS)
-        print(f"Dev: {len(DEV_LESSONS)} lessons, {len(DEV_RELATIONSHIPS)} relationships, {len(DEV_WORKFLOWS)} workflows")
+        dev_lessons = load_lessons("dev")
+        dev_rels = load_relationships("dev")
+        dev_workflows = load_workflows("dev")
+        lessons_to_seed.extend(dev_lessons)
+        relationships_to_seed.extend(dev_rels)
+        workflows_to_seed.extend(dev_workflows)
+        print(f"Dev: {len(dev_lessons)} lessons, {len(dev_rels)} relationships, {len(dev_workflows)} workflows")
 
     # Seed lessons
     if lessons_to_seed:
@@ -223,9 +228,9 @@ async def run_update_triggers(core_only: bool = False, dev_only: bool = False) -
 
     lessons_to_update = []
     if not dev_only:
-        lessons_to_update.extend(CORE_LESSONS)
+        lessons_to_update.extend(load_lessons("core"))
     if not core_only:
-        lessons_to_update.extend(DEV_LESSONS)
+        lessons_to_update.extend(load_lessons("dev"))
 
     print(f"Updating triggers for {len(lessons_to_update)} bootstrap lessons...\n")
     updated, skipped, not_found = await update_triggers(
@@ -269,22 +274,28 @@ Bootstrap Modules:
             print("mgcp-bootstrap 1.1.0")
             return
         elif sys.argv[1] == "--list":
+            core_lessons = load_lessons("core")
+            core_rels = load_relationships("core")
+            dev_lessons = load_lessons("dev")
+            dev_rels = load_relationships("dev")
+            dev_workflows = load_workflows("dev")
             print(f"""Available Bootstrap Modules:
 
-CORE (bootstrap_core.py):
+CORE (bootstrap_data/core/):
   - MGCP tool usage patterns (query, save, catalogue, workflows, reminders)
   - Session lifecycle (start, end, shutdown)
   - Knowledge storage types and when to use each
   - Feedback loops and retrospectives
-  Lessons: {len(CORE_LESSONS)} | Relationships: {len(CORE_RELATIONSHIPS)}
+  Lessons: {len(core_lessons)} | Relationships: {len(core_rels)}
 
-DEV (bootstrap_dev.py):
+DEV (bootstrap_data/dev/):
   - Software development best practices
   - Security lessons (OWASP Secure Coding Practices)
-  - Verification, testing, error handling
+  - Verification, testing, error handling, architecture, devops
   - Git workflow lessons
+  - Accessibility, performance, data privacy
   - Workflows: feature-development, bug-fix, secure-code-review
-  Lessons: {len(DEV_LESSONS)} | Relationships: {len(DEV_RELATIONSHIPS)} | Workflows: {len(DEV_WORKFLOWS)}
+  Lessons: {len(dev_lessons)} | Relationships: {len(dev_rels)} | Workflows: {len(dev_workflows)}
 """)
             return
 

@@ -1,0 +1,492 @@
+lessons:
+  # ===========================================================================
+  # PILLAR 1: INPUT VALIDATION & INJECTION PREVENTION
+  # Sources: OWASP A05, CWE-79/89/78/94/77/20, OWASP SCP Cat 1-2, LLM05
+  # ===========================================================================
+
+  - id: security-input-validation
+    trigger: "When building or reviewing code that accepts external input — forms, APIs, file uploads, CLI arguments, or LLM-generated content — and needs to validate, sanitize, or encode that input to prevent injection attacks"
+    action: "Validate all input server-side using allowlists. Encode all output for its rendering context. Use parameterized queries for data stores. Never trust data from outside your system boundary, including data retrieved from your own database (stored attacks)."
+    rationale: "Injection flaws remain the most exploited vulnerability class. A single unvalidated input can lead to full database extraction (SQLi), session hijacking (XSS), or remote code execution (command/code injection). Defense requires both input validation AND output encoding — neither alone is sufficient."
+    tags: [meta, security, input-validation, injection, owasp]
+    parent_id: security
+
+  # ---------------------------------------------------------------------------
+  # SQL Injection Prevention
+  # ---------------------------------------------------------------------------
+  - id: sql-injection-prevention
+    trigger: "When writing SQL queries, building database access layers, or reviewing code that constructs queries from user-supplied data"
+    action: "Always use parameterized queries or prepared statements. Use ORM query builders that auto-parameterize. Never concatenate or interpolate user input into SQL strings, even for ORDER BY, table names, or LIMIT clauses."
+    rationale: "SQL injection (CWE-89) enables attackers to read, modify, or delete entire databases, bypass authentication, and in some cases execute OS commands. Parameterized queries separate code from data, making injection structurally impossible."
+    tags: [security, sql-injection, database, owasp, cwe-89]
+    parent_id: security-input-validation
+    examples:
+      - label: bad
+        code: |
+          # String interpolation — classic SQL injection
+          query = f"SELECT * FROM users WHERE name = '{username}' AND role = '{role}'"
+          cursor.execute(query)
+          # Attacker input: username = "admin' OR '1'='1' --"
+        explanation: "User controls the query structure. Attacker can extract all rows, bypass auth, or chain UNION attacks to read other tables."
+      - label: good
+        code: |
+          # Parameterized query — input is always treated as data
+          cursor.execute(
+              "SELECT * FROM users WHERE name = %s AND role = %s",
+              (username, role)
+          )
+
+          # ORM equivalent (SQLAlchemy)
+          user = session.query(User).filter_by(name=username, role=role).first()
+        explanation: "Database driver escapes parameters. Even malicious input is treated as a literal string value, never as SQL syntax."
+
+  # ---------------------------------------------------------------------------
+  # XSS Prevention
+  # ---------------------------------------------------------------------------
+  - id: xss-prevention
+    trigger: "When rendering user-supplied data in HTML pages, inserting dynamic content into templates, or building responses that include untrusted data in any browser-interpreted context"
+    action: "Apply context-aware output encoding for every rendering context: HTML entity encoding for body content, attribute encoding for HTML attributes, JavaScript encoding for script blocks, URL encoding for href/src values, and CSS encoding for style contexts. Use auto-escaping template engines and Content-Security-Policy headers as defense in depth."
+    rationale: "Cross-site scripting (CWE-79) allows attackers to execute arbitrary JavaScript in victim browsers, stealing sessions, credentials, and sensitive data. HTML encoding alone does not protect JavaScript, URL, or CSS contexts — each context has different dangerous characters."
+    tags: [security, xss, output-encoding, owasp, cwe-79]
+    parent_id: security-input-validation
+    examples:
+      - label: bad
+        code: |
+          # HTML context — unescaped
+          return f"<div>Welcome, {user_name}</div>"
+          # JS context — HTML escaping is insufficient
+          return f"<script>var name = '{html.escape(user_name)}';</script>"
+          # URL context — no encoding
+          return f'<a href="/search?q={query}">Results</a>'
+        explanation: "Each context requires different encoding. HTML escaping does not prevent injection in JS or URL contexts. Attackers craft payloads specific to the rendering context."
+      - label: good
+        code: |
+          # HTML context — entity encoding
+          from markupsafe import escape
+          return f"<div>Welcome, {escape(user_name)}</div>"
+
+          # JS context — JSON encoding
+          import json
+          return f"<script>var name = {json.dumps(user_name)};</script>"
+
+          # URL context — URL encoding
+          from urllib.parse import quote
+          return f'<a href="/search?q={quote(query)}">Results</a>'
+
+          # Best: use auto-escaping template engine + CSP header
+          # Content-Security-Policy: default-src 'self'; script-src 'self'
+        explanation: "Each context uses its appropriate encoding function. Auto-escaping templates handle HTML by default. CSP provides defense in depth against inline script execution."
+
+  # ---------------------------------------------------------------------------
+  # Command Injection Prevention
+  # ---------------------------------------------------------------------------
+  - id: command-injection-prevention
+    trigger: "When executing system commands, running shell processes, or calling external programs with arguments that include user-supplied data"
+    action: "Never use shell=True with user input. Pass arguments as a list to subprocess.run() or equivalent. Validate arguments against an allowlist of expected values. Prefer native library functions over shell commands (e.g., shutil.copy instead of os.system('cp'))."
+    rationale: "Command injection (CWE-78) allows attackers to execute arbitrary OS commands, leading to full system compromise. Shell interpretation of metacharacters (;, |, &&, $()) turns data into commands."
+    tags: [security, command-injection, shell, owasp, cwe-78]
+    parent_id: security-input-validation
+    examples:
+      - label: bad
+        code: |
+          # shell=True interprets metacharacters
+          import subprocess
+          subprocess.run(f"convert {filename} output.png", shell=True)
+          # Attacker filename: "image.jpg; rm -rf /"
+
+          # os.system is always shell-interpreted
+          os.system(f"ping {hostname}")
+          # Attacker hostname: "example.com; cat /etc/passwd"
+        explanation: "Shell metacharacters (;, |, &&, $()) in user input become commands. shell=True and os.system() always invoke the shell interpreter."
+      - label: good
+        code: |
+          import subprocess
+          import shlex
+
+          # Pass arguments as a list — no shell interpretation
+          subprocess.run(["convert", filename, "output.png"], shell=False)
+
+          # Validate against allowlist when possible
+          ALLOWED_HOSTS = {"example.com", "test.local"}
+          if hostname not in ALLOWED_HOSTS:
+              raise ValueError(f"Host not allowed: {hostname}")
+          subprocess.run(["ping", "-c", "1", hostname])
+
+          # Prefer native libraries over shell commands
+          import shutil
+          shutil.copy(src, dst)  # Instead of os.system(f"cp {src} {dst}")
+        explanation: "List arguments bypass shell interpretation entirely. Each list element is passed as a single argument to the program, so metacharacters are treated as literal characters."
+
+  # ---------------------------------------------------------------------------
+  # Code Injection Prevention
+  # ---------------------------------------------------------------------------
+  - id: code-injection-prevention
+    trigger: "When dynamically generating or executing code, using eval(), exec(), or any mechanism that interprets strings as code at runtime"
+    action: "Never pass user-controlled data to eval(), exec(), compile(), or language-level code interpretation functions. Use data-driven alternatives: dictionaries for dispatch, AST-based parsing for expressions, or sandboxed interpreters for user-defined logic."
+    rationale: "Code injection (CWE-94) gives attackers the ability to execute arbitrary code with the full privileges of the application process. Unlike SQL injection, there is no parameterization — the only defense is to never evaluate untrusted strings as code."
+    tags: [security, code-injection, eval, owasp, cwe-94]
+    parent_id: security-input-validation
+    examples:
+      - label: bad
+        code: |
+          # eval with user input — arbitrary code execution
+          result = eval(user_expression)
+          # Attacker: "__import__('os').system('rm -rf /')"
+
+          # exec for dynamic code — same risk
+          exec(f"def handler(): return {user_value}")
+
+          # Template string formatting as code
+          template = user_template.format(**locals())
+        explanation: "eval/exec interpret strings as Python code with full process privileges. format(**locals()) can leak any local variable."
+      - label: good
+        code: |
+          # Data-driven dispatch instead of eval
+          OPERATIONS = {
+              "add": lambda a, b: a + b,
+              "multiply": lambda a, b: a * b,
+          }
+          op = OPERATIONS.get(user_operation)
+          if op is None:
+              raise ValueError(f"Unknown operation: {user_operation}")
+          result = op(a, b)
+
+          # For math expressions, use ast.literal_eval (safe subset)
+          import ast
+          result = ast.literal_eval(user_expression)  # Only literals, no calls
+        explanation: "Dispatch tables map strings to pre-defined functions without code interpretation. ast.literal_eval safely evaluates only Python literals (strings, numbers, dicts, lists)."
+
+  # ---------------------------------------------------------------------------
+  # Path Traversal Prevention
+  # ---------------------------------------------------------------------------
+  - id: path-traversal-prevention
+    trigger: "When constructing file paths from user input, serving files based on request parameters, or allowing users to specify filenames or directories"
+    action: "Canonicalize paths with os.path.realpath() before validation. Verify the resolved path starts with the expected base directory. Use an allowlist of permitted filenames when possible. Never join user input directly into file paths without validation."
+    rationale: "Path traversal (CWE-22) allows attackers to read or write arbitrary files by injecting ../ sequences or absolute paths. Canonicalization resolves symlinks and relative components, revealing the true destination before access."
+    tags: [security, path-traversal, files, owasp, cwe-22]
+    parent_id: security-input-validation
+    examples:
+      - label: bad
+        code: |
+          # Direct path join — traversal via ../
+          filepath = os.path.join(UPLOAD_DIR, user_filename)
+          return send_file(filepath)
+          # Attacker: user_filename = "../../../etc/passwd"
+        explanation: "os.path.join does not prevent ../ traversal. The resolved path escapes the intended directory."
+      - label: good
+        code: |
+          import os
+
+          # Canonicalize and verify containment
+          base = os.path.realpath(UPLOAD_DIR)
+          requested = os.path.realpath(os.path.join(base, user_filename))
+
+          if not requested.startswith(base + os.sep):
+              raise ValueError("Path traversal detected")
+
+          if not os.path.isfile(requested):
+              raise FileNotFoundError("File not found")
+
+          return send_file(requested)
+        explanation: "realpath() resolves ../ and symlinks. Checking startswith(base + os.sep) ensures the file is genuinely inside the intended directory. The os.sep suffix prevents prefix confusion (e.g., /uploads vs /uploads_backup)."
+
+  # ---------------------------------------------------------------------------
+  # LDAP Injection Prevention
+  # ---------------------------------------------------------------------------
+  - id: ldap-injection-prevention
+    trigger: "When building LDAP queries, performing directory lookups, or authenticating against LDAP/Active Directory with user-supplied search filters"
+    action: "Use LDAP frameworks that provide parameterized filter construction (e.g., ldap3 with auto-escaping). Escape special characters (*, (, ), \\, NUL) in user input before inserting into LDAP filters. Validate input format against expected patterns (e.g., usernames match ^[a-zA-Z0-9_]+$)."
+    rationale: "LDAP injection (CWE-90) allows attackers to modify directory queries, potentially bypassing authentication or extracting directory data. Special characters in LDAP filters change query logic just like SQL injection changes SQL logic."
+    tags: [security, ldap-injection, directory, owasp, cwe-90]
+    parent_id: security-input-validation
+    examples:
+      - label: bad
+        code: |
+          # Unescaped filter — LDAP injection
+          filter_str = f"(&(uid={username})(userPassword={password}))"
+          conn.search(base_dn, filter_str)
+          # Attacker username: "*)(uid=*))(|(uid=*"
+        explanation: "Attacker manipulates the LDAP filter to match all users, bypassing authentication."
+      - label: good
+        code: |
+          from ldap3.utils.conv import escape_filter_chars
+          import re
+
+          # Validate format first
+          if not re.match(r'^[a-zA-Z0-9_.-]+$', username):
+              raise ValueError("Invalid username format")
+
+          # Escape special LDAP characters
+          safe_user = escape_filter_chars(username)
+          filter_str = f"(&(uid={safe_user})(userPassword={safe_pass}))"
+          conn.search(base_dn, filter_str)
+        explanation: "Input validation restricts to expected characters. escape_filter_chars handles any remaining special LDAP characters."
+
+  # ---------------------------------------------------------------------------
+  # Input Validation Patterns
+  # ---------------------------------------------------------------------------
+  - id: input-validation-patterns
+    trigger: "When designing input validation strategy, choosing between allowlists and blocklists, or implementing validation for form fields, API parameters, or configuration values"
+    action: "Validate all input server-side regardless of client-side validation. Use allowlists (accepted patterns) over blocklists (rejected patterns). Validate type, length, range, and format. Reject invalid input entirely — do not attempt to sanitize and use it. Canonicalize encoded input before validation."
+    rationale: "Client-side validation is bypassable with browser dev tools or direct API calls. Blocklists miss edge cases and encoding tricks. Sanitize-and-use approaches often fail because the sanitization is incomplete. Reject-and-inform is safer than transform-and-hope."
+    tags: [security, input-validation, allowlist, owasp, cwe-20]
+    parent_id: security-input-validation
+    examples:
+      - label: bad
+        code: |
+          # Blocklist — will miss bypasses
+          BLOCKED = ["<script>", "javascript:", "onerror"]
+          if any(b in user_input for b in BLOCKED):
+              reject(user_input)
+          else:
+              process(user_input)  # Misses <SCRIPT>, <scr<script>ipt>, etc.
+
+          # Sanitize-and-use — incomplete transformation
+          clean = user_input.replace("../", "")  # ....// becomes ../
+          process(clean)
+        explanation: "Blocklists miss creative encoding and casing bypasses. Sanitize-and-use can be defeated by double-encoding or recursive patterns."
+      - label: good
+        code: |
+          import re
+          from pydantic import BaseModel, Field, validator
+
+          # Pydantic model with strict validation
+          class UserInput(BaseModel):
+              username: str = Field(min_length=3, max_length=30)
+              age: int = Field(ge=0, le=150)
+              email: str
+
+              @validator("username")
+              def username_format(cls, v):
+                  if not re.match(r'^[a-zA-Z0-9_-]+$', v):
+                      raise ValueError("Username must be alphanumeric")
+                  return v
+
+          # Reject invalid input entirely
+          try:
+              validated = UserInput(**request_data)
+          except ValidationError as e:
+              return {"error": "Invalid input", "details": e.errors()}, 400
+        explanation: "Allowlist defines exactly what is acceptable. Pydantic enforces type, length, range, and format. Invalid input is rejected outright, never processed."
+
+  # ---------------------------------------------------------------------------
+  # Output Encoding Patterns
+  # ---------------------------------------------------------------------------
+  - id: output-encoding-patterns
+    trigger: "When rendering dynamic content in HTML, JavaScript, CSS, URLs, or any context where user-controlled data is inserted into a structured output format"
+    action: "Encode output based on the specific rendering context. Use HTML entity encoding for body content, JavaScript encoding for script contexts, URL encoding for query parameters, CSS encoding for style values. Treat all data from outside your trust boundary as untrusted, including database-retrieved data (stored XSS)."
+    rationale: "Output encoding is the last line of defense against injection. Even with input validation, stored data may contain payloads (stored XSS), or validation may have gaps. Context-specific encoding ensures that data is rendered as data, never as code, regardless of its content."
+    tags: [security, output-encoding, xss, context-aware, owasp]
+    parent_id: security-input-validation
+    examples:
+      - label: bad
+        code: |
+          # Same encoding for all contexts — wrong
+          safe = html.escape(user_data)
+          return f"""
+          <div>{safe}</div>
+          <script>var x = '{safe}';</script>
+          <a href="/search?q={safe}">link</a>
+          """
+        explanation: "HTML escaping does not protect JavaScript or URL contexts. Each has different dangerous characters and escape sequences."
+      - label: good
+        code: |
+          import html
+          import json
+          from urllib.parse import quote
+
+          # HTML body context
+          html_safe = html.escape(user_data)
+
+          # JavaScript context
+          js_safe = json.dumps(user_data)  # Produces a JSON string with proper escaping
+
+          # URL parameter context
+          url_safe = quote(user_data, safe='')
+
+          return f"""
+          <div>{html_safe}</div>
+          <script>var x = {js_safe};</script>
+          <a href="/search?q={url_safe}">link</a>
+          """
+        explanation: "Each context uses its specific encoding function. html.escape for HTML, json.dumps for JS, urllib.parse.quote for URLs."
+
+  # ---------------------------------------------------------------------------
+  # File Upload Security
+  # ---------------------------------------------------------------------------
+  - id: file-upload-security
+    trigger: "When implementing file upload functionality, accepting files from users via forms or APIs, or processing uploaded content"
+    action: "Validate file content by magic bytes (not just extension). Restrict allowed MIME types to business-necessary formats. Store uploads outside the web root with randomized filenames. Set file size limits. Scan for malware when possible. Never execute or interpret uploaded files."
+    rationale: "File uploads are a high-risk attack vector. Extension checks are trivially bypassed (.php.jpg). Files stored in the web root can be executed as code. User-controlled filenames enable path traversal. Content validation by magic bytes is harder to forge."
+    tags: [security, file-upload, owasp, cwe-434]
+    parent_id: security-input-validation
+    examples:
+      - label: bad
+        code: |
+          # Extension check only — easily bypassed
+          if file.filename.endswith(('.jpg', '.png')):
+              path = os.path.join('/var/www/uploads', file.filename)
+              file.save(path)
+        explanation: "Attacker uploads 'shell.php.jpg' or uses path traversal in filename. File stored in web root may be executable."
+      - label: good
+        code: |
+          import magic
+          import uuid
+          import os
+
+          ALLOWED_TYPES = {'image/jpeg', 'image/png', 'image/gif'}
+          MAX_SIZE = 5 * 1024 * 1024  # 5 MB
+
+          # Check file size
+          file.seek(0, 2)
+          if file.tell() > MAX_SIZE:
+              raise ValueError("File too large")
+          file.seek(0)
+
+          # Validate content type by magic bytes
+          mime = magic.from_buffer(file.read(2048), mime=True)
+          file.seek(0)
+          if mime not in ALLOWED_TYPES:
+              raise ValueError(f"File type {mime} not allowed")
+
+          # Generate safe filename, store outside web root
+          ext = mime.split('/')[1]
+          safe_name = f"{uuid.uuid4()}.{ext}"
+          path = os.path.join('/var/data/uploads', safe_name)
+          file.save(path)
+        explanation: "Content validated by magic bytes. Random filename prevents traversal. Storage outside web root prevents execution. Size limit prevents DoS."
+
+  # ---------------------------------------------------------------------------
+  # Deserialization Safety
+  # ---------------------------------------------------------------------------
+  - id: deserialization-safety
+    trigger: "When deserializing data from untrusted sources — pickle, YAML, XML, JSON with custom decoders, or any format that can instantiate objects or execute code during parsing"
+    action: "Never deserialize untrusted data with formats that support code execution (pickle, yaml.load, Java ObjectInputStream). Use safe alternatives: json.loads, yaml.safe_load, schema-validated parsing. If deserialization of complex types is required, validate against a strict schema before processing."
+    rationale: "Insecure deserialization (CWE-502) allows attackers to execute arbitrary code by crafting malicious serialized payloads. Python's pickle, Ruby's Marshal, Java's ObjectInputStream, and YAML's full loader all support object instantiation during deserialization."
+    tags: [security, deserialization, pickle, yaml, owasp, cwe-502]
+    parent_id: security-input-validation
+    examples:
+      - label: bad
+        code: |
+          import pickle
+          import yaml
+
+          # pickle — arbitrary code execution
+          data = pickle.loads(request.data)
+
+          # yaml.load — code execution via !!python/object
+          config = yaml.load(user_yaml)
+
+          # Accepting serialized objects from untrusted API
+          obj = pickle.loads(base64.b64decode(api_response["payload"]))
+        explanation: "pickle.loads executes arbitrary Python during deserialization. yaml.load (without SafeLoader) can instantiate Python objects. Both allow remote code execution."
+      - label: good
+        code: |
+          import json
+          import yaml
+          from pydantic import BaseModel
+
+          # JSON — no code execution, then validate schema
+          raw = json.loads(request.data)
+          validated = MySchema(**raw)  # Pydantic validates structure
+
+          # YAML — safe_load only
+          config = yaml.safe_load(user_yaml)  # No object instantiation
+
+          # For complex interchange, use schema validation
+          class TransferPayload(BaseModel):
+              action: str
+              value: int
+              metadata: dict[str, str]
+
+          payload = TransferPayload(**json.loads(request.data))
+        explanation: "json.loads only produces basic Python types. yaml.safe_load blocks object instantiation. Pydantic validates the structure matches expectations."
+
+  # ---------------------------------------------------------------------------
+  # SSRF Prevention
+  # ---------------------------------------------------------------------------
+  - id: ssrf-prevention
+    trigger: "When making HTTP requests to URLs provided by users, fetching remote resources based on user input, or implementing webhook/callback functionality"
+    action: "Validate and allowlist destination URLs for any server-side HTTP requests. Block requests to internal/private IP ranges (127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.169.254). Resolve DNS before validation to prevent DNS rebinding. Use a dedicated HTTP client with timeouts and no redirect-following for user-specified URLs."
+    rationale: "Server-Side Request Forgery (CWE-918) lets attackers use your server as a proxy to access internal services, cloud metadata endpoints (169.254.169.254), and other resources behind the firewall. The server's network position makes it a privileged vantage point."
+    tags: [security, ssrf, network, owasp, cwe-918]
+    parent_id: security-input-validation
+    examples:
+      - label: bad
+        code: |
+          import requests
+
+          # Fetch user-provided URL without validation
+          response = requests.get(user_url)
+          # Attacker: user_url = "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+          # Attacker: user_url = "http://localhost:6379/SET/key/value"  # Redis command
+        explanation: "Server fetches internal resources on behalf of the attacker. Cloud metadata, internal APIs, and databases become accessible."
+      - label: good
+        code: |
+          import ipaddress
+          import socket
+          from urllib.parse import urlparse
+
+          ALLOWED_SCHEMES = {"https"}
+          BLOCKED_NETWORKS = [
+              ipaddress.ip_network("127.0.0.0/8"),
+              ipaddress.ip_network("10.0.0.0/8"),
+              ipaddress.ip_network("172.16.0.0/12"),
+              ipaddress.ip_network("192.168.0.0/16"),
+              ipaddress.ip_network("169.254.0.0/16"),
+          ]
+
+          def validate_url(url: str) -> str:
+              parsed = urlparse(url)
+              if parsed.scheme not in ALLOWED_SCHEMES:
+                  raise ValueError(f"Scheme {parsed.scheme} not allowed")
+
+              # Resolve DNS to prevent rebinding
+              ip = socket.getaddrinfo(parsed.hostname, None)[0][4][0]
+              addr = ipaddress.ip_address(ip)
+
+              for network in BLOCKED_NETWORKS:
+                  if addr in network:
+                      raise ValueError("Internal addresses not allowed")
+              return url
+
+          validated = validate_url(user_url)
+          response = requests.get(validated, timeout=5, allow_redirects=False)
+        explanation: "URL scheme is restricted. DNS is resolved and IP checked against blocked ranges. Redirects are disabled to prevent redirect-based bypasses. Timeout prevents hanging."
+
+  # ---------------------------------------------------------------------------
+  # Template Injection Prevention
+  # ---------------------------------------------------------------------------
+  - id: template-injection-prevention
+    trigger: "When using template engines (Jinja2, Mako, Django templates) with user-controlled template strings, or allowing users to customize email/notification templates"
+    action: "Never allow users to write or modify server-side template code. Use auto-escaping template engines with escaping enabled by default. If user-customizable templates are required, use a logic-less template language (Mustache) or a sandboxed environment. Keep template data and template logic strictly separated."
+    rationale: "Server-Side Template Injection (SSTI, CWE-1336) allows attackers to execute arbitrary code on the server through template syntax. If users control template content, they can escape the template sandbox and access the underlying language runtime."
+    tags: [security, template-injection, ssti, owasp, cwe-1336]
+    parent_id: security-input-validation
+    examples:
+      - label: bad
+        code: |
+          from jinja2 import Template
+
+          # User controls the template — SSTI
+          user_template = request.form["template"]
+          rendered = Template(user_template).render(name="World")
+          # Attacker: template = "{{ config.__class__.__init__.__globals__['os'].popen('id').read() }}"
+        explanation: "User-controlled template strings can escape the Jinja2 sandbox and execute arbitrary Python code on the server."
+      - label: good
+        code: |
+          from jinja2 import Environment, select_autoescape
+
+          # Auto-escaping enabled, templates loaded from trusted files only
+          env = Environment(
+              loader=FileSystemLoader("templates/"),
+              autoescape=select_autoescape(["html", "xml"]),
+          )
+
+          # User provides DATA, not template code
+          template = env.get_template("notification.html")
+          rendered = template.render(
+              name=user_name,
+              message=user_message,
+          )
+        explanation: "Templates are loaded from trusted files on disk, not from user input. Auto-escaping is enabled. Users provide data values, never template syntax."

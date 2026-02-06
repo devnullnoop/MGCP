@@ -1,0 +1,462 @@
+lessons:
+  # ===========================================================================
+  # PILLAR 4: CRYPTOGRAPHY & DATA PROTECTION
+  # Sources: OWASP A04, OWASP SCP Cat 6/8/9
+  # ===========================================================================
+
+  - id: security-cryptography
+    trigger: "When implementing encryption, managing cryptographic keys, protecting data at rest or in transit, or choosing cryptographic algorithms and libraries"
+    action: "Use established cryptographic libraries — never implement your own. Choose modern algorithms: AES-256-GCM for symmetric encryption, RSA-2048+ or ECDSA P-256+ for asymmetric, SHA-256+ for hashing. Use CSPRNG for all random values. Rotate keys on schedule. Encrypt sensitive data at rest and enforce TLS for data in transit."
+    rationale: "Cryptography is uniquely unforgiving — subtle implementation flaws (padding oracles, timing side-channels, weak IVs) completely break security while appearing to work correctly. Even cryptographers use vetted libraries. The only safe approach is to use well-tested implementations of proven algorithms."
+    tags: [meta, security, cryptography, encryption, data-protection, owasp]
+    parent_id: security
+
+  # ---------------------------------------------------------------------------
+  # Encryption Algorithms
+  # ---------------------------------------------------------------------------
+  - id: encryption-algorithms
+    trigger: "When choosing encryption algorithms, implementing symmetric or asymmetric encryption, or reviewing code that encrypts data"
+    action: "Use AES-256-GCM for authenticated symmetric encryption (provides both confidentiality and integrity). Use RSA-2048+ with OAEP padding or ECDSA P-256+ for asymmetric operations. Never use DES, 3DES, RC4, ECB mode, or custom/proprietary algorithms. Always use authenticated encryption modes (GCM, CCM) — never unauthenticated modes (CBC without HMAC)."
+    rationale: "Unauthenticated encryption (AES-CBC without HMAC) is vulnerable to padding oracle attacks that decrypt ciphertext without the key. ECB mode leaks patterns in the data. DES and RC4 are broken. Custom algorithms have not been tested by the cryptographic community and virtually always have fatal flaws."
+    tags: [security, encryption, aes, rsa, algorithms, owasp]
+    parent_id: security-cryptography
+    examples:
+      - label: bad
+        code: |
+          from Crypto.Cipher import AES, DES
+
+          # DES — broken, 56-bit key
+          cipher = DES.new(key, DES.MODE_ECB)
+
+          # AES-ECB — leaks patterns (identical blocks produce identical ciphertext)
+          cipher = AES.new(key, AES.MODE_ECB)
+          ciphertext = cipher.encrypt(data)
+
+          # AES-CBC without authentication — padding oracle
+          cipher = AES.new(key, AES.MODE_CBC, iv)
+          ciphertext = iv + cipher.encrypt(pad(data))
+          # No integrity check — attacker can manipulate ciphertext
+        explanation: "DES has a trivially small key. ECB reveals patterns. CBC without authentication is vulnerable to padding oracle attacks that let attackers decrypt data without the key."
+      - label: good
+        code: |
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          import os
+
+          # AES-256-GCM — authenticated encryption
+          key = AESGCM.generate_key(bit_length=256)  # 32 bytes
+          nonce = os.urandom(12)  # 96-bit nonce for GCM
+
+          aesgcm = AESGCM(key)
+
+          # Encrypt with associated data (AAD) for context binding
+          ciphertext = aesgcm.encrypt(nonce, plaintext, associated_data=b"context")
+
+          # Decrypt — automatically verifies integrity
+          try:
+              plaintext = aesgcm.decrypt(nonce, ciphertext, associated_data=b"context")
+          except Exception:
+              raise ValueError("Decryption failed — data tampered or wrong key")
+
+          # Or use Fernet for simple, safe defaults
+          from cryptography.fernet import Fernet
+          key = Fernet.generate_key()
+          f = Fernet(key)
+          token = f.encrypt(plaintext)
+          decrypted = f.decrypt(token)  # Includes timestamp and integrity
+        explanation: "AES-256-GCM provides authenticated encryption — any tampering with ciphertext is detected during decryption. Associated data binds the ciphertext to its context. Fernet provides safe high-level defaults."
+
+  # ---------------------------------------------------------------------------
+  # TLS Configuration
+  # ---------------------------------------------------------------------------
+  - id: tls-configuration
+    trigger: "When configuring TLS/SSL for web servers, API endpoints, database connections, or any network communication that handles sensitive data"
+    action: "Require TLS 1.2 as minimum, prefer TLS 1.3. Disable SSLv2, SSLv3, TLS 1.0, and TLS 1.1. Use strong cipher suites (AEAD ciphers: AES-GCM, ChaCha20-Poly1305). Enable HSTS with long max-age (1 year). Validate certificates properly — never disable verification in production. Use OCSP stapling for certificate revocation checking."
+    rationale: "TLS 1.0/1.1 have known vulnerabilities (BEAST, POODLE). Weak cipher suites (RC4, DES, export ciphers) are breakable. Disabling certificate verification defeats the entire purpose of TLS. HSTS prevents SSL stripping attacks. TLS 1.3 removes all legacy insecure options and is faster."
+    tags: [security, tls, ssl, transport, https, owasp]
+    parent_id: security-cryptography
+    examples:
+      - label: bad
+        code: |
+          import ssl
+          import requests
+
+          # Disabling verification — defeats TLS entirely
+          requests.get("https://api.example.com", verify=False)
+
+          # Allowing old protocols
+          context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+          # Default allows TLS 1.0, 1.1, weak ciphers
+
+          # Self-signed cert without pinning in production
+          context.check_hostname = False
+          context.verify_mode = ssl.CERT_NONE
+        explanation: "verify=False accepts any certificate, including attacker-controlled ones. Default SSLContext allows deprecated protocols. Disabling hostname checks allows MITM with any valid certificate."
+      - label: good
+        code: |
+          import ssl
+
+          # Modern TLS configuration
+          context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+          context.minimum_version = ssl.TLSVersion.TLSv1_2
+          context.maximum_version = ssl.TLSVersion.TLSv1_3
+
+          # Strong ciphers only
+          context.set_ciphers(
+              "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20"
+          )
+
+          # Proper certificate verification (default for TLS_CLIENT)
+          context.verify_mode = ssl.CERT_REQUIRED
+          context.check_hostname = True
+          context.load_default_certs()
+
+          # Requests with proper verification
+          import requests
+          response = requests.get("https://api.example.com")  # verify=True is default
+
+          # Nginx equivalent:
+          # ssl_protocols TLSv1.2 TLSv1.3;
+          # ssl_ciphers ECDHE-AESGCM-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+          # ssl_prefer_server_ciphers on;
+          # add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        explanation: "Minimum TLS 1.2, prefer 1.3. Only AEAD cipher suites. Certificate verification enabled. HSTS header prevents downgrade attacks."
+
+  # ---------------------------------------------------------------------------
+  # Secrets Management
+  # ---------------------------------------------------------------------------
+  - id: secrets-management
+    trigger: "When handling API keys, database passwords, encryption keys, tokens, or any credentials in application code, configuration, or deployment"
+    action: "Never hardcode secrets in source code, config files checked into version control, or container images. Use environment variables for simple deployments, secret managers (AWS Secrets Manager, HashiCorp Vault, GCP Secret Manager) for production. Rotate secrets on a schedule. Audit secret access. Scan repositories for accidentally committed secrets."
+    rationale: "Hardcoded secrets in source code are exposed to everyone with repository access, persist in git history even after deletion, and appear in backups, CI logs, and container layers. Secret managers provide access control, audit logging, rotation, and encryption at rest."
+    tags: [security, secrets, credentials, vault, owasp]
+    parent_id: security-cryptography
+    examples:
+      - label: bad
+        code: |
+          # Hardcoded in source — committed to git forever
+          DATABASE_URL = "postgresql://admin:s3cret_p4ss@db.prod.example.com/myapp"
+          API_KEY = "sk-live-abc123def456"
+
+          # In config file checked into repo
+          # config.yaml:
+          # database:
+          #   password: s3cret_p4ss
+
+          # In Dockerfile — baked into image layers
+          # ENV API_KEY=sk-live-abc123def456
+        explanation: "Source code secrets persist in git history. Config files in repos are accessible to all developers. Docker image layers are extractable. All are discoverable by automated scanning tools."
+      - label: good
+        code: |
+          import os
+
+          # Environment variables (simple deployments)
+          DATABASE_URL = os.environ["DATABASE_URL"]
+          API_KEY = os.environ["API_KEY"]
+
+          # Fail loudly if secrets are missing
+          required_vars = ["DATABASE_URL", "API_KEY", "JWT_SECRET"]
+          missing = [v for v in required_vars if v not in os.environ]
+          if missing:
+              raise RuntimeError(f"Missing required environment variables: {missing}")
+
+          # Secret manager (production)
+          from cloud_provider import SecretManagerClient
+          client = SecretManagerClient()
+          db_password = client.access_secret_version("projects/myapp/secrets/db-password/versions/latest")
+
+          # Pre-commit hook to catch secrets (.pre-commit-config.yaml):
+          # - repo: https://github.com/Yelp/detect-secrets
+          #   hooks:
+          #   - id: detect-secrets
+
+          # .gitignore
+          # .env
+          # *.pem
+          # *.key
+        explanation: "Environment variables keep secrets out of code. Secret managers add access control, rotation, and audit logging. detect-secrets pre-commit hook catches accidental commits. .gitignore prevents common secret files from being tracked."
+
+  # ---------------------------------------------------------------------------
+  # Secure Random Numbers
+  # ---------------------------------------------------------------------------
+  - id: secure-random-numbers
+    trigger: "When generating tokens, session IDs, nonces, salts, OTP codes, password reset links, or any value where predictability would be a security vulnerability"
+    action: "Use only cryptographically secure pseudo-random number generators (CSPRNG) for security-sensitive values. In Python, use the secrets module (not random). In Node.js, use crypto.randomBytes (not Math.random). In Java, use SecureRandom (not Random). Never seed CSPRNGs with predictable values like timestamps."
+    rationale: "Non-cryptographic PRNGs (Python's random, JavaScript's Math.random, Java's Random) use deterministic algorithms where observing outputs allows predicting future values. An attacker who predicts your session IDs can hijack any session. CSPRNGs draw from OS entropy sources that are computationally indistinguishable from true randomness."
+    tags: [security, random, csprng, tokens, owasp]
+    parent_id: security-cryptography
+    examples:
+      - label: bad
+        code: |
+          import random
+          import string
+          import time
+
+          # random module — predictable PRNG
+          token = ''.join(random.choices(string.ascii_letters + string.digits, k=32))
+
+          # Seeded with timestamp — reproducible
+          random.seed(int(time.time()))
+          reset_code = random.randint(100000, 999999)
+
+          # UUID1 contains MAC address and timestamp — not random
+          import uuid
+          session_id = str(uuid.uuid1())
+        explanation: "random uses Mersenne Twister — 624 observed outputs fully recover internal state. Timestamp seeds are guessable. UUID1 encodes machine identity and time, not randomness."
+      - label: good
+        code: |
+          import secrets
+
+          # Secure token generation
+          session_token = secrets.token_urlsafe(32)   # 256 bits, URL-safe base64
+          api_key = secrets.token_hex(32)              # 256 bits, hex string
+          csrf_token = secrets.token_bytes(32)         # 256 bits, raw bytes
+
+          # Secure random integer (e.g., OTP)
+          otp_code = secrets.randbelow(1_000_000)  # 0-999999
+          otp_str = f"{otp_code:06d}"              # Zero-padded
+
+          # UUID4 is random (not UUID1)
+          import uuid
+          public_id = str(uuid.uuid4())  # 122 random bits
+
+          # Secure random choice
+          backup_code = ''.join(secrets.choice(string.digits) for _ in range(8))
+        explanation: "secrets module uses OS CSPRNG (os.urandom). Output is computationally unpredictable. UUID4 uses random bytes, unlike UUID1 which embeds MAC/time."
+
+  # ---------------------------------------------------------------------------
+  # Data Classification
+  # ---------------------------------------------------------------------------
+  - id: data-classification
+    trigger: "When designing data storage, deciding what to encrypt, determining data retention policies, or handling personally identifiable information (PII)"
+    action: "Classify all data by sensitivity level (public, internal, confidential, restricted). Apply encryption proportional to classification: restricted data encrypted at rest and in transit, confidential data encrypted at rest. Define retention periods per classification — delete data when no longer needed. Minimize data collection to what is strictly necessary for the business purpose."
+    rationale: "Not all data has the same value or risk. Encrypting everything equally is expensive and operationally complex. Classifying data enables proportional controls — the most sensitive data gets the strongest protection, and unnecessary data is deleted to reduce breach exposure."
+    tags: [security, data-classification, pii, gdpr, data-protection, owasp]
+    parent_id: security-cryptography
+    examples:
+      - label: good
+        code: |
+          from enum import Enum
+          from dataclasses import dataclass
+          from datetime import timedelta
+
+          class Sensitivity(Enum):
+              PUBLIC = "public"           # Marketing pages, public docs
+              INTERNAL = "internal"       # Internal tools, metrics
+              CONFIDENTIAL = "confidential"  # User PII, financial data
+              RESTRICTED = "restricted"    # Passwords, encryption keys, health data
+
+          @dataclass
+          class DataPolicy:
+              sensitivity: Sensitivity
+              encrypt_at_rest: bool
+              encrypt_in_transit: bool
+              retention: timedelta | None  # None = keep indefinitely
+              requires_audit_log: bool
+
+          POLICIES = {
+              Sensitivity.PUBLIC: DataPolicy(
+                  Sensitivity.PUBLIC, encrypt_at_rest=False,
+                  encrypt_in_transit=True, retention=None, requires_audit_log=False),
+              Sensitivity.INTERNAL: DataPolicy(
+                  Sensitivity.INTERNAL, encrypt_at_rest=False,
+                  encrypt_in_transit=True, retention=timedelta(days=365), requires_audit_log=False),
+              Sensitivity.CONFIDENTIAL: DataPolicy(
+                  Sensitivity.CONFIDENTIAL, encrypt_at_rest=True,
+                  encrypt_in_transit=True, retention=timedelta(days=90), requires_audit_log=True),
+              Sensitivity.RESTRICTED: DataPolicy(
+                  Sensitivity.RESTRICTED, encrypt_at_rest=True,
+                  encrypt_in_transit=True, retention=timedelta(days=30), requires_audit_log=True),
+          }
+
+          # Field-level classification
+          class UserModel:
+              username: str           # INTERNAL
+              email: str              # CONFIDENTIAL — PII
+              password_hash: str      # RESTRICTED
+              ssn_encrypted: bytes    # RESTRICTED — encrypted at rest
+              marketing_prefs: dict   # PUBLIC
+        explanation: "Explicit classification drives security controls automatically. Confidential and restricted data gets encryption and audit logging. Retention policies limit breach exposure. Field-level classification enables granular protection."
+
+  # ---------------------------------------------------------------------------
+  # Key Rotation
+  # ---------------------------------------------------------------------------
+  - id: key-rotation
+    trigger: "When managing encryption keys, designing key lifecycle policies, or implementing key rotation for cryptographic operations"
+    action: "Rotate encryption keys on a regular schedule (e.g., annually for data-at-rest keys, more frequently for signing keys). Support key versioning — label ciphertext with the key version used for encryption so old keys can decrypt existing data while new data uses the current key. Retire old keys after all data is re-encrypted. Rotate immediately after suspected compromise."
+    rationale: "Key rotation limits the blast radius of key compromise — only data encrypted with the compromised key is exposed. Without rotation, a single key compromise exposes all historical data. Key versioning enables graceful rotation without downtime or bulk re-encryption."
+    tags: [security, key-rotation, key-management, cryptography, owasp]
+    parent_id: security-cryptography
+    examples:
+      - label: bad
+        code: |
+          # Single key, no rotation, no versioning
+          ENCRYPTION_KEY = load_key("master.key")
+
+          def encrypt(data):
+              return aesgcm.encrypt(nonce, data, key=ENCRYPTION_KEY)
+
+          def decrypt(ciphertext):
+              return aesgcm.decrypt(nonce, ciphertext, key=ENCRYPTION_KEY)
+          # If ENCRYPTION_KEY is compromised, ALL data (past and future) is exposed
+          # Rotating the key requires re-encrypting all existing data at once
+        explanation: "A single key with no versioning means key rotation requires bulk re-encryption and downtime. Compromise exposes all data ever encrypted."
+      - label: good
+        code: |
+          import json
+
+          class KeyManager:
+              def __init__(self):
+                  self.keys = {}  # version -> key
+                  self.current_version = None
+
+              def load_keys(self):
+                  # Load from secret manager
+                  self.keys = {
+                      "v1": load_key_from_vault("data-key-v1"),
+                      "v2": load_key_from_vault("data-key-v2"),  # Current
+                  }
+                  self.current_version = "v2"
+
+              def encrypt(self, plaintext: bytes) -> bytes:
+                  key = self.keys[self.current_version]
+                  nonce = os.urandom(12)
+                  aesgcm = AESGCM(key)
+                  ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+                  # Prefix with version so we know which key to use for decryption
+                  envelope = json.dumps({
+                      "v": self.current_version,
+                      "n": nonce.hex(),
+                      "c": ciphertext.hex(),
+                  })
+                  return envelope.encode()
+
+              def decrypt(self, envelope: bytes) -> bytes:
+                  data = json.loads(envelope)
+                  key = self.keys[data["v"]]  # Use the version that encrypted it
+                  aesgcm = AESGCM(key)
+                  return aesgcm.decrypt(
+                      bytes.fromhex(data["n"]),
+                      bytes.fromhex(data["c"]),
+                      None,
+                  )
+        explanation: "Key version is stored with each ciphertext. New data uses the current key. Old data can still be decrypted with its original key. Rotation is gradual — re-encrypt on read or batch in background."
+
+  # ---------------------------------------------------------------------------
+  # Data at Rest Encryption
+  # ---------------------------------------------------------------------------
+  - id: data-at-rest-encryption
+    trigger: "When storing sensitive data in databases, files, backups, or logs — deciding what to encrypt at rest and how to implement field-level or disk-level encryption"
+    action: "Encrypt PII, financial data, credentials, and health information at rest. Use field-level encryption for specific sensitive columns rather than relying solely on full-disk encryption. Use envelope encryption (data key encrypted by master key) for scalability. Encrypt backups with the same rigor as primary data. Never store plaintext secrets in databases."
+    rationale: "Full-disk encryption protects against physical theft but not against application-level breaches, SQL injection, or unauthorized database access. Field-level encryption ensures sensitive data is protected even if the database is compromised through the application layer."
+    tags: [security, encryption, data-at-rest, field-level, owasp]
+    parent_id: security-cryptography
+    examples:
+      - label: bad
+        code: |
+          # Plaintext sensitive data in database
+          class User(db.Model):
+              ssn = db.Column(db.String(11))         # Plaintext SSN
+              credit_card = db.Column(db.String(19))  # Plaintext card number
+              api_key = db.Column(db.String(64))      # Plaintext API key
+
+          # "We have full-disk encryption" — doesn't protect against SQL injection
+          # SELECT ssn, credit_card FROM users;  -- Returns plaintext
+        explanation: "Full-disk encryption protects against stolen hard drives but not application-level attacks. SQL injection, unauthorized admin access, and backup exposure all reveal plaintext sensitive data."
+      - label: good
+        code: |
+          from cryptography.fernet import Fernet
+
+          class EncryptedField:
+              """Field-level encryption for sensitive database columns."""
+              def __init__(self, key_manager):
+                  self.km = key_manager
+
+              def encrypt(self, value: str) -> str:
+                  if value is None:
+                      return None
+                  return self.km.encrypt(value.encode()).decode()
+
+              def decrypt(self, value: str) -> str:
+                  if value is None:
+                      return None
+                  return self.km.decrypt(value.encode()).decode()
+
+          class User(db.Model):
+              # Encrypted at rest — SQL injection returns ciphertext
+              _ssn = db.Column("ssn", db.Text)
+              _credit_card = db.Column("credit_card", db.Text)
+
+              @property
+              def ssn(self):
+                  return encrypted_field.decrypt(self._ssn)
+
+              @ssn.setter
+              def ssn(self, value):
+                  self._ssn = encrypted_field.encrypt(value)
+
+              # Searchable encrypted field using blind index
+              ssn_hash = db.Column(db.String(64), index=True)  # HMAC for lookup
+
+          # Even with SQL injection, attacker gets ciphertext, not plaintext
+          # SELECT ssn, credit_card FROM users;  -- Returns encrypted blobs
+        explanation: "Field-level encryption protects data even when the database is accessed through SQL injection. Property-based encryption/decryption is transparent to application code. Blind index (HMAC) enables searching without exposing plaintext."
+
+  # ---------------------------------------------------------------------------
+  # Communication Security
+  # ---------------------------------------------------------------------------
+  - id: communication-security
+    trigger: "When configuring secure communication between services, validating TLS certificates, or handling HTTP security headers for browser-based applications"
+    action: "Validate TLS certificates properly in all service-to-service communication — never disable verification. Set security headers: Content-Security-Policy, X-Content-Type-Options, X-Frame-Options, Strict-Transport-Security. Filter sensitive headers (Authorization, Cookie) from logs and error responses. Use certificate pinning for high-security mobile/API connections where appropriate."
+    rationale: "Disabling certificate verification is a common shortcut that completely negates TLS security. Security headers prevent entire classes of browser-based attacks. Sensitive headers in logs expose credentials to anyone with log access."
+    tags: [security, communication, tls, headers, csp, owasp]
+    parent_id: security-cryptography
+    examples:
+      - label: bad
+        code: |
+          import requests
+          import urllib3
+
+          # Disabling TLS verification — MITM vulnerability
+          urllib3.disable_warnings()
+          response = requests.get("https://internal-api.example.com", verify=False)
+
+          # Logging Authorization headers
+          logger.debug(f"Request headers: {request.headers}")
+          # Logs: Authorization: Bearer eyJhbGc...
+
+          # No security headers — browser attacks possible
+          @app.route("/")
+          def index():
+              return render_template("index.html")
+        explanation: "verify=False accepts any certificate, including attacker MITM. Logging all headers exposes tokens. Missing security headers allow clickjacking, MIME sniffing, and inline script injection."
+      - label: good
+        code: |
+          import requests
+
+          # Proper TLS verification (default)
+          response = requests.get("https://internal-api.example.com")
+          # For internal CAs, specify the CA bundle
+          response = requests.get("https://internal-api.example.com",
+                                  verify="/etc/ssl/certs/internal-ca.pem")
+
+          # Filter sensitive headers from logs
+          SENSITIVE_HEADERS = {"authorization", "cookie", "x-api-key"}
+          safe_headers = {k: v for k, v in request.headers
+                          if k.lower() not in SENSITIVE_HEADERS}
+          logger.debug(f"Request headers: {safe_headers}")
+
+          # Security headers middleware
+          @app.after_request
+          def add_security_headers(response):
+              response.headers["Content-Security-Policy"] = (
+                  "default-src 'self'; script-src 'self'; style-src 'self'"
+              )
+              response.headers["X-Content-Type-Options"] = "nosniff"
+              response.headers["X-Frame-Options"] = "DENY"
+              response.headers["Strict-Transport-Security"] = (
+                  "max-age=31536000; includeSubDomains"
+              )
+              response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+              response.headers["Permissions-Policy"] = "camera=(), microphone=()"
+              return response
+        explanation: "TLS verification is on by default. Internal CAs use explicit CA bundle. Sensitive headers are filtered from logs. Security headers prevent clickjacking (X-Frame-Options), MIME sniffing (X-Content-Type-Options), inline scripts (CSP), and protocol downgrade (HSTS)."

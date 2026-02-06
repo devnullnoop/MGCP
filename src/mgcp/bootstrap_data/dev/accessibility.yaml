@@ -1,0 +1,280 @@
+# =============================================================================
+# PILLAR 12: ACCESSIBILITY
+# Sources: WCAG 2.2, ISO 25010
+# =============================================================================
+
+lessons:
+  # -------------------------------------------------------------------------
+  # ROOT CATEGORY
+  # -------------------------------------------------------------------------
+  - id: accessibility
+    trigger: "When building user interfaces, web applications, or interactive components — ensuring all users, including those with disabilities, can perceive, understand, navigate, and interact with the content"
+    action: "Follow WCAG 2.2 guidelines at AA level minimum. Use semantic HTML elements. Ensure keyboard accessibility for all interactions. Maintain sufficient color contrast. Provide text alternatives for non-text content. Test with screen readers and keyboard-only navigation. Accessibility is not a feature — it is a baseline requirement."
+    rationale: "Over 1 billion people worldwide have disabilities. Inaccessible software excludes 15% of potential users, violates legal requirements (ADA, EAA, Section 508), and often indicates poor UX for everyone. Curb cuts, originally for wheelchairs, benefit parents with strollers, delivery workers, and travelers with luggage. Accessible design improves usability for all."
+    tags: [meta, accessibility, wcag, quality]
+
+  # -------------------------------------------------------------------------
+  # CHILDREN
+  # -------------------------------------------------------------------------
+  - id: semantic-html
+    trigger: "When building web pages or components — choosing the correct HTML elements to convey meaning and structure to assistive technologies"
+    action: "Use semantic HTML elements for their intended purpose: nav for navigation, main for primary content, article for self-contained content, section for thematic groupings, button for clickable actions (not div or span), a for navigation links. Use heading hierarchy (h1-h6) in order without skipping levels. Add landmark roles only when semantic elements are insufficient."
+    rationale: "Screen readers navigate by landmarks, headings, and element roles. A div with an onclick handler looks like plain text to a screen reader — the user has no idea it is clickable. Semantic HTML provides structure for free: navigation landmarks, focusable controls, and accessible names without extra ARIA attributes."
+    parent_id: accessibility
+    tags: [accessibility, html, semantic-html, screen-readers]
+    examples:
+      - label: bad
+        code: |
+          <!-- Div soup — no semantic meaning for assistive technology -->
+          <div class="header">
+            <div class="nav">
+              <div class="nav-item" onclick="goHome()">Home</div>
+              <div class="nav-item" onclick="goAbout()">About</div>
+            </div>
+          </div>
+          <div class="content">
+            <div class="title">Welcome</div>
+            <div class="text">Article content here...</div>
+          </div>
+        explanation: "Screen readers see flat text — no navigation landmarks, no headings, divs are not focusable or clickable via keyboard"
+      - label: good
+        code: |
+          <!-- Semantic HTML — meaningful structure for all users -->
+          <header>
+            <nav aria-label="Main navigation">
+              <a href="/">Home</a>
+              <a href="/about">About</a>
+            </nav>
+          </header>
+          <main>
+            <article>
+              <h1>Welcome</h1>
+              <p>Article content here...</p>
+            </article>
+          </main>
+        explanation: "Screen readers announce landmarks (nav, main), headings are navigable, links are focusable and have accessible names"
+
+  - id: keyboard-accessibility
+    trigger: "When implementing interactive elements like menus, dialogs, tabs, or custom controls — ensuring all functionality is operable via keyboard alone"
+    action: "Ensure every interactive element is reachable via Tab key. Implement logical tab order (follow visual flow). Support Enter/Space for activation, Escape for dismissal, Arrow keys for within-component navigation. Make focus indicators visible (never outline: none without a replacement). Trap focus inside modal dialogs. Test by unplugging your mouse and navigating the entire flow."
+    rationale: "Motor disabilities, power users, and screen reader users all depend on keyboard navigation. If a dropdown menu only opens on hover, keyboard users cannot access it. If a modal does not trap focus, Tab key sends the user behind the overlay into invisible content. Keyboard accessibility is the foundation of all assistive technology."
+    parent_id: accessibility
+    tags: [accessibility, keyboard, focus-management, interaction]
+    examples:
+      - label: bad
+        code: |
+          <!-- Not keyboard accessible -->
+          <div class="dropdown" onmouseover="showMenu()">
+            Menu
+            <div class="dropdown-items" style="display:none">
+              <div onclick="doAction1()">Action 1</div>
+              <div onclick="doAction2()">Action 2</div>
+            </div>
+          </div>
+
+          <style>
+            /* Focus indicator removed globally */
+            *:focus { outline: none; }
+          </style>
+        explanation: "Hover-only trigger excludes keyboard users; divs are not focusable; focus outline removed globally"
+      - label: good
+        code: |
+          <!-- Keyboard accessible dropdown -->
+          <div class="dropdown">
+            <button aria-expanded="false" aria-haspopup="true"
+                    onclick="toggleMenu(this)">
+              Menu
+            </button>
+            <ul role="menu" hidden>
+              <li role="menuitem" tabindex="-1">
+                <button onclick="doAction1()">Action 1</button>
+              </li>
+              <li role="menuitem" tabindex="-1">
+                <button onclick="doAction2()">Action 2</button>
+              </li>
+            </ul>
+          </div>
+
+          <style>
+            /* Visible focus indicator */
+            :focus-visible {
+              outline: 2px solid #005fcc;
+              outline-offset: 2px;
+            }
+          </style>
+        explanation: "Button trigger works with Enter/Space; arrow keys navigate menu items; focus is visible"
+
+  - id: color-contrast
+    trigger: "When choosing colors for text, icons, or UI controls — ensuring sufficient contrast between foreground and background for readability"
+    action: "Meet WCAG AA contrast ratios: 4.5:1 for normal text (under 18pt or 14pt bold), 3:1 for large text (18pt+ or 14pt+ bold), 3:1 for UI components and graphical objects. Never convey meaning through color alone — always pair with text, icons, or patterns. Test with contrast checker tools (WebAIM, browser DevTools). Verify with simulated color blindness."
+    rationale: "8% of men and 0.5% of women have color vision deficiency. Low contrast text is unreadable in bright sunlight, on low-quality displays, and for users with low vision. A red/green status indicator is invisible to the most common form of color blindness. Sufficient contrast benefits everyone in suboptimal viewing conditions."
+    parent_id: accessibility
+    tags: [accessibility, color-contrast, wcag, visual-design]
+    examples:
+      - label: bad
+        code: |
+          /* Fails WCAG AA — light gray on white = 2.5:1 ratio */
+          .placeholder-text {
+            color: #aaaaaa;
+            background: #ffffff;
+          }
+
+          /* Color-only error indication */
+          .error-field { border-color: red; }
+          .valid-field { border-color: green; }
+          /* Users with red-green color blindness cannot distinguish these */
+        explanation: "Insufficient contrast ratio; meaning conveyed only through color"
+      - label: good
+        code: |
+          /* Passes WCAG AA — dark gray on white = 7.4:1 ratio */
+          .placeholder-text {
+            color: #595959;
+            background: #ffffff;
+          }
+
+          /* Error indication: color + icon + text */
+          .error-field {
+            border-color: #d32f2f;
+            border-width: 2px;
+          }
+          .error-field::after {
+            content: "⚠";  /* Icon supplement */
+          }
+          .error-message {
+            color: #d32f2f;
+            font-weight: bold;
+          }
+          /* "Please enter a valid email address" — text explains the error */
+        explanation: "High contrast ratio; error communicated through color, icon, border weight, and text"
+
+  - id: alt-text-media
+    trigger: "When adding images, videos, audio, or other non-text content to a page — providing text alternatives that convey the same information"
+    action: "Write descriptive alt text for informational images (what does this image communicate?). Use empty alt (alt=\"\") for decorative images. Provide captions and transcripts for video and audio. Use aria-label or aria-describedby when HTML alt is insufficient. Never use 'image of' or 'picture of' in alt text — the screen reader already announces it is an image."
+    rationale: "Screen reader users hear alt text in place of seeing the image. Missing alt text results in the screen reader announcing the filename ('IMG_20240315_134521.jpg') or nothing at all. Good alt text conveys the purpose of the image, not just its appearance — 'Revenue increased 40% in Q3' is better than 'Line graph going up' for a chart."
+    parent_id: accessibility
+    tags: [accessibility, alt-text, images, media, screen-readers]
+    examples:
+      - label: bad
+        code: |
+          <!-- Missing alt — screen reader announces filename -->
+          <img src="chart-q3.png">
+
+          <!-- Redundant alt -->
+          <img src="logo.png" alt="Image of our company logo image">
+
+          <!-- Video without captions -->
+          <video src="tutorial.mp4" controls></video>
+        explanation: "Missing alt text, redundant 'image of' prefix, and no video captions"
+      - label: good
+        code: |
+          <!-- Informational image — alt describes the meaning -->
+          <img src="chart-q3.png"
+               alt="Q3 revenue reached $4.2M, up 40% from Q2">
+
+          <!-- Decorative image — empty alt so screen readers skip it -->
+          <img src="decorative-border.png" alt="">
+
+          <!-- Logo as link — alt describes destination, not appearance -->
+          <a href="/"><img src="logo.png" alt="Acme Corp home page"></a>
+
+          <!-- Video with captions and transcript -->
+          <video controls>
+            <source src="tutorial.mp4" type="video/mp4">
+            <track kind="captions" src="tutorial-en.vtt" srclang="en" label="English" default>
+          </video>
+          <details>
+            <summary>Video transcript</summary>
+            <p>In this tutorial, we walk through setting up your account...</p>
+          </details>
+        explanation: "Alt text conveys meaning; decorative images marked empty; video has captions and transcript"
+
+  - id: form-accessibility
+    trigger: "When building forms for user input — ensuring form fields are labeled, errors are identified clearly, and authentication does not rely on cognitive tests"
+    action: "Associate every input with a visible label using for/id or wrapping. Group related fields with fieldset/legend. Identify errors inline next to the field, not just at the top of the form. Use aria-describedby for help text and error messages. Use autocomplete attributes for common fields (name, email, address). Never use CAPTCHAs as the sole authentication mechanism — provide alternatives."
+    rationale: "Unlabeled form fields are the most common accessibility failure. Screen readers announce 'edit text' with no indication of what to type. Error messages displayed only as a red banner at the top require users to hunt for which field failed. CAPTCHAs exclude users with visual, cognitive, or motor disabilities and increasingly fail against bots anyway."
+    parent_id: accessibility
+    tags: [accessibility, forms, labels, error-handling, authentication]
+    examples:
+      - label: bad
+        code: |
+          <!-- Unlabeled inputs — screen reader says "edit text" with no context -->
+          <input type="text" placeholder="Email">
+          <input type="password" placeholder="Password">
+          <!-- Placeholder disappears when typing — user forgets what field is for -->
+
+          <!-- Error shown only as color change -->
+          <input type="email" style="border-color: red;">
+          <!-- No error message — user has no idea what's wrong -->
+        explanation: "Placeholder is not a label; errors conveyed only through color; no accessible name"
+      - label: good
+        code: |
+          <form>
+            <div>
+              <label for="email">Email address</label>
+              <input type="email" id="email" name="email"
+                     autocomplete="email"
+                     aria-describedby="email-error"
+                     aria-invalid="true"
+                     required>
+              <p id="email-error" class="error" role="alert">
+                Please enter a valid email address (e.g., user@example.com)
+              </p>
+            </div>
+
+            <fieldset>
+              <legend>Notification preferences</legend>
+              <label><input type="checkbox" name="notify_email"> Email</label>
+              <label><input type="checkbox" name="notify_sms"> SMS</label>
+            </fieldset>
+          </form>
+        explanation: "Visible labels, autocomplete, inline error with aria-describedby, related fields grouped with fieldset"
+
+  - id: touch-targets
+    trigger: "When designing interactive elements for touch devices or ensuring consistent navigation — meeting minimum target sizes and providing reliable help placement"
+    action: "Make touch targets at least 24x24 CSS pixels (WCAG 2.2 minimum), with 44x44 preferred for primary actions. Ensure sufficient spacing between targets to prevent mis-taps. Place help mechanisms (contact links, chat widgets, help buttons) in a consistent location across pages. Do not require complex gestures (multi-finger swipes, long press) as the only way to perform an action."
+    rationale: "Small touch targets cause frustration and errors for users with motor impairments, large fingers, or shaky hands. WCAG 2.2 added target size requirements because mobile usage revealed how critical this is. Consistent help placement (WCAG 3.2.6) means users with cognitive disabilities can reliably find assistance without relearning each page."
+    parent_id: accessibility
+    tags: [accessibility, touch-targets, mobile, wcag, interaction]
+    examples:
+      - label: bad
+        code: |
+          /* Tiny touch targets — 16x16px icons with no padding */
+          .icon-button {
+            width: 16px;
+            height: 16px;
+            padding: 0;
+          }
+
+          /* Adjacent small targets — easy to mis-tap */
+          .action-bar button {
+            width: 20px;
+            height: 20px;
+            margin: 0;
+          }
+        explanation: "16px targets are nearly impossible to tap accurately on mobile devices"
+      - label: good
+        code: |
+          /* Minimum 24x24 CSS pixels, 44x44 preferred for primary actions */
+          .icon-button {
+            min-width: 44px;
+            min-height: 44px;
+            padding: 8px;
+            /* Visual icon is 24px, but tap area is 44px */
+          }
+
+          /* Sufficient spacing between adjacent targets */
+          .action-bar button {
+            min-width: 44px;
+            min-height: 44px;
+            margin: 4px;  /* gap prevents accidental activation of neighbor */
+          }
+
+          /* Consistent help placement on every page */
+          .help-button {
+            position: fixed;
+            bottom: 16px;
+            right: 16px;
+            min-width: 48px;
+            min-height: 48px;
+          }
+        explanation: "44px touch targets with spacing; help button in consistent fixed position across all pages"

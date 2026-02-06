@@ -1,0 +1,476 @@
+lessons:
+  # ===========================================================================
+  # PILLAR 2: AUTHENTICATION & SESSION MANAGEMENT
+  # Sources: OWASP A07, CWE-306, OWASP SCP Cat 3-4
+  # ===========================================================================
+
+  - id: security-authentication
+    trigger: "When implementing or reviewing authentication flows, session management, credential storage, or login/logout functionality in a web application or API"
+    action: "Use battle-tested authentication libraries — never roll your own. Store passwords with Argon2id/bcrypt/scrypt. Generate session IDs with CSPRNG (>=128 bits entropy). Set Secure, HttpOnly, SameSite on cookies. Enforce idle and absolute timeouts. Require MFA for sensitive accounts."
+    rationale: "Authentication is the gateway to every protected resource. A single flaw — weak hashing, predictable session IDs, missing lockout — can compromise every user account. The subtleties (timing attacks, session fixation, credential stuffing) make custom implementations dangerous."
+    tags: [meta, security, authentication, session, owasp]
+    parent_id: security
+
+  # ---------------------------------------------------------------------------
+  # Password Storage
+  # ---------------------------------------------------------------------------
+  - id: password-storage
+    trigger: "When storing user passwords, implementing password hashing, or choosing a password hashing algorithm for a new application"
+    action: "Hash passwords with Argon2id (preferred), bcrypt, or scrypt using high work factors. Always use unique per-user salts (handled automatically by these algorithms). Never store plaintext, MD5, SHA-1, or unsalted hashes. Tune work factors so hashing takes 250ms-1s on your hardware."
+    rationale: "Modern password hashing algorithms are intentionally slow and memory-hard to resist GPU and ASIC cracking. MD5 hashes billions per second on consumer hardware. Argon2id with proper parameters takes hundreds of milliseconds per hash, making bulk cracking infeasible."
+    tags: [security, passwords, hashing, argon2, bcrypt, owasp, cwe-916]
+    parent_id: security-authentication
+    examples:
+      - label: bad
+        code: |
+          import hashlib
+
+          # MD5/SHA — too fast, no salt
+          hashed = hashlib.md5(password.encode()).hexdigest()
+
+          # SHA-256 with manual salt — still too fast
+          hashed = hashlib.sha256(salt + password.encode()).hexdigest()
+        explanation: "MD5 and SHA family are cryptographic hashes designed for speed, not password storage. GPUs crack billions of MD5 hashes per second. Manual salting doesn't solve the speed problem."
+      - label: good
+        code: |
+          from argon2 import PasswordHasher
+
+          ph = PasswordHasher(
+              time_cost=3,        # iterations
+              memory_cost=65536,  # 64 MB
+              parallelism=4,      # threads
+          )
+
+          # Hash (salt is generated and embedded automatically)
+          stored_hash = ph.hash(password)
+
+          # Verify (timing-safe comparison built in)
+          try:
+              ph.verify(stored_hash, password)
+              if ph.check_needs_rehash(stored_hash):
+                  new_hash = ph.hash(password)  # Upgrade work factors
+          except argon2.exceptions.VerifyMismatchError:
+              raise AuthenticationError("Invalid credentials")
+        explanation: "Argon2id is memory-hard (resists GPU/ASIC attacks), auto-salts, and provides timing-safe verification. check_needs_rehash enables transparent work factor upgrades."
+
+  # ---------------------------------------------------------------------------
+  # MFA Implementation
+  # ---------------------------------------------------------------------------
+  - id: mfa-implementation
+    trigger: "When adding multi-factor authentication, securing sensitive accounts, or implementing TOTP/WebAuthn/SMS verification as a second factor"
+    action: "Implement multi-factor authentication for all sensitive accounts and operations. Prefer TOTP (authenticator apps) or WebAuthn (hardware keys) over SMS. Provide backup codes for account recovery. Require re-authentication before MFA enrollment changes. Rate-limit MFA verification attempts."
+    rationale: "Passwords alone are insufficient — they are phished, reused, and breached. MFA ensures that compromising a password alone is not enough. SMS-based MFA is vulnerable to SIM swapping; TOTP and WebAuthn are stronger second factors."
+    tags: [security, mfa, totp, webauthn, authentication, owasp]
+    parent_id: security-authentication
+    examples:
+      - label: good
+        code: |
+          import pyotp
+
+          # Enrollment: generate and store secret
+          secret = pyotp.random_base32()
+          totp = pyotp.TOTP(secret)
+          provisioning_uri = totp.provisioning_uri(
+              name=user.email,
+              issuer_name="MyApp"
+          )
+          # Display provisioning_uri as QR code to user
+          # Store secret encrypted in database after user confirms with a valid code
+
+          # Verification: validate TOTP code with window
+          totp = pyotp.TOTP(user.mfa_secret)
+          if not totp.verify(submitted_code, valid_window=1):
+              increment_mfa_failure_count(user)
+              if mfa_failure_count(user) > 5:
+                  lock_account(user)
+              raise AuthenticationError("Invalid MFA code")
+        explanation: "TOTP with pyotp. valid_window=1 allows 30-second clock skew. Rate limiting prevents brute-force (TOTP has only 10^6 possible values). Secret is stored encrypted."
+
+  # ---------------------------------------------------------------------------
+  # Session Management Fundamentals
+  # ---------------------------------------------------------------------------
+  - id: session-management-fundamentals
+    trigger: "When implementing session management, generating session tokens, or choosing between server-side sessions and stateless tokens for an application"
+    action: "Use framework-provided session management whenever possible. Generate session IDs with CSPRNG (>=128 bits entropy, >=256 bits preferred). Regenerate session ID after authentication state changes (login, privilege escalation). Store session data server-side — the session ID is a reference, not a container."
+    rationale: "Weak or predictable session IDs allow session hijacking. Failure to regenerate after login enables session fixation attacks. Client-side session storage (unencrypted cookies) exposes session data to tampering and disclosure."
+    tags: [security, session, session-management, owasp, cwe-384]
+    parent_id: security-authentication
+    examples:
+      - label: bad
+        code: |
+          import random
+          import time
+
+          # Predictable session ID — guessable
+          session_id = f"sess_{user.id}_{int(time.time())}"
+
+          # No regeneration after login — session fixation
+          def login(user, password):
+              if verify_password(user, password):
+                  session["authenticated"] = True  # Same session ID as before login
+        explanation: "Predictable IDs let attackers guess valid sessions. Without regeneration, an attacker who sets a session cookie before login inherits the authenticated session."
+      - label: good
+        code: |
+          import secrets
+
+          # Cryptographically random session ID
+          session_id = secrets.token_urlsafe(32)  # 256 bits
+
+          # Regenerate after authentication state change
+          def login(user, password):
+              if verify_password(user, password):
+                  old_data = dict(session)
+                  session.clear()
+                  session.regenerate()  # New session ID
+                  session.update(old_data)
+                  session["authenticated"] = True
+                  session["user_id"] = user.id
+        explanation: "secrets.token_urlsafe uses OS CSPRNG. Session regeneration after login prevents fixation attacks by invalidating the pre-authentication session ID."
+
+  # ---------------------------------------------------------------------------
+  # Session Cookie Security
+  # ---------------------------------------------------------------------------
+  - id: session-cookie-security
+    trigger: "When configuring session cookies, setting cookie attributes, or securing cookie-based authentication in a web application"
+    action: "Set all security attributes on session cookies: Secure (HTTPS only), HttpOnly (no JavaScript access), SameSite=Lax or Strict (CSRF mitigation), appropriate Domain/Path scope, and reasonable Max-Age/Expires. Never store sensitive data directly in cookies."
+    rationale: "Missing Secure flag exposes cookies over HTTP (MITM). Missing HttpOnly enables XSS-based cookie theft. Missing SameSite enables CSRF. Overly broad Domain/Path scope exposes cookies to unrelated subdomains or paths."
+    tags: [security, cookies, session, csrf, owasp]
+    parent_id: security-authentication
+    examples:
+      - label: bad
+        code: |
+          # No security attributes — vulnerable to everything
+          response.set_cookie("session_id", token)
+
+          # Sensitive data in cookie — exposed to client
+          response.set_cookie("user_role", "admin")
+        explanation: "Default cookies are sent over HTTP, readable by JavaScript, and included in cross-site requests. Sensitive data in cookies is visible and tamperable."
+      - label: good
+        code: |
+          response.set_cookie(
+              "session_id",
+              value=token,
+              secure=True,        # HTTPS only — prevents MITM theft
+              httponly=True,       # No document.cookie access — prevents XSS theft
+              samesite="Lax",     # Blocks cross-site POST — prevents CSRF
+              max_age=3600,       # 1 hour expiry
+              path="/",           # Scope to application root
+              domain=".example.com",  # Scope to specific domain
+          )
+
+          # For APIs using SameSite=Strict
+          response.set_cookie(
+              "session_id", token,
+              secure=True, httponly=True, samesite="Strict",
+              max_age=3600,
+          )
+        explanation: "All security attributes set. SameSite=Lax allows top-level navigation (links) but blocks cross-site POST. SameSite=Strict blocks all cross-site requests including navigation."
+
+  # ---------------------------------------------------------------------------
+  # Session Lifecycle
+  # ---------------------------------------------------------------------------
+  - id: session-lifecycle
+    trigger: "When implementing session timeouts, logout functionality, or session invalidation — managing the full lifecycle of user sessions from creation to destruction"
+    action: "Enforce both idle timeout (inactivity) and absolute timeout (maximum session lifetime). Invalidate sessions server-side on logout — do not rely on client-side cookie deletion alone. Require re-authentication for sensitive operations (password change, payment, MFA changes). Clear all session data on termination."
+    rationale: "Long-lived sessions increase the window for session hijacking. Client-only logout leaves the session token valid — a stolen token still works. Re-authentication for critical operations limits damage from session compromise."
+    tags: [security, session, timeout, logout, owasp]
+    parent_id: security-authentication
+    examples:
+      - label: bad
+        code: |
+          # Client-side only logout — session still valid on server
+          def logout():
+              response = redirect("/login")
+              response.delete_cookie("session_id")
+              return response
+
+          # No timeout — sessions live forever
+          session.permanent = True
+        explanation: "Deleting the cookie does not invalidate the session server-side. An attacker with a copied session token can still use it. Permanent sessions never expire."
+      - label: good
+        code: |
+          from datetime import datetime, timedelta
+
+          IDLE_TIMEOUT = timedelta(minutes=30)
+          ABSOLUTE_TIMEOUT = timedelta(hours=8)
+
+          def check_session(session):
+              now = datetime.utcnow()
+              # Idle timeout
+              if now - session["last_activity"] > IDLE_TIMEOUT:
+                  destroy_session(session)
+                  raise SessionExpired("Session timed out due to inactivity")
+              # Absolute timeout
+              if now - session["created_at"] > ABSOLUTE_TIMEOUT:
+                  destroy_session(session)
+                  raise SessionExpired("Session expired")
+              session["last_activity"] = now
+
+          def logout(session):
+              session_store.delete(session["id"])  # Server-side invalidation
+              response = redirect("/login")
+              response.delete_cookie("session_id")
+              return response
+
+          def change_password(session, old_pw, new_pw):
+              # Re-authenticate before sensitive operation
+              if not verify_password(session["user_id"], old_pw):
+                  raise AuthenticationError("Re-authentication failed")
+              update_password(session["user_id"], new_pw)
+              invalidate_all_other_sessions(session["user_id"], except_id=session["id"])
+        explanation: "Dual timeouts limit exposure. Server-side deletion ensures the session is truly gone. Re-authentication before password change prevents abuse of hijacked sessions. Other sessions are invalidated after password change."
+
+  # ---------------------------------------------------------------------------
+  # Credential Transmission
+  # ---------------------------------------------------------------------------
+  - id: credential-transmission
+    trigger: "When transmitting passwords, tokens, API keys, or other credentials between client and server, or between services"
+    action: "Transmit credentials only over TLS (HTTPS). Never include credentials in URLs (GET parameters), as they appear in browser history, server logs, and referrer headers. Use POST request bodies or Authorization headers. Never log credentials at any verbosity level."
+    rationale: "Credentials in URLs are cached in browser history, stored in proxy logs, leaked in Referrer headers, and logged by web servers. Even with TLS, the URL path and query string are often logged server-side. POST bodies and Authorization headers are not logged by default."
+    tags: [security, credentials, tls, transport, owasp]
+    parent_id: security-authentication
+    examples:
+      - label: bad
+        code: |
+          # Credentials in URL — logged everywhere
+          requests.get(f"https://api.example.com/auth?key={api_key}&secret={api_secret}")
+
+          # Credentials in log output
+          logger.info(f"Authenticating user {username} with password {password}")
+
+          # Token in URL for password reset
+          reset_url = f"https://example.com/reset?token={token}&email={email}"
+        explanation: "GET parameters appear in server access logs, browser history, analytics, and Referrer headers. Logging credentials makes them accessible to anyone with log access."
+      - label: good
+        code: |
+          # Credentials in Authorization header
+          response = requests.post(
+              "https://api.example.com/auth",
+              headers={"Authorization": f"Bearer {api_key}"},
+              json={"secret": api_secret},
+          )
+
+          # Sanitized logging
+          logger.info(f"Authenticating user {username}")  # No password
+
+          # Token in POST body for password reset
+          # Email contains link with short-lived, single-use token
+          reset_url = f"https://example.com/reset/{opaque_token}"
+          # Token validated server-side, not in query string
+        explanation: "Authorization headers and POST bodies are not logged by default. Opaque URL tokens avoid exposing email. Credentials never appear in logs."
+
+  # ---------------------------------------------------------------------------
+  # Brute Force Protection
+  # ---------------------------------------------------------------------------
+  - id: brute-force-protection
+    trigger: "When protecting login endpoints, API authentication, or any credential verification against automated guessing attacks"
+    action: "Implement progressive delays (exponential backoff) after failed attempts. Lock accounts temporarily after threshold (e.g., 5 failures). Rate limit by IP and by account independently. Use CAPTCHA after repeated failures. Log all failed authentication attempts for monitoring."
+    rationale: "Without rate limiting, attackers can try millions of password combinations. Account lockout prevents targeted attacks on specific accounts. IP-based rate limiting prevents distributed attacks. Progressive delays make automation impractical without completely blocking legitimate users."
+    tags: [security, brute-force, rate-limiting, account-lockout, owasp]
+    parent_id: security-authentication
+    examples:
+      - label: good
+        code: |
+          import time
+          from datetime import datetime, timedelta
+
+          MAX_ATTEMPTS = 5
+          LOCKOUT_DURATION = timedelta(minutes=15)
+          BASE_DELAY = 0.5  # seconds
+
+          def authenticate(username, password, ip_address):
+              account = get_account(username)
+
+              # Check account lockout
+              if account and account.locked_until and account.locked_until > datetime.utcnow():
+                  remaining = (account.locked_until - datetime.utcnow()).seconds
+                  log_security_event("login_blocked", username=username, ip=ip_address)
+                  raise AccountLocked(f"Account locked. Try again in {remaining}s")
+
+              # Check IP rate limit (e.g., via Redis)
+              if get_ip_attempt_count(ip_address, window=timedelta(minutes=5)) > 20:
+                  raise RateLimited("Too many attempts from this IP")
+
+              # Progressive delay
+              failures = account.consecutive_failures if account else 0
+              if failures > 0:
+                  time.sleep(BASE_DELAY * (2 ** min(failures, 5)))
+
+              if not verify_credentials(username, password):
+                  increment_failure_count(username)
+                  if failures + 1 >= MAX_ATTEMPTS:
+                      lock_account(username, until=datetime.utcnow() + LOCKOUT_DURATION)
+                  log_security_event("login_failed", username=username, ip=ip_address)
+                  raise AuthenticationError("Invalid credentials")  # Generic message
+
+              # Success — reset counters
+              reset_failure_count(username)
+              log_security_event("login_success", username=username, ip=ip_address)
+        explanation: "Layered defense: per-account lockout, per-IP rate limiting, and progressive delays. All attempts are logged. Generic error message prevents enumeration."
+
+  # ---------------------------------------------------------------------------
+  # Auth Error Messages
+  # ---------------------------------------------------------------------------
+  - id: auth-error-messages
+    trigger: "When returning error messages from authentication endpoints — login failures, password reset, account recovery, or registration"
+    action: "Use identical generic error messages for all authentication failures: 'Invalid credentials' for login, 'If an account exists, a reset email has been sent' for password reset. Never reveal whether a username or email exists in the system. Ensure response timing is consistent to prevent timing-based enumeration."
+    rationale: "Specific error messages ('User not found' vs 'Wrong password') enable username enumeration. Attackers harvest valid usernames first, then focus password attacks on confirmed accounts. Timing differences (fast rejection for unknown users vs slow hash comparison for known users) also leak information."
+    tags: [security, authentication, enumeration, error-messages, owasp]
+    parent_id: security-authentication
+    examples:
+      - label: bad
+        code: |
+          def login(username, password):
+              user = find_user(username)
+              if not user:
+                  return {"error": "User not found"}, 401  # Reveals user existence
+              if not verify_password(password, user.password_hash):
+                  return {"error": "Incorrect password"}, 401  # Confirms user exists
+              return create_session(user)
+
+          def forgot_password(email):
+              user = find_user_by_email(email)
+              if not user:
+                  return {"error": "No account with that email"}, 404  # Enumeration
+              send_reset_email(user)
+              return {"message": "Reset email sent"}
+        explanation: "Different messages for 'user not found' vs 'wrong password' let attackers confirm which usernames exist. The forgot_password endpoint does the same with emails."
+      - label: good
+        code: |
+          import hmac
+
+          def login(username, password):
+              user = find_user(username)
+              if not user:
+                  # Perform dummy hash to equalize timing
+                  dummy_verify(password)
+                  return {"error": "Invalid credentials"}, 401
+              if not verify_password(password, user.password_hash):
+                  return {"error": "Invalid credentials"}, 401  # Same message
+              return create_session(user)
+
+          def forgot_password(email):
+              user = find_user_by_email(email)
+              if user:
+                  send_reset_email(user)
+              # Always return same message regardless
+              return {"message": "If an account exists with that email, a reset link has been sent."}
+        explanation: "Same error message regardless of failure reason. Dummy hash comparison equalizes timing for unknown users. Password reset always returns the same response."
+
+  # ---------------------------------------------------------------------------
+  # OAuth/OIDC Patterns
+  # ---------------------------------------------------------------------------
+  - id: oauth-oidc-patterns
+    trigger: "When implementing OAuth 2.0, OpenID Connect, social login, or delegated authorization flows in a web or mobile application"
+    action: "Use proven OAuth/OIDC libraries — never implement the protocol from scratch. Use Authorization Code flow with PKCE for all clients (including server-side). Validate all tokens server-side. Verify the 'state' parameter to prevent CSRF. Validate redirect_uri strictly against an allowlist. Store tokens securely (encrypted at rest, never in localStorage)."
+    rationale: "OAuth/OIDC is complex with many subtle security requirements. Custom implementations commonly miss state validation (CSRF), redirect_uri validation (open redirect/token theft), or token validation (accepting any JWT). PKCE prevents authorization code interception."
+    tags: [security, oauth, oidc, authorization-code, pkce, owasp]
+    parent_id: security-authentication
+    examples:
+      - label: bad
+        code: |
+          # Missing state parameter — CSRF vulnerability
+          auth_url = f"https://provider.com/auth?client_id={CLIENT_ID}&redirect_uri={REDIRECT}"
+
+          # No redirect_uri validation — open redirect / token theft
+          @app.route("/callback")
+          def callback():
+              code = request.args["code"]
+              token = exchange_code(code)  # No state check, no redirect_uri validation
+              return login_user(token)
+        explanation: "Without 'state', attackers craft URLs that authorize their own accounts. Without redirect_uri validation, tokens can be sent to attacker-controlled servers."
+      - label: good
+        code: |
+          import secrets
+          from authlib.integrations.flask_client import OAuth
+
+          # Use a proven library
+          oauth = OAuth(app)
+          oauth.register("provider",
+              client_id=CLIENT_ID,
+              client_secret=CLIENT_SECRET,
+              authorize_url="https://provider.com/auth",
+              access_token_url="https://provider.com/token",
+              client_kwargs={"scope": "openid email profile"},
+              server_metadata_url="https://provider.com/.well-known/openid-configuration",
+          )
+
+          @app.route("/login")
+          def login():
+              # Library handles state/nonce/PKCE automatically
+              redirect_uri = url_for("callback", _external=True)
+              return oauth.provider.authorize_redirect(redirect_uri)
+
+          @app.route("/callback")
+          def callback():
+              # Library validates state, exchanges code, verifies token
+              token = oauth.provider.authorize_access_token()
+              user_info = oauth.provider.parse_id_token(token)
+              return create_session(user_info)
+        explanation: "Authlib handles state parameter, PKCE, token validation, and redirect_uri binding automatically. The library implements the full protocol correctly."
+
+  # ---------------------------------------------------------------------------
+  # JWT Security
+  # ---------------------------------------------------------------------------
+  - id: jwt-security
+    trigger: "When using JSON Web Tokens for authentication, API authorization, or session management — signing, validating, or storing JWTs"
+    action: "Use asymmetric signing (RS256/ES256) over symmetric (HS256) for multi-service architectures. Set short expiration times (15 minutes for access tokens). Implement server-side token revocation (blacklist or versioning). Validate all claims: iss, aud, exp, nbf. Never store sensitive data in JWT payloads (they are base64-encoded, not encrypted). Never accept the 'none' algorithm."
+    rationale: "JWTs are commonly misused: HS256 with weak secrets enables token forgery, the 'none' algorithm bypasses signatures entirely, long-lived tokens cannot be revoked (no logout), and sensitive data in payloads is readable by anyone. JWTs are not encrypted by default — they are signed but transparent."
+    tags: [security, jwt, tokens, authentication, owasp]
+    parent_id: security-authentication
+    examples:
+      - label: bad
+        code: |
+          import jwt
+
+          # HS256 with weak secret — forgeable
+          token = jwt.encode({"user_id": 42, "role": "admin"}, "secret123", algorithm="HS256")
+
+          # No expiration — token valid forever
+          payload = jwt.decode(token, "secret123", algorithms=["HS256"])
+
+          # Accepting any algorithm — 'none' attack
+          payload = jwt.decode(token, "secret123")  # No algorithms restriction
+        explanation: "Weak HS256 secrets are brute-forceable. No expiration means stolen tokens work forever. Without algorithms restriction, attacker sets alg='none' to bypass signature."
+      - label: good
+        code: |
+          import jwt
+          from datetime import datetime, timedelta
+
+          PRIVATE_KEY = load_private_key("/secrets/jwt_private.pem")
+          PUBLIC_KEY = load_public_key("/secrets/jwt_public.pem")
+
+          def create_token(user_id: int, roles: list[str]) -> str:
+              return jwt.encode(
+                  {
+                      "sub": str(user_id),
+                      "roles": roles,
+                      "iss": "myapp",
+                      "aud": "myapp-api",
+                      "exp": datetime.utcnow() + timedelta(minutes=15),
+                      "iat": datetime.utcnow(),
+                      "jti": secrets.token_hex(16),  # Unique ID for revocation
+                  },
+                  PRIVATE_KEY,
+                  algorithm="RS256",
+              )
+
+          def verify_token(token: str) -> dict:
+              try:
+                  payload = jwt.decode(
+                      token,
+                      PUBLIC_KEY,
+                      algorithms=["RS256"],  # Explicit — blocks 'none' and HS256
+                      issuer="myapp",
+                      audience="myapp-api",
+                      options={"require": ["exp", "iss", "aud", "sub"]},
+                  )
+              except jwt.InvalidTokenError as e:
+                  raise AuthenticationError("Invalid token")
+
+              # Check server-side revocation
+              if is_token_revoked(payload["jti"]):
+                  raise AuthenticationError("Token revoked")
+
+              return payload
+        explanation: "RS256 uses asymmetric keys — services only need the public key. Short expiration limits stolen token window. Explicit algorithm list blocks 'none' attack. Server-side revocation via jti enables logout."

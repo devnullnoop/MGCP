@@ -1,0 +1,58 @@
+lessons:
+  - id: verification
+    trigger: "When verifying, checking, or validating data before processing — ensuring values match expectations and preconditions are met"
+    action: "Log and inspect actual values before processing. Check types and nullability. Validate preconditions explicitly. Trust nothing implicitly."
+    rationale: "Assumptions that fail silently produce corrupt data that propagates. By the time symptoms appear, the root cause is buried. Verify at the boundary, not after the damage."
+    tags: [meta, verification, quality]
+    examples:
+      - label: bad
+        code: |
+          # Assume the API returns JSON
+          data = response.json()
+        explanation: "Will crash if API returns HTML error page"
+      - label: good
+        code: |
+          if response.headers.get('content-type') == 'application/json':
+              data = response.json()
+        explanation: "Check content type before parsing"
+
+  - id: verify-before-assert
+    trigger: "When using assertions or making assumptions about values — verify conditions explicitly before asserting them in code"
+    action: "Verify conditions before asserting them in code"
+    rationale: "Assertions that fail in production cause crashes. Verify first, then assert."
+    parent_id: verification
+    tags: [verification, assertions]
+    examples:
+      - label: bad
+        code: |
+          assert user is not None  # Will crash in production
+        explanation: "Assertions can be disabled; crashes aren't graceful"
+      - label: good
+        code: |
+          if user is None:
+              raise ValueError('User required')
+        explanation: "Explicit check with informative error"
+
+  - id: verify-calculations
+    trigger: "When performing calculations, applying formulas, or computing estimates — sanity-check results against expected magnitudes"
+    action: "Sanity-check calculation results against expected magnitudes"
+    rationale: "Formulas that look correct can produce wildly wrong results"
+    parent_id: verification
+    tags: [verification, math]
+    examples:
+      - label: bad
+        code: |
+          memory_needed = nodes * avg_size * 1000  # Looks reasonable
+        explanation: "Magic numbers and unverified formulas"
+      - label: good
+        code: |
+          memory_needed = nodes * avg_size * 1000
+          assert 1_000_000 < memory_needed < 1_000_000_000, f'Unexpected: {memory_needed}'
+        explanation: "Sanity check against expected range"
+
+  - id: verify-file-paths
+    trigger: "When performing file operations — verify that file paths and directories exist before reading, writing, or opening files"
+    action: "Verify file paths exist before operations"
+    rationale: "File operations silently fail or crash without path verification"
+    parent_id: verification
+    tags: [verification, files]

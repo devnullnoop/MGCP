@@ -1,0 +1,440 @@
+relationships:
+  # Prerequisite relationships
+  - source: api-research
+    target: check-api-versions
+    type: prerequisite
+    context: "Must understand research process before checking versions"
+  - source: api-research
+    target: verify-api-response
+    type: prerequisite
+    context: "Research APIs before logging responses"
+  - source: testing
+    target: test-known-inputs
+    type: prerequisite
+    context: "Understand testing principles before specific patterns"
+  - source: testing
+    target: test-edge-cases
+    type: prerequisite
+    context: "General testing before edge case specifics"
+  - source: error-handling
+    target: specific-exceptions
+    type: prerequisite
+    context: "Understand error handling before exception specifics"
+  - source: error-handling
+    target: error-context
+    type: prerequisite
+    context: "General handling before context patterns"
+
+  # Complements relationships
+  - source: check-api-versions
+    target: verify-api-response
+    type: complements
+    context: "Version checking and response logging work together"
+  - source: test-known-inputs
+    target: test-edge-cases
+    type: complements
+    context: "Known inputs and edge cases are complementary tests"
+  - source: specific-exceptions
+    target: error-context
+    type: complements
+    context: "Specific exceptions with contextual messages"
+  - source: verify-before-assert
+    target: error-context
+    type: complements
+    context: "Verification with informative error messages"
+
+  # Related relationships
+  - source: verification
+    target: testing
+    type: related
+    context: "Both concern validating correctness"
+  - source: verification
+    target: api-research
+    type: related
+    context: "Both concern verifying before acting"
+  - source: testing
+    target: error-handling
+    type: related
+    context: "Testing often reveals error handling needs"
+  - source: check-api-versions
+    target: check-breaking-changes
+    type: related
+    context: "Both concern dependency management"
+  - source: verify-file-paths
+    target: verify-calculations
+    type: related
+    context: "Both are verification patterns"
+
+  # Sequence relationships
+  - source: api-research
+    target: testing
+    type: sequence_next
+    context: "After research, test your understanding"
+  - source: test-known-inputs
+    target: verify-before-assert
+    type: sequence_next
+    context: "After testing, add runtime verification"
+  - source: specific-exceptions
+    target: test-edge-cases
+    type: sequence_next
+    context: "After exception handling, test edge cases"
+
+  # Alternative relationships
+  - source: verify-before-assert
+    target: verify-calculations
+    type: alternative
+    context: "Different verification approaches"
+
+  # Security relationships
+  - source: security
+    target: validate-input
+    type: prerequisite
+    context: "Understand security principles before input validation"
+  - source: security
+    target: no-hardcoded-secrets
+    type: prerequisite
+    context: "Understand security before secrets management"
+  - source: security
+    target: least-privilege
+    type: prerequisite
+    context: "Understand security before privilege management"
+  - source: security
+    target: escape-output
+    type: prerequisite
+    context: "Understand security before output handling"
+  - source: validate-input
+    target: escape-output
+    type: complements
+    context: "Input validation and output escaping work together"
+  - source: secure-error-messages
+    target: error-context
+    type: related
+    context: "Both deal with error information, different audiences"
+  - source: dependency-security
+    target: check-api-versions
+    type: related
+    context: "Both concern dependency management and versions"
+  - source: validate-input
+    target: test-edge-cases
+    type: complements
+    context: "Test edge cases to verify input validation"
+  - source: no-hardcoded-secrets
+    target: verify-file-paths
+    type: related
+    context: "Both concern sensitive resource access"
+
+  # Git workflow relationships
+  - source: git-practices
+    target: query-before-git-operations
+    type: prerequisite
+    context: "Understand git practices before specific triggers"
+  - source: git-practices
+    target: lint-before-commit
+    type: prerequisite
+    context: "Understand git practices before linting workflow"
+  - source: git-practices
+    target: verify-before-push
+    type: prerequisite
+    context: "Understand git practices before push verification"
+  - source: git-practices
+    target: pre-commit-documentation-review
+    type: prerequisite
+    context: "Understand git before doc review"
+  - source: lint-before-commit
+    target: verify-before-push
+    type: sequence_next
+    context: "Lint before commit, verify before push"
+  - source: lint-before-commit
+    target: testing
+    type: related
+    context: "Both concern code quality verification"
+  - source: verify-before-push
+    target: testing
+    type: related
+    context: "Both concern verifying code before sharing"
+  - source: pre-commit-documentation-review
+    target: verify-before-push
+    type: complements
+    context: "Both are pre-commit checks"
+
+  # OWASP Input Validation hierarchy
+  - source: security
+    target: owasp-input-validation
+    type: prerequisite
+    context: "Understand security before OWASP input validation"
+  - source: owasp-input-validation
+    target: owasp-centralized-validation
+    type: prerequisite
+    context: "Understand input validation before centralization"
+  - source: owasp-input-validation
+    target: owasp-canonicalize-before-validate
+    type: prerequisite
+    context: "Understand validation before canonicalization"
+  - source: validate-input
+    target: owasp-input-validation
+    type: complements
+    context: "Both concern input validation from different angles"
+  - source: owasp-input-validation
+    target: owasp-sql-injection
+    type: complements
+    context: "Input validation prevents SQL injection"
+
+  # OWASP Output Encoding hierarchy
+  - source: security
+    target: owasp-contextual-output-encoding
+    type: prerequisite
+    context: "Understand security before output encoding"
+  - source: owasp-contextual-output-encoding
+    target: owasp-encode-all-untrusted
+    type: prerequisite
+    context: "Understand encoding before scope of untrusted data"
+  - source: escape-output
+    target: owasp-contextual-output-encoding
+    type: complements
+    context: "Both concern output encoding"
+  - source: owasp-input-validation
+    target: owasp-contextual-output-encoding
+    type: complements
+    context: "Input validation and output encoding work together"
+
+  # OWASP Authentication hierarchy
+  - source: security
+    target: owasp-authentication-fundamentals
+    type: prerequisite
+    context: "Understand security before authentication"
+  - source: owasp-authentication-fundamentals
+    target: owasp-password-storage
+    type: prerequisite
+    context: "Understand auth before password storage"
+  - source: owasp-authentication-fundamentals
+    target: owasp-auth-fail-securely
+    type: prerequisite
+    context: "Understand auth before failure handling"
+  - source: owasp-authentication-fundamentals
+    target: owasp-account-lockout
+    type: prerequisite
+    context: "Understand auth before lockout"
+  - source: owasp-authentication-fundamentals
+    target: owasp-mfa
+    type: prerequisite
+    context: "Understand auth before MFA"
+  - source: owasp-password-storage
+    target: owasp-auth-fail-securely
+    type: complements
+    context: "Storage and failure handling work together"
+  - source: owasp-account-lockout
+    target: owasp-auth-fail-securely
+    type: complements
+    context: "Lockout responds to auth failures"
+
+  # OWASP Session Management hierarchy
+  - source: security
+    target: owasp-session-management
+    type: prerequisite
+    context: "Understand security before session management"
+  - source: owasp-session-management
+    target: owasp-cookie-security
+    type: prerequisite
+    context: "Understand sessions before cookie security"
+  - source: owasp-session-management
+    target: owasp-session-timeout
+    type: prerequisite
+    context: "Understand sessions before timeouts"
+  - source: owasp-session-management
+    target: owasp-session-id-exposure
+    type: prerequisite
+    context: "Understand sessions before exposure prevention"
+  - source: owasp-cookie-security
+    target: owasp-session-id-exposure
+    type: complements
+    context: "Cookie security prevents session exposure"
+  - source: owasp-authentication-fundamentals
+    target: owasp-session-management
+    type: sequence_next
+    context: "After authentication, manage sessions"
+
+  # OWASP Access Control hierarchy
+  - source: security
+    target: owasp-access-control
+    type: prerequisite
+    context: "Understand security before access control"
+  - source: owasp-access-control
+    target: owasp-idor-prevention
+    type: prerequisite
+    context: "Understand access control before IDOR prevention"
+  - source: owasp-access-control
+    target: owasp-privilege-escalation
+    type: prerequisite
+    context: "Understand access control before privilege escalation"
+  - source: least-privilege
+    target: owasp-access-control
+    type: complements
+    context: "Both concern access control principles"
+  - source: owasp-idor-prevention
+    target: owasp-privilege-escalation
+    type: complements
+    context: "Both are authorization bypass vulnerabilities"
+  - source: owasp-authentication-fundamentals
+    target: owasp-access-control
+    type: sequence_next
+    context: "After authentication, check authorization"
+
+  # OWASP Cryptography hierarchy
+  - source: security
+    target: owasp-cryptography
+    type: prerequisite
+    context: "Understand security before cryptography"
+  - source: owasp-cryptography
+    target: owasp-key-management
+    type: prerequisite
+    context: "Understand crypto before key management"
+  - source: owasp-cryptography
+    target: owasp-random-generation
+    type: prerequisite
+    context: "Understand crypto before random generation"
+  - source: no-hardcoded-secrets
+    target: owasp-key-management
+    type: complements
+    context: "Both concern secret/key management"
+  - source: owasp-random-generation
+    target: owasp-session-management
+    type: complements
+    context: "Random generation needed for session IDs"
+  - source: owasp-password-storage
+    target: owasp-cryptography
+    type: related
+    context: "Password hashing is a crypto operation"
+
+  # OWASP Data Protection hierarchy
+  - source: security
+    target: owasp-data-protection
+    type: prerequisite
+    context: "Understand security before data protection"
+  - source: owasp-data-protection
+    target: owasp-sensitive-data-exposure
+    type: prerequisite
+    context: "Understand data protection before exposure prevention"
+  - source: owasp-data-protection
+    target: owasp-https-everywhere
+    type: prerequisite
+    context: "Understand data protection before transport security"
+  - source: owasp-session-id-exposure
+    target: owasp-sensitive-data-exposure
+    type: complements
+    context: "Session IDs are sensitive data"
+  - source: owasp-https-everywhere
+    target: owasp-cookie-security
+    type: complements
+    context: "HTTPS needed for Secure cookie flag"
+
+  # OWASP Database Security hierarchy
+  - source: security
+    target: owasp-sql-injection
+    type: prerequisite
+    context: "Understand security before SQL injection prevention"
+  - source: owasp-sql-injection
+    target: owasp-database-least-privilege
+    type: prerequisite
+    context: "Understand injection before DB privileges"
+  - source: owasp-sql-injection
+    target: owasp-stored-procedures
+    type: prerequisite
+    context: "Understand injection before stored procedures"
+  - source: validate-input
+    target: owasp-sql-injection
+    type: complements
+    context: "Input validation prevents SQL injection"
+  - source: owasp-database-least-privilege
+    target: least-privilege
+    type: related
+    context: "Both concern least privilege principle"
+
+  # OWASP File Management hierarchy
+  - source: security
+    target: owasp-file-upload
+    type: prerequisite
+    context: "Understand security before file upload security"
+  - source: security
+    target: owasp-path-traversal
+    type: prerequisite
+    context: "Understand security before path traversal prevention"
+  - source: owasp-file-upload
+    target: owasp-file-execution
+    type: prerequisite
+    context: "Understand uploads before execution prevention"
+  - source: owasp-path-traversal
+    target: verify-file-paths
+    type: complements
+    context: "Both concern file path security"
+  - source: owasp-input-validation
+    target: owasp-path-traversal
+    type: complements
+    context: "Input validation prevents path traversal"
+  - source: owasp-input-validation
+    target: owasp-file-upload
+    type: complements
+    context: "Input validation for file content"
+
+  # OWASP Error Handling hierarchy
+  - source: security
+    target: owasp-error-handling
+    type: prerequisite
+    context: "Understand security before error handling"
+  - source: security
+    target: owasp-security-logging
+    type: prerequisite
+    context: "Understand security before security logging"
+  - source: owasp-security-logging
+    target: owasp-log-injection
+    type: prerequisite
+    context: "Understand logging before log injection"
+  - source: secure-error-messages
+    target: owasp-error-handling
+    type: complements
+    context: "Both concern secure error messages"
+  - source: error-handling
+    target: owasp-error-handling
+    type: related
+    context: "Both concern error handling"
+  - source: owasp-auth-fail-securely
+    target: owasp-security-logging
+    type: complements
+    context: "Log authentication failures"
+  - source: owasp-input-validation
+    target: owasp-log-injection
+    type: related
+    context: "Input validation prevents log injection"
+
+  # OWASP Code Review lessons
+  - source: security
+    target: owasp-code-review-auth
+    type: prerequisite
+    context: "Understand security before auth code review"
+  - source: security
+    target: owasp-code-review-authz
+    type: prerequisite
+    context: "Understand security before authz code review"
+  - source: security
+    target: owasp-code-review-crypto
+    type: prerequisite
+    context: "Understand security before crypto code review"
+  - source: owasp-authentication-fundamentals
+    target: owasp-code-review-auth
+    type: related
+    context: "Auth fundamentals inform auth review"
+  - source: owasp-access-control
+    target: owasp-code-review-authz
+    type: related
+    context: "Access control informs authz review"
+  - source: owasp-cryptography
+    target: owasp-code-review-crypto
+    type: related
+    context: "Crypto fundamentals inform crypto review"
+  - source: owasp-code-review-auth
+    target: owasp-code-review-authz
+    type: sequence_next
+    context: "Review auth before authz"
+  - source: owasp-code-review-authz
+    target: owasp-code-review-crypto
+    type: sequence_next
+    context: "Review authz before crypto"

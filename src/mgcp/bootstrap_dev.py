@@ -23,14 +23,14 @@ DEV_LESSONS = [
     # =========================================================================
     Lesson(
         id="security",
-        trigger="security, secure, vulnerability, attack, exploit, injection, xss, csrf",
+        trigger="When reviewing code for security vulnerabilities, implementing input validation, or protecting against injection attacks, XSS, and CSRF",
         action="Validate all input. Escape all output. Use parameterized queries. Encrypt secrets at rest. Trust nothing from outside your system boundary.",
         rationale="Security flaws compound. A single SQL injection exposes your entire database. A single XSS enables session hijacking. Cost to fix post-breach: reputation, legal liability, user trust—all unrecoverable.",
         tags=["meta", "security", "quality"],
     ),
     Lesson(
         id="verification",
-        trigger="verify, check, validate, confirm, ensure, test",
+        trigger="When verifying, checking, or validating data before processing — ensuring values match expectations and preconditions are met",
         action="Log and inspect actual values before processing. Check types and nullability. Validate preconditions explicitly. Trust nothing implicitly.",
         rationale="Assumptions that fail silently produce corrupt data that propagates. By the time symptoms appear, the root cause is buried. Verify at the boundary, not after the damage.",
         tags=["meta", "verification", "quality"],
@@ -49,21 +49,21 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="api-research",
-        trigger="API, library, package, dependency, import, install",
+        trigger="When using an API, library, or package — research current documentation and verify version compatibility before writing code",
         action="Read official docs for the CURRENT version before writing code. Verify example code actually runs. Check changelogs for breaking changes in recent releases.",
         rationale="Stack Overflow answers rot. APIs break between versions. Copying outdated examples embeds vulnerabilities and deprecated patterns that break later.",
         tags=["meta", "research", "apis"],
     ),
     Lesson(
         id="testing",
-        trigger="test, debug, verify, check, validate",
+        trigger="When writing tests, debugging code, or validating that implementations produce expected outputs before integration",
         action="Write tests with explicit expected outputs BEFORE integrating. Run tests after every change. Red test = stop and fix immediately.",
         rationale="Bugs discovered during integration require debugging across boundaries. Bugs discovered in isolation have one-line fixes. Test early or debug late—the choice costs 10x either way.",
         tags=["meta", "testing", "quality"],
     ),
     Lesson(
         id="error-handling",
-        trigger="error, exception, fail, crash, bug, handle",
+        trigger="When handling errors, exceptions, or failures — catching specific exceptions and providing actionable context in error messages",
         action="Catch specific exceptions by type. Include context in messages: what failed, which value, where to look. Log stack traces internally. Return generic messages externally.",
         rationale="'Error occurred' is useless. 'User 4521 not found in auth_db during login' is actionable. The difference is hours of debugging vs. minutes.",
         tags=["meta", "errors", "quality"],
@@ -74,7 +74,7 @@ DEV_LESSONS = [
     # =========================================================================
     Lesson(
         id="verify-before-assert",
-        trigger="assert, assumption, expect, should be",
+        trigger="When using assertions or making assumptions about values — verify conditions explicitly before asserting them in code",
         action="Verify conditions before asserting them in code",
         rationale="Assertions that fail in production cause crashes. Verify first, then assert.",
         parent_id="verification",
@@ -94,7 +94,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="verify-calculations",
-        trigger="calculate, formula, math, estimate, compute",
+        trigger="When performing calculations, applying formulas, or computing estimates — sanity-check results against expected magnitudes",
         action="Sanity-check calculation results against expected magnitudes",
         rationale="Formulas that look correct can produce wildly wrong results",
         parent_id="verification",
@@ -114,7 +114,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="verify-file-paths",
-        trigger="file, path, directory, folder, read, write, open",
+        trigger="When performing file operations — verify that file paths and directories exist before reading, writing, or opening files",
         action="Verify file paths exist before operations",
         rationale="File operations silently fail or crash without path verification",
         parent_id="verification",
@@ -126,7 +126,7 @@ DEV_LESSONS = [
     # =========================================================================
     Lesson(
         id="check-api-versions",
-        trigger="version, upgrade, update, latest, deprecated",
+        trigger="When working with API or library versions — check for deprecations, upgrades, or version-specific behavior before using examples from documentation",
         action="Check current API/library versions before using examples",
         rationale="Online examples may be outdated. APIs change between versions.",
         parent_id="api-research",
@@ -146,7 +146,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="check-breaking-changes",
-        trigger="breaking, migration, upgrade, changelog",
+        trigger="When upgrading dependencies or migrating between versions — read changelogs for breaking changes before upgrading",
         action="Read changelogs before upgrading dependencies",
         rationale="Minor version bumps can contain breaking changes",
         parent_id="api-research",
@@ -154,7 +154,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="verify-api-response",
-        trigger="response, API, request, fetch, call",
+        trigger="When making API requests or fetching data — log and inspect actual responses before parsing, as APIs don't always return what documentation says",
         action="Log and inspect actual API responses before parsing",
         rationale="APIs don't always return what documentation says",
         parent_id="api-research",
@@ -166,7 +166,7 @@ DEV_LESSONS = [
     # =========================================================================
     Lesson(
         id="test-known-inputs",
-        trigger="test, unit test, validate, verify output",
+        trigger="When writing unit tests or validating function outputs — test with known input/output pairs first to establish a baseline",
         action="Test functions with known input/output pairs first",
         rationale="Known pairs make it obvious when behavior changes",
         parent_id="testing",
@@ -181,7 +181,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="test-edge-cases",
-        trigger="edge case, boundary, empty, null, zero, max",
+        trigger="When testing edge cases and boundary conditions — always cover empty inputs, null values, zero, and maximum values",
         action="Always test empty, null, zero, and boundary values",
         rationale="Edge cases cause most production bugs",
         parent_id="testing",
@@ -200,7 +200,7 @@ DEV_LESSONS = [
     # =========================================================================
     Lesson(
         id="specific-exceptions",
-        trigger="except, catch, exception, error handling",
+        trigger="When catching exceptions — use specific exception types, not bare except clauses that hide bugs",
         action="Catch specific exceptions, not bare except",
         rationale="Bare except hides bugs and catches KeyboardInterrupt",
         parent_id="error-handling",
@@ -220,7 +220,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="error-context",
-        trigger="error message, exception message, logging error",
+        trigger="When writing error messages or logging exceptions — include full context about what failed, which value, and where to look",
         action="Include context in error messages (what, where, why)",
         rationale="'Error occurred' is useless. Context enables debugging.",
         parent_id="error-handling",
@@ -244,7 +244,7 @@ DEV_LESSONS = [
     # =========================================================================
     Lesson(
         id="validate-input",
-        trigger="input, user input, form, request, parameter, query",
+        trigger="When handling user input from forms, requests, or query parameters — validate and sanitize all external input before use",
         action="Validate and sanitize all external input before use",
         rationale="Untrusted input is the root cause of injection attacks, XSS, and many vulnerabilities",
         parent_id="security",
@@ -264,7 +264,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="no-hardcoded-secrets",
-        trigger="password, secret, key, token, credential, api key",
+        trigger="When handling passwords, secrets, API keys, tokens, or credentials — never hardcode them, use environment variables or secret managers",
         action="Never hardcode secrets - use environment variables or secret managers",
         rationale="Hardcoded secrets end up in version control and are easily leaked",
         parent_id="security",
@@ -284,7 +284,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="least-privilege",
-        trigger="permission, access, role, privilege, scope, capability",
+        trigger="When configuring permissions, access levels, or roles — request only the minimum privileges needed for the task",
         action="Request only the minimum permissions needed for the task",
         rationale="Excessive permissions increase attack surface and blast radius",
         parent_id="security",
@@ -304,7 +304,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="secure-error-messages",
-        trigger="error message, exception, stack trace, debug",
+        trigger="When displaying error messages to users — never expose stack traces, database details, or system internals in production error responses",
         action="Never expose sensitive information in error messages to users",
         rationale="Detailed errors help attackers understand system internals",
         parent_id="security",
@@ -324,7 +324,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="dependency-security",
-        trigger="dependency, package, library, npm, pip, vulnerability, CVE",
+        trigger="When adding new dependencies or packages — audit them for known vulnerabilities and supply chain risks before adding",
         action="Audit dependencies for known vulnerabilities before adding them",
         rationale="Supply chain attacks through compromised dependencies are common",
         parent_id="security",
@@ -339,7 +339,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="escape-output",
-        trigger="output, html, template, render, display, XSS",
+        trigger="When rendering output to HTML templates or displaying user-controlled content — escape output to prevent XSS attacks",
         action="Escape output based on context (HTML, JS, URL, etc.)",
         rationale="Unescaped output enables XSS attacks",
         parent_id="security",
@@ -366,7 +366,7 @@ DEV_LESSONS = [
     # --- INPUT VALIDATION ---
     Lesson(
         id="owasp-input-validation",
-        trigger="input, validate, sanitize, user input, form data, request, parameter, OWASP",
+        trigger="When validating or sanitizing user input from forms, requests, or parameters — use allowlists, not blocklists, and reject invalid input completely",
         action="Validate ALL input server-side using allowlists, not blocklists. Reject invalid input completely - don't attempt to sanitize and use it.",
         rationale="Client-side validation is bypassable. Blocklists miss edge cases. Attempting to sanitize malicious input often fails. Rejection is safer than transformation.",
         parent_id="security",
@@ -386,7 +386,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-centralized-validation",
-        trigger="validation, input handling, form processing, request handling, middleware",
+        trigger="When implementing input validation logic — centralize validation routines rather than duplicating them across multiple handlers or middleware",
         action="Create centralized input validation routines shared across the application. Don't duplicate validation logic in multiple places.",
         rationale="Duplicated validation leads to inconsistencies where one path validates and another doesn't. Centralized validation ensures consistent security controls.",
         parent_id="owasp-input-validation",
@@ -394,7 +394,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-canonicalize-before-validate",
-        trigger="encoding, unicode, UTF-8, character set, canonicalization, normalize",
+        trigger="When handling encoded input, Unicode, or character sets — canonicalize to UTF-8 before validation to prevent encoding bypass attacks",
         action="Canonicalize input to a common character set (UTF-8) BEFORE validation. Decode all encoded input before checking.",
         rationale="Attackers use encoding tricks (%2e%2e/, Unicode normalization) to bypass validation. Canonicalize first, then validate the normalized form.",
         parent_id="owasp-input-validation",
@@ -416,7 +416,7 @@ DEV_LESSONS = [
     # --- OUTPUT ENCODING ---
     Lesson(
         id="owasp-contextual-output-encoding",
-        trigger="output, encode, escape, render, template, HTML, JavaScript, URL, CSS, XSS",
+        trigger="When encoding output for different contexts like HTML body, attributes, JavaScript, URLs, or CSS — each context requires different encoding to prevent XSS",
         action="Encode output based on the CONTEXT where it appears: HTML body, HTML attribute, JavaScript, URL, CSS. Each context requires different encoding.",
         rationale="HTML encoding doesn't protect JavaScript contexts. URL encoding doesn't protect HTML. Wrong encoding = XSS vulnerability.",
         parent_id="security",
@@ -436,7 +436,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-encode-all-untrusted",
-        trigger="untrusted data, user data, external data, third-party, API response",
+        trigger="When outputting any data from outside your trust boundary — encode it before rendering, including database data and API responses, not just direct user input",
         action="Treat ALL data from outside your trust boundary as untrusted and encode it before output. This includes database data, API responses, and file contents - not just direct user input.",
         rationale="Stored XSS occurs when previously-stored malicious data is rendered without encoding. Data from databases and APIs can contain injection payloads.",
         parent_id="owasp-contextual-output-encoding",
@@ -446,7 +446,7 @@ DEV_LESSONS = [
     # --- AUTHENTICATION ---
     Lesson(
         id="owasp-authentication-fundamentals",
-        trigger="authentication, login, password, credential, sign in, auth, OWASP",
+        trigger="When implementing authentication, login flows, or credential handling — use standard, tested authentication libraries instead of rolling your own",
         action="Use standard, tested authentication libraries. Never implement your own password hashing or session management from scratch.",
         rationale="Authentication is security-critical and easy to get wrong. Battle-tested libraries handle edge cases like timing attacks, secure comparisons, and proper hashing.",
         parent_id="security",
@@ -466,7 +466,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-password-storage",
-        trigger="password, hash, store password, bcrypt, argon2, scrypt, pbkdf2",
+        trigger="When storing passwords — use Argon2id, bcrypt, scrypt, or PBKDF2 with high work factors, never plaintext or weak hashes like MD5",
         action="Store passwords using Argon2id, bcrypt, scrypt, or PBKDF2 with high work factors. Never store plaintext, MD5, SHA1, or unsalted hashes.",
         rationale="Modern password hashing algorithms are intentionally slow and use salts to prevent rainbow table attacks. MD5/SHA1 are too fast and enable bulk cracking.",
         parent_id="owasp-authentication-fundamentals",
@@ -481,7 +481,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-auth-fail-securely",
-        trigger="login failed, authentication error, invalid credentials, wrong password",
+        trigger="When handling authentication failures — use generic error messages that don't reveal whether the username or password was wrong",
         action="Authentication failures must not reveal which part failed. Use generic messages like 'Invalid credentials' - never 'User not found' or 'Wrong password'.",
         rationale="Specific error messages enable username enumeration. Attackers can harvest valid usernames, then focus password attacks on confirmed accounts.",
         parent_id="owasp-authentication-fundamentals",
@@ -501,7 +501,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-account-lockout",
-        trigger="brute force, rate limit, lockout, login attempts, failed attempts",
+        trigger="When protecting against brute force attacks — implement account lockout, rate limiting, or progressive delays after failed login attempts",
         action="Implement account lockout or progressive delays after failed login attempts. Log all authentication failures for monitoring.",
         rationale="Without lockout, attackers can brute-force passwords indefinitely. Progressive delays or lockouts make brute-force impractical.",
         parent_id="owasp-authentication-fundamentals",
@@ -509,7 +509,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-mfa",
-        trigger="multi-factor, MFA, 2FA, two-factor, TOTP, authenticator, sensitive account",
+        trigger="When securing sensitive accounts or operations — implement multi-factor authentication and require re-authentication for critical actions",
         action="Implement multi-factor authentication for sensitive accounts and operations. Require re-authentication for critical actions like password changes or financial transactions.",
         rationale="Passwords alone are insufficient. MFA ensures account compromise requires multiple attack vectors. Re-auth for sensitive ops prevents session hijacking abuse.",
         parent_id="owasp-authentication-fundamentals",
@@ -519,7 +519,7 @@ DEV_LESSONS = [
     # --- SESSION MANAGEMENT ---
     Lesson(
         id="owasp-session-management",
-        trigger="session, cookie, session ID, token, JSESSIONID, session fixation, OWASP",
+        trigger="When implementing session management — use framework-provided sessions, cryptographically random IDs, and regenerate session ID after login",
         action="Use framework-provided session management. Generate cryptographically random session IDs (>=128 bits entropy). Regenerate session ID after login.",
         rationale="Weak session IDs are guessable. Session fixation attacks exploit pre-login session IDs. Framework implementations handle these edge cases.",
         parent_id="security",
@@ -539,7 +539,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-cookie-security",
-        trigger="cookie, Set-Cookie, HttpOnly, Secure, SameSite, cookie attributes",
+        trigger="When setting session cookies — configure all security attributes: Secure, HttpOnly, SameSite, and appropriate Domain/Path restrictions",
         action="Set ALL security attributes on session cookies: Secure (HTTPS only), HttpOnly (no JS access), SameSite=Strict or Lax (CSRF protection), and appropriate Domain/Path restrictions.",
         rationale="Missing Secure flag allows cookie theft via MITM. Missing HttpOnly enables XSS cookie theft. Missing SameSite enables CSRF attacks.",
         parent_id="owasp-session-management",
@@ -559,7 +559,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-session-timeout",
-        trigger="session timeout, idle timeout, expiry, session expiration, logout",
+        trigger="When implementing session timeouts or logout — enforce both idle and absolute timeouts, and invalidate sessions server-side on logout",
         action="Implement both idle timeout (inactivity) and absolute timeout (max session lifetime). Terminate sessions completely on logout - invalidate server-side, not just client.",
         rationale="Long-lived sessions increase window for session hijacking. Client-only logout leaves session valid for stolen tokens.",
         parent_id="owasp-session-management",
@@ -567,7 +567,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-session-id-exposure",
-        trigger="session ID, URL, logs, error, exposure, leak",
+        trigger="When transmitting session IDs — never expose them in URLs, error messages, or logs where they could be leaked to attackers",
         action="NEVER expose session IDs in URLs, error messages, or logs. Use POST for transmitting session data when cookies aren't possible.",
         rationale="Session IDs in URLs appear in browser history, referrer headers, and server logs - all accessible to attackers.",
         parent_id="owasp-session-management",
@@ -577,7 +577,7 @@ DEV_LESSONS = [
     # --- ACCESS CONTROL ---
     Lesson(
         id="owasp-access-control",
-        trigger="authorization, access control, permission, role, privilege, RBAC, ABAC, OWASP",
+        trigger="When implementing authorization or access control — enforce on every request server-side, default to deny, and use centralized access control",
         action="Enforce authorization on EVERY request server-side. Use a centralized access control component. Default to DENY - explicitly grant access, never implicitly allow.",
         rationale="Client-side authorization is bypassable. Scattered authorization logic leads to gaps. Implicit allow creates security holes when new resources are added.",
         parent_id="security",
@@ -597,7 +597,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-idor-prevention",
-        trigger="IDOR, direct object reference, resource ID, user ID, document ID, authorization bypass",
+        trigger="When accessing resources by ID — verify the requesting user is authorized to access the specific resource, not just the resource type, to prevent IDOR vulnerabilities",
         action="Always verify the requesting user is authorized to access the specific resource, not just the resource type. Check ownership or explicit permission grants.",
         rationale="IDOR vulnerabilities allow accessing other users' data by changing IDs in requests. Verifying 'user can access documents' isn't enough - verify 'user can access THIS document'.",
         parent_id="owasp-access-control",
@@ -617,7 +617,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-privilege-escalation",
-        trigger="privilege escalation, admin, role, elevation, permission change",
+        trigger="When handling roles or permissions — never trust client-provided role claims, verify authorization server-side and prevent self-elevation of privileges",
         action="Never trust client-provided role or permission claims. Verify authorization server-side. Prevent users from modifying their own privilege level.",
         rationale="Attackers modify hidden form fields, cookies, or API parameters claiming admin roles. Server must be authoritative on permissions.",
         parent_id="owasp-access-control",
@@ -639,7 +639,7 @@ DEV_LESSONS = [
     # --- CRYPTOGRAPHY ---
     Lesson(
         id="owasp-cryptography",
-        trigger="encryption, cryptography, crypto, AES, RSA, hash, OWASP, cipher",
+        trigger="When implementing encryption or cryptography — use established libraries and algorithms like AES-256-GCM and RSA-2048+, never roll your own crypto",
         action="Use well-established cryptographic libraries and algorithms. Never implement your own cryptography. Use AES-256-GCM for symmetric, RSA-2048+/ECDSA P-256+ for asymmetric.",
         rationale="Cryptography is extremely easy to get wrong. Subtle implementation flaws (padding oracles, timing attacks) completely break security. Use vetted libraries.",
         parent_id="security",
@@ -659,7 +659,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-key-management",
-        trigger="key management, encryption key, secret key, key rotation, key storage",
+        trigger="When managing cryptographic keys — store them in secure key management systems, not in code or config files, and implement key rotation",
         action="Store cryptographic keys in secure key management systems (KMS, HSM, or secure vaults), not in code or config files. Implement key rotation procedures.",
         rationale="Keys in code are exposed in version control. Keys in config files are exposed in backups and logs. Proper key management limits blast radius of compromise.",
         parent_id="owasp-cryptography",
@@ -667,7 +667,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-random-generation",
-        trigger="random, token, nonce, salt, UUID, session ID, CSPRNG",
+        trigger="When generating tokens, nonces, salts, or session IDs — use cryptographically secure random number generators, never math.random or similar",
         action="Use cryptographically secure random number generators (CSPRNG) for all security-sensitive values: tokens, session IDs, nonces, salts. Never use math.random() or similar.",
         rationale="Non-cryptographic RNGs are predictable. Attackers can predict future values or reconstruct internal state. Use secrets module (Python), crypto.randomBytes (Node), etc.",
         parent_id="owasp-cryptography",
@@ -689,7 +689,7 @@ DEV_LESSONS = [
     # --- DATA PROTECTION ---
     Lesson(
         id="owasp-data-protection",
-        trigger="data protection, sensitive data, PII, personal data, encryption at rest, OWASP",
+        trigger="When handling sensitive data or PII — classify by sensitivity, encrypt at rest and in transit, and delete when no longer needed",
         action="Classify data by sensitivity. Encrypt sensitive data at rest and in transit. Implement data retention policies - delete when no longer needed.",
         rationale="Breaches happen. Encryption limits damage. Unnecessary data retention increases exposure. Classification enables appropriate controls.",
         parent_id="security",
@@ -697,7 +697,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-sensitive-data-exposure",
-        trigger="sensitive data, logs, cache, URL, GET parameter, browser history",
+        trigger="When transmitting sensitive data — never put it in URLs, logs, error messages, or client-side caches where it could be exposed",
         action="Never put sensitive data in URLs (GET parameters), logs, error messages, or client-side caches. Use POST for sensitive submissions. Disable autocomplete on sensitive forms.",
         rationale="GET parameters appear in browser history, server logs, and referrer headers. Logs and caches are often less protected than primary data stores.",
         parent_id="owasp-data-protection",
@@ -717,7 +717,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-https-everywhere",
-        trigger="HTTPS, TLS, SSL, certificate, transport security, encryption in transit",
+        trigger="When configuring transport security — use HTTPS for all traffic, validate TLS certificates, use TLS 1.2+ with strong ciphers, and implement HSTS",
         action="Use HTTPS for ALL traffic, not just authentication. Validate TLS certificates properly. Use TLS 1.2+ with strong cipher suites. Implement HSTS.",
         rationale="HTTP traffic is readable by anyone on the network path. Partial HTTPS (login only) exposes session cookies on other pages. HSTS prevents downgrade attacks.",
         parent_id="owasp-data-protection",
@@ -727,7 +727,7 @@ DEV_LESSONS = [
     # --- DATABASE SECURITY ---
     Lesson(
         id="owasp-sql-injection",
-        trigger="SQL, query, database, injection, SQLi, parameterized, prepared statement, OWASP",
+        trigger="When writing SQL queries or database operations — always use parameterized queries or prepared statements, never concatenate user input into SQL strings",
         action="ALWAYS use parameterized queries or prepared statements. NEVER concatenate user input into SQL strings. Use ORM methods that parameterize automatically.",
         rationale="SQL injection is consistently in OWASP Top 10. String concatenation allows attackers to modify query logic, extract data, or destroy databases.",
         parent_id="security",
@@ -747,7 +747,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-database-least-privilege",
-        trigger="database connection, database user, database privileges, connection string",
+        trigger="When configuring database connections — use accounts with minimum required privileges, and read-only connections for read-only operations",
         action="Use database accounts with minimum required privileges. Read-only operations should use read-only connections. Never use admin/root accounts for application access.",
         rationale="If SQL injection occurs, limited database privileges limit damage. A read-only connection can't DROP TABLES even if exploited.",
         parent_id="owasp-sql-injection",
@@ -755,7 +755,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-stored-procedures",
-        trigger="stored procedure, database abstraction, database API",
+        trigger="When designing database access patterns — consider stored procedures to abstract data access and limit what queries the application can execute",
         action="Consider using stored procedures to abstract data access. This adds a layer between the application and base tables, limiting what queries can do.",
         rationale="Stored procedures can enforce business rules at the database level and limit the SQL that can be executed, reducing injection impact.",
         parent_id="owasp-sql-injection",
@@ -765,7 +765,7 @@ DEV_LESSONS = [
     # --- FILE MANAGEMENT ---
     Lesson(
         id="owasp-file-upload",
-        trigger="file upload, upload, multipart, file type, MIME, extension, OWASP",
+        trigger="When handling file uploads — validate by content type (magic bytes), restrict allowed types, store outside web root, and rename to prevent path traversal",
         action="Validate uploaded files by content (magic bytes), not just extension. Restrict allowed types to business-necessary formats. Store uploads outside web root. Rename files to prevent path traversal.",
         rationale="Extension checks are bypassable (.php.jpg). Uploads in web root can be executed. User-controlled filenames enable path traversal.",
         parent_id="security",
@@ -785,7 +785,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-path-traversal",
-        trigger="path traversal, directory traversal, LFI, local file inclusion, ../, dot dot slash",
+        trigger="When handling user-supplied file paths — prevent path traversal attacks by using allowlists, mapping input to indices, and validating paths after canonicalization",
         action="Never pass user input directly to file system operations. Use allowlists of permitted files, or map user input to indices. Validate paths are within expected directory after canonicalization.",
         rationale="Path traversal (../) allows reading arbitrary files including /etc/passwd, source code, and config files with secrets.",
         parent_id="security",
@@ -805,7 +805,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-file-execution",
-        trigger="file execution, upload directory, executable, script execution",
+        trigger="When configuring upload directories — disable script execution, serve uploads as static files only, and never store uploads in code directories",
         action="Disable script execution in upload directories. Configure web server to serve uploads as static files only. Never store uploads in code directories.",
         rationale="If attackers can upload and execute code (PHP, JSP, ASPX), they gain full server control. Treating uploads as static prevents execution.",
         parent_id="owasp-file-upload",
@@ -815,7 +815,7 @@ DEV_LESSONS = [
     # --- ERROR HANDLING & LOGGING ---
     Lesson(
         id="owasp-error-handling",
-        trigger="error handling, exception, stack trace, debug mode, verbose errors, OWASP",
+        trigger="When implementing error handling for production — display generic messages to users, log detailed errors server-side only, and never expose stack traces",
         action="Display generic error messages to users. Log detailed errors server-side only. NEVER expose stack traces, SQL errors, or system paths in production.",
         rationale="Detailed errors reveal system internals - database structure, file paths, library versions - that help attackers plan exploits.",
         parent_id="security",
@@ -835,7 +835,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-security-logging",
-        trigger="security logging, audit log, authentication log, access log, security event",
+        trigger="When implementing security logging — log all authentication attempts, access control failures, and administrative actions with timestamp, user, IP, and action",
         action="Log all security-relevant events: authentication attempts (success AND failure), access control failures, input validation failures, and administrative actions. Include timestamp, user, IP, and action.",
         rationale="Security logs enable incident detection and forensics. Without them, breaches go undetected and uninvestigated.",
         parent_id="security",
@@ -850,7 +850,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-log-injection",
-        trigger="log injection, log forging, log tampering, CRLF injection",
+        trigger="When logging user-supplied data — sanitize input to prevent log injection and use structured logging formats to prevent newline forging",
         action="Sanitize user input before logging. Prevent newline injection that could forge log entries. Use structured logging formats (JSON) rather than string concatenation.",
         rationale="Attackers can inject fake log entries to hide their tracks or frame others. Newlines in usernames can create misleading log entries.",
         parent_id="owasp-security-logging",
@@ -860,7 +860,7 @@ DEV_LESSONS = [
     # --- CODE REVIEW CHECKLIST ITEMS ---
     Lesson(
         id="owasp-code-review-auth",
-        trigger="code review, security review, review checklist, authentication review",
+        trigger="When performing a security code review focused on authentication — verify password hashing, session entropy, re-auth for sensitive ops, and account lockout",
         action="During code review, verify: passwords use strong hashing (Argon2/bcrypt), session tokens have sufficient entropy (>=128 bits), re-auth required for sensitive operations, account lockout implemented.",
         rationale="Authentication flaws enable account takeover. Code review is the last line of defense before production.",
         parent_id="security",
@@ -868,7 +868,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-code-review-authz",
-        trigger="code review, authorization review, access control review",
+        trigger="When performing a security code review focused on authorization — verify every endpoint has auth checks, default is deny, and no IDOR vulnerabilities exist",
         action="During code review, verify: every endpoint has authorization checks, authorization is enforced server-side, default is deny, no IDOR vulnerabilities (ownership verified for each resource).",
         rationale="Authorization bypass is a critical vulnerability class. Missing checks on even one endpoint can expose all data.",
         parent_id="security",
@@ -876,7 +876,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="owasp-code-review-crypto",
-        trigger="code review, cryptography review, encryption review",
+        trigger="When performing a security code review focused on cryptography — verify modern algorithms, proper key management, no hardcoded keys, and CSPRNG usage",
         action="During code review, verify: modern algorithms (AES-256, RSA-2048+), proper key management, no hardcoded keys, CSPRNG for all random values, TLS configured correctly.",
         rationale="Cryptographic weaknesses may not cause immediate failures but completely compromise security. Review catches weak algorithms.",
         parent_id="security",
@@ -888,14 +888,14 @@ DEV_LESSONS = [
     # =========================================================================
     Lesson(
         id="git-practices",
-        trigger="git, commit, push, pull, branch, merge, version control",
+        trigger="When working with git — committing, pushing, branching, or merging — follow atomic commit practices and review diffs before committing",
         action="One logical change per commit. Write messages that explain WHY, not WHAT. Run git diff before commit to catch debug code and secrets. Never force-push shared branches.",
         rationale="Atomic commits enable git bisect to pinpoint bugs. 'Fixed bug' is useless; 'Fix null check in auth middleware causing 500 on expired tokens' is searchable. Force-pushing shared branches rewrites history others depend on.",
         tags=["meta", "git", "workflow"],
     ),
     Lesson(
         id="query-before-git-operations",
-        trigger="commit, push, git commit, git push, let's commit, ready to commit, PR, pull request",
+        trigger="When about to perform git operations like committing, pushing, or creating a pull request — query lessons first for project-specific git conventions",
         action="BEFORE performing any git operation (commit, push, PR), call query_lessons with 'git commit' or 'git workflow' to surface project-specific preferences like attribution rules, commit message formats, or branch conventions.",
         rationale="Different projects have different git conventions. Querying first surfaces any project-specific rules that override defaults.",
         parent_id="git-practices",
@@ -903,7 +903,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="lint-before-commit",
-        trigger="commit, write code, implement, edit files, fix bugs, code changes",
+        trigger="When about to commit code — run linting locally first to catch issues while context is fresh, rather than debugging lint failures in CI later",
         action="Run linting (ruff check, eslint, etc.) BEFORE committing code changes, not after CI fails. Catch issues while the code is fresh in context rather than debugging lint failures later.",
         rationale="Lint errors discovered in CI require context switching back to code you've already mentally moved on from. Running linter locally catches issues immediately when they're trivial to fix.",
         parent_id="git-practices",
@@ -923,7 +923,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="verify-before-push",
-        trigger="push, git push, about to push, ready to push",
+        trigger="When about to push code — run tests locally, check linter, review diff for debug code and secrets, and verify the correct branch",
         action="Before pushing: (1) run tests locally, (2) run linter, (3) check git diff for debug code or secrets, (4) verify you're pushing to the correct branch. Pushing broken code blocks others.",
         rationale="Pushing untested code to shared branches breaks CI and blocks teammates. A few minutes of local verification saves hours of team disruption.",
         parent_id="git-practices",
@@ -931,7 +931,7 @@ DEV_LESSONS = [
     ),
     Lesson(
         id="pre-commit-documentation-review",
-        trigger="commit, git commit, documentation, docs, readme, changelog",
+        trigger="When committing code changes — verify that documentation is updated alongside code to prevent stale docs, including CLAUDE.md, README, and CHANGELOG",
         action="BEFORE committing changes, verify documentation is updated: (1) Check if code changes require doc updates, (2) Update CLAUDE.md if architecture or conventions changed, (3) Update README if user-facing behavior changed, (4) Add to CHANGELOG if user-visible. Never commit code changes that make docs stale.",
         rationale="Stale documentation is worse than no documentation - it actively misleads. Documentation debt compounds: the longer you wait, the harder it is to remember what changed and why. Commit docs with code, not 'later'.",
         parent_id="git-practices",

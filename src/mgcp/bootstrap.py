@@ -133,6 +133,40 @@ async def seed_relationships(relationships: list, store: LessonStore, graph: Les
     return added, skipped
 
 
+async def update_triggers(
+    lessons: list, store: LessonStore, vector_store: QdrantVectorStore, graph: LessonGraph
+) -> tuple[int, int, int]:
+    """Update trigger fields on existing lessons without modifying other fields.
+
+    Returns (updated, skipped, not_found) counts.
+    """
+    updated = 0
+    skipped = 0
+    not_found = 0
+
+    for lesson in lessons:
+        existing = await store.get_lesson(lesson.id)
+        if not existing:
+            print(f"  Not found: {lesson.id}")
+            not_found += 1
+            continue
+
+        if existing.trigger == lesson.trigger:
+            skipped += 1
+            continue
+
+        # Update only the trigger field, preserve everything else
+        existing.trigger = lesson.trigger
+        await store.update_lesson(existing)
+        # Re-index in vector store (add_lesson uses upsert)
+        vector_store.add_lesson(existing)
+        graph.add_lesson(existing)
+        print(f"  Updated {lesson.id}")
+        updated += 1
+
+    return updated, skipped, not_found
+
+
 async def seed_database(core_only: bool = False, dev_only: bool = False) -> None:
     """Seed the database with bootstrap lessons and workflows.
 
@@ -181,6 +215,25 @@ async def seed_database(core_only: bool = False, dev_only: bool = False) -> None
         print(f"\nRelationships: {added} added, {skipped} skipped")
 
 
+async def run_update_triggers(core_only: bool = False, dev_only: bool = False) -> None:
+    """Update trigger fields on existing bootstrap lessons."""
+    store = LessonStore()
+    vector_store = QdrantVectorStore()
+    graph = LessonGraph()
+
+    lessons_to_update = []
+    if not dev_only:
+        lessons_to_update.extend(CORE_LESSONS)
+    if not core_only:
+        lessons_to_update.extend(DEV_LESSONS)
+
+    print(f"Updating triggers for {len(lessons_to_update)} bootstrap lessons...\n")
+    updated, skipped, not_found = await update_triggers(
+        lessons_to_update, store, vector_store, graph
+    )
+    print(f"\nTriggers: {updated} updated, {skipped} unchanged, {not_found} not found")
+
+
 def main():
     """Run bootstrap seeding."""
     import sys
@@ -188,6 +241,7 @@ def main():
     # Parse arguments
     core_only = "--core-only" in sys.argv
     dev_only = "--dev-only" in sys.argv
+    do_update_triggers = "--update-triggers" in sys.argv
 
     if len(sys.argv) > 1:
         if sys.argv[1] in ("--help", "-h"):
@@ -196,11 +250,12 @@ def main():
 Usage: mgcp-bootstrap [OPTIONS]
 
 Options:
-  -h, --help     Show this help message
-  -V, --version  Show version number
-  --core-only    Seed only MGCP core lessons (task-agnostic)
-  --dev-only     Seed only development lessons and workflows
-  --list         Show available bootstrap modules
+  -h, --help           Show this help message
+  -V, --version        Show version number
+  --core-only          Seed only MGCP core lessons (task-agnostic)
+  --dev-only           Seed only development lessons and workflows
+  --update-triggers    Update trigger fields on existing lessons (preserves all other fields)
+  --list               Show available bootstrap modules
 
 The bootstrap is safe to run multiple times - existing items will be skipped.
 Data is stored in ~/.mgcp/ by default.
@@ -236,6 +291,11 @@ DEV (bootstrap_dev.py):
     if core_only and dev_only:
         print("Error: Cannot specify both --core-only and --dev-only")
         sys.exit(1)
+
+    if do_update_triggers:
+        print("MGCP Bootstrap - Updating triggers...\n")
+        asyncio.run(run_update_triggers(core_only=core_only, dev_only=dev_only))
+        return
 
     mode = "core only" if core_only else ("dev only" if dev_only else "all")
     print(f"MGCP Bootstrap - Seeding {mode}...\n")

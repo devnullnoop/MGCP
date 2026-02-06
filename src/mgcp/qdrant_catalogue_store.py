@@ -30,7 +30,7 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-from .embedding import EMBEDDING_DIMENSION, embed
+from .embedding import EMBEDDING_DIMENSION, embed, embed_query
 from .models import (
     ArchitecturalNote,
     Convention,
@@ -364,7 +364,7 @@ class QdrantCatalogueStore:
         Returns:
             List of (doc_id, score, metadata) tuples
         """
-        query_vector = embed(query)
+        query_vector = embed_query(query)
 
         # Build filter
         conditions = []

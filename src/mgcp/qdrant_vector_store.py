@@ -28,7 +28,7 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-from .embedding import EMBEDDING_DIMENSION, embed, embed_batch
+from .embedding import EMBEDDING_DIMENSION, embed, embed_batch, embed_query
 from .models import Lesson
 
 logger = logging.getLogger("mgcp.qdrant_vector_store")
@@ -152,7 +152,7 @@ class QdrantVectorStore:
         Returns:
             List of (lesson_id, score) tuples, sorted by relevance
         """
-        query_vector = embed(query)
+        query_vector = embed_query(query)
 
         # Build filter for tag matching
         query_filter = None
@@ -355,7 +355,7 @@ class QdrantVectorStore:
             List of (workflow_id, score, metadata) tuples
         """
         collection = self.get_or_create_workflow_collection()
-        query_vector = embed(query)
+        query_vector = embed_query(query)
 
         results = self.client.query_points(
             collection_name=collection,
@@ -428,7 +428,7 @@ class QdrantVectorStore:
             List of (community_id, score, metadata) tuples
         """
         collection = self.get_or_create_community_collection()
-        query_vector = embed(query)
+        query_vector = embed_query(query)
 
         results = self.client.query_points(
             collection_name=collection,

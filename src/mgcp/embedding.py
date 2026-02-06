@@ -21,6 +21,10 @@ logger = logging.getLogger("mgcp.embedding")
 MODEL_NAME = "BAAI/bge-base-en-v1.5"
 EMBEDDING_DIMENSION = 768
 
+# BGE instruction prefix for query embeddings (improves retrieval quality)
+# See: https://huggingface.co/BAAI/bge-base-en-v1.5#usage
+QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
+
 
 @lru_cache(maxsize=1)
 def get_embedding_model() -> SentenceTransformer:
@@ -47,6 +51,24 @@ def embed(text: str) -> list[float]:
     model = get_embedding_model()
     # encode() returns numpy array, convert to list for Qdrant
     embedding = model.encode(text, normalize_embeddings=True)
+    return embedding.tolist()
+
+
+def embed_query(text: str) -> list[float]:
+    """Embed a query with BGE instruction prefix for better retrieval.
+
+    BGE models produce better search results when queries are prefixed with
+    an instruction string. This must only be used for queries, not for
+    documents/passages being stored.
+
+    Args:
+        text: Query text to embed
+
+    Returns:
+        List of floats representing the embedding vector (768 dimensions)
+    """
+    model = get_embedding_model()
+    embedding = model.encode(QUERY_INSTRUCTION + text, normalize_embeddings=True)
     return embedding.tolist()
 
 

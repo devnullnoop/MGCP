@@ -6,7 +6,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TELEMETRY_PATH = "~/.mgcp/telemetry.db"
 
 
-class EventType(str, Enum):
+class EventType(StrEnum):
     QUERY = "query"
     RETRIEVE = "retrieve"
     SPIDER = "spider"

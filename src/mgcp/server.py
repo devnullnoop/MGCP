@@ -19,6 +19,7 @@ from .graph import LessonGraph
 from .logging_config import configure_logging, get_logger
 from .models import (
     ArchitecturalNote,
+    CommunitySummary,
     Convention,
     Decision,
     Dependency,
@@ -1745,6 +1746,201 @@ async def add_workflow_step(
 
     await store.save_workflow(workflow)
     return f"Added step '{name}' (order {order}) to workflow '{workflow.name}'"
+
+
+# ============================================================================
+# COMMUNITY DETECTION TOOLS
+# ============================================================================
+
+
+@mcp.tool()
+async def detect_communities(
+    resolution: float = 1.0,
+    min_community_size: int = 2,
+) -> str:
+    """Detect natural topic clusters in the lesson graph using Louvain algorithm.
+
+    Returns communities with members, tags, density stats, and summary status.
+    Use save_community_summary to persist LLM-generated summaries for each community.
+
+    Args:
+        resolution: Controls granularity. Higher = more, smaller communities. Default 1.0.
+        min_community_size: Minimum members to include a community. Default 2.
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    communities = graph.detect_communities(resolution=resolution)
+
+    # Filter by minimum size
+    communities = [c for c in communities if c["size"] >= min_community_size]
+
+    if not communities:
+        return "No communities detected. The lesson graph may be too small or disconnected."
+
+    # Check for existing summaries
+    for community in communities:
+        summary = await store.get_community_summary(community["community_id"])
+        community["has_summary"] = summary is not None
+        if summary:
+            community["summary_title"] = summary.title
+            # Check staleness: compare current members to snapshot
+            current_members = set(community["members"])
+            snapshot_members = set(summary.member_ids)
+            community["is_stale"] = current_members != snapshot_members
+
+    lines = [f"# Detected {len(communities)} Communities\n"]
+    for i, c in enumerate(communities, 1):
+        lines.append(f"## Community {i}: `{c['community_id']}`")
+        lines.append(f"**Size:** {c['size']} lessons")
+
+        if c["has_summary"]:
+            status = "STALE" if c.get("is_stale") else "current"
+            lines.append(f"**Summary:** {c['summary_title']} ({status})")
+        else:
+            lines.append("**Summary:** None (call save_community_summary to add one)")
+
+        lines.append(f"**Top members:** {', '.join(c['top_members'])}")
+
+        if c["aggregate_tags"]:
+            tag_str = ", ".join(
+                f"{tag} ({count})" for tag, count in c["aggregate_tags"].items()
+            )
+            lines.append(f"**Tags:** {tag_str}")
+
+        lines.append(
+            f"**Edges:** {c['internal_edges']} internal, "
+            f"{c['external_edges']} external | **Density:** {c['density']}"
+        )
+        lines.append(f"**All members:** {', '.join(c['members'])}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def save_community_summary(
+    community_id: str,
+    title: str,
+    summary: str,
+) -> str:
+    """Save an LLM-generated summary for a detected community.
+
+    Call detect_communities first to get community IDs, then compose a summary
+    and save it here for future retrieval via search_communities.
+
+    Args:
+        community_id: The community ID from detect_communities output
+        title: Short descriptive title for this community
+        summary: LLM-generated description of what this community covers
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    # Validate community exists by re-running detection
+    communities = graph.detect_communities()
+    target = None
+    for c in communities:
+        if c["community_id"] == community_id:
+            target = c
+            break
+
+    if not target:
+        return (
+            f"Community '{community_id}' not found in current graph. "
+            "Run detect_communities to see current community IDs."
+        )
+
+    now = datetime.now(UTC)
+
+    # Check if updating existing
+    existing = await store.get_community_summary(community_id)
+
+    community_summary = CommunitySummary(
+        community_id=community_id,
+        title=title,
+        summary=summary,
+        member_ids=target["members"],
+        member_count=target["size"],
+        created_at=existing.created_at if existing else now,
+        updated_at=now,
+    )
+
+    # Save to SQLite
+    await store.save_community_summary(community_summary)
+
+    # Save to Qdrant for semantic search
+    top_tags = list(target["aggregate_tags"].keys())[:5] if target["aggregate_tags"] else []
+    searchable_text = f"Community: {title}. {summary}. Topics: {', '.join(top_tags)}"
+    vector_store.upsert_community_summary(
+        community_id=community_id,
+        searchable_text=searchable_text,
+        metadata={
+            "title": title,
+            "member_count": target["size"],
+            "top_tags": ",".join(top_tags),
+        },
+    )
+
+    action = "Updated" if existing else "Saved"
+    return f"{action} community summary '{title}' for {target['size']} lessons."
+
+
+@mcp.tool()
+async def search_communities(
+    query: str,
+    limit: int = 5,
+) -> str:
+    """Search community summaries semantically.
+
+    Find which topic clusters are relevant to a query. Returns summaries
+    with staleness indicators (whether members have changed since summary was written).
+
+    Args:
+        query: What to search for (e.g., "error handling", "testing patterns")
+        limit: Maximum results to return (default 5)
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    results = vector_store.query_community_summaries(query, limit=limit)
+
+    if not results:
+        return "No community summaries found. Run detect_communities and save_community_summary first."
+
+    # Get current communities for staleness check
+    current_communities = graph.detect_communities()
+    current_map = {c["community_id"]: c for c in current_communities}
+
+    lines = [f"# Community Search: \"{query}\"\n"]
+    for community_id, score, metadata in results:
+        full_summary = await store.get_community_summary(community_id)
+        if not full_summary:
+            continue
+
+        lines.append(f"## {full_summary.title} (relevance: {score:.0%})")
+        lines.append(f"**ID:** `{community_id}`")
+        lines.append(f"**Summary:** {full_summary.summary}")
+        lines.append(f"**Members at creation:** {full_summary.member_count}")
+
+        # Staleness check
+        current = current_map.get(community_id)
+        if current:
+            current_members = set(current["members"])
+            snapshot_members = set(full_summary.member_ids)
+            if current_members != snapshot_members:
+                added = current_members - snapshot_members
+                removed = snapshot_members - current_members
+                lines.append("**Status:** STALE")
+                if added:
+                    lines.append(f"  New members: {', '.join(sorted(added))}")
+                if removed:
+                    lines.append(f"  Removed members: {', '.join(sorted(removed))}")
+            else:
+                lines.append("**Status:** Current")
+        else:
+            lines.append("**Status:** Community no longer exists (graph has changed)")
+
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 # ============================================================================

@@ -1,5 +1,7 @@
 """Graph operations for MGCP lesson relationships using NetworkX."""
 
+import hashlib
+from collections import Counter
 
 import networkx as nx
 
@@ -246,6 +248,105 @@ class LessonGraph:
             })
 
         return {"nodes": nodes, "links": links}
+
+    def detect_communities(
+        self, resolution: float = 1.0, seed: int = 42
+    ) -> list[dict]:
+        """Detect natural topic clusters using Louvain community detection.
+
+        Args:
+            resolution: Controls granularity. Higher = more communities. Default 1.0.
+            seed: Random seed for deterministic results.
+
+        Returns:
+            List of community dicts with: community_id, members, size,
+            aggregate_tags, internal_edges, external_edges, density, top_members.
+        """
+        if self.graph.number_of_nodes() == 0:
+            return []
+
+        # Louvain requires an undirected graph
+        undirected = self.graph.to_undirected()
+
+        # Run Louvain community detection
+        communities = nx.algorithms.community.louvain_communities(
+            undirected, resolution=resolution, seed=seed
+        )
+
+        results = []
+        for members_set in communities:
+            members = sorted(members_set)
+
+            # Deterministic community ID from sorted members
+            community_id = hashlib.sha256(
+                ",".join(members).encode()
+            ).hexdigest()[:12]
+
+            # Aggregate tags from member nodes
+            tag_counter: Counter = Counter()
+            top_members = []
+            for member_id in members:
+                node_data = self.graph.nodes.get(member_id, {})
+                for tag in node_data.get("tags", []):
+                    tag_counter[tag] += 1
+                top_members.append((
+                    member_id,
+                    node_data.get("usage_count", 0),
+                ))
+
+            # Sort by usage_count descending, take top 5
+            top_members.sort(key=lambda x: x[1], reverse=True)
+            top_members = [m[0] for m in top_members[:5]]
+
+            # Count internal vs external edges
+            internal_edges = 0
+            external_edges = 0
+            for u, v in self.graph.edges():
+                u_in = u in members_set
+                v_in = v in members_set
+                if u_in and v_in:
+                    internal_edges += 1
+                elif u_in or v_in:
+                    external_edges += 1
+
+            # Calculate density: internal_edges / max_possible_edges
+            n = len(members)
+            max_possible = n * (n - 1) if n > 1 else 1  # directed graph
+            density = internal_edges / max_possible if max_possible > 0 else 0.0
+
+            results.append({
+                "community_id": community_id,
+                "members": members,
+                "size": n,
+                "aggregate_tags": dict(tag_counter.most_common(10)),
+                "internal_edges": internal_edges,
+                "external_edges": external_edges,
+                "density": round(density, 3),
+                "top_members": top_members,
+            })
+
+        # Sort by size descending
+        results.sort(key=lambda c: c["size"], reverse=True)
+        return results
+
+    def get_community_for_lesson(
+        self, lesson_id: str, resolution: float = 1.0, seed: int = 42
+    ) -> dict | None:
+        """Get the community containing a specific lesson.
+
+        Args:
+            lesson_id: The lesson to find the community for.
+            resolution: Louvain resolution parameter.
+            seed: Random seed for deterministic results.
+
+        Returns:
+            Community dict or None if lesson not found.
+        """
+        communities = self.detect_communities(resolution=resolution, seed=seed)
+        for community in communities:
+            if lesson_id in community["members"]:
+                return community
+        return None
 
     def load_from_lessons(self, lessons: list[Lesson]) -> None:
         """Load graph from a list of lessons."""

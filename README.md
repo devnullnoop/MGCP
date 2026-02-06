@@ -163,7 +163,7 @@ Restart your LLM client. MGCP tools are now available.
 mgcp-dashboard
 ```
 
-## MCP Tools (35 total)
+## MCP Tools (38 total)
 
 ### Lesson Discovery (5)
 | Tool | Purpose |
@@ -217,6 +217,13 @@ mgcp-dashboard
 | `update_workflow` | Update workflow |
 | `add_workflow_step` | Add step |
 | `link_lesson_to_workflow_step` | Link lesson to step |
+
+### Community Detection (3)
+| Tool | Purpose |
+|------|---------|
+| `detect_communities` | Auto-detect topic clusters via Louvain |
+| `save_community_summary` | Persist LLM-generated community summary |
+| `search_communities` | Semantic search community summaries |
 
 ### Reminders (2)
 | Tool | Purpose |

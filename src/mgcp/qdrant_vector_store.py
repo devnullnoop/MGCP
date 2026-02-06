@@ -373,3 +373,95 @@ class QdrantVectorStore:
             matches.append((workflow_id, point.score, metadata))
 
         return matches
+
+    # Community summary collection support
+    def get_or_create_community_collection(self) -> str:
+        """Get or create the community_summaries collection.
+
+        Returns the collection name for use in community queries.
+        """
+        community_collection = "community_summaries"
+        collections = self.client.get_collections().collections
+        exists = any(c.name == community_collection for c in collections)
+
+        if not exists:
+            self.client.create_collection(
+                collection_name=community_collection,
+                vectors_config=VectorParams(
+                    size=EMBEDDING_DIMENSION,
+                    distance=Distance.COSINE,
+                ),
+            )
+            logger.info(f"Created collection '{community_collection}'")
+
+        return community_collection
+
+    def upsert_community_summary(
+        self, community_id: str, searchable_text: str, metadata: dict
+    ) -> None:
+        """Upsert a community summary into the community_summaries collection."""
+        collection = self.get_or_create_community_collection()
+        vector = embed(searchable_text)
+        point_id = string_to_uuid(f"community-{community_id}")
+
+        self.client.upsert(
+            collection_name=collection,
+            points=[
+                PointStruct(
+                    id=point_id,
+                    vector=vector,
+                    payload={
+                        "community_id": community_id,
+                        **metadata,
+                        "text": searchable_text,
+                    },
+                )
+            ],
+        )
+
+    def query_community_summaries(
+        self, query: str, limit: int = 5
+    ) -> list[tuple[str, float, dict]]:
+        """Query community summaries by semantic similarity.
+
+        Returns:
+            List of (community_id, score, metadata) tuples
+        """
+        collection = self.get_or_create_community_collection()
+        query_vector = embed(query)
+
+        results = self.client.query_points(
+            collection_name=collection,
+            query=query_vector,
+            limit=limit,
+            with_payload=True,
+        )
+
+        matches = []
+        for point in results.points:
+            payload = point.payload or {}
+            community_id = payload.get("community_id", str(point.id))
+            metadata = {
+                k: v
+                for k, v in payload.items()
+                if k not in ("text", "community_id")
+            }
+            matches.append((community_id, point.score, metadata))
+
+        return matches
+
+    def remove_community_summary(self, community_id: str) -> bool:
+        """Remove a community summary from the vector store."""
+        try:
+            collection = self.get_or_create_community_collection()
+            point_id = string_to_uuid(f"community-{community_id}")
+            self.client.delete(
+                collection_name=collection,
+                points_selector=[point_id],
+            )
+            return True
+        except Exception as e:
+            logger.warning(
+                f"Failed to remove community summary '{community_id}': {e}"
+            )
+            return False

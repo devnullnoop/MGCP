@@ -174,7 +174,7 @@ async def show_status():
     try:
         vector_store = QdrantVectorStore()
         ids = vector_store.get_all_ids()
-        print(f"  Vectors in ChromaDB: {len(ids)}")
+        print(f"  Vectors in Qdrant: {len(ids)}")
     except Exception as e:
         print(f"  Vector store: ERROR - {e}")
 

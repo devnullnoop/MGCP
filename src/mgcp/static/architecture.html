@@ -97,7 +97,7 @@ flowchart TB
 
     subgraph Storage["Storage Layer"]
         GS[("Graph Store<br/>(NetworkX)")]
-        VS[("Vector Store<br/>(ChromaDB)")]
+        VS[("Vector Store<br/>(Qdrant)")]
     end
 
     LLM <-->|"Tools & Responses"| MCP

@@ -587,7 +587,7 @@ async def delete_lesson(lesson_id: str) -> str:
     Use when consolidating lessons, removing duplicates, or cleaning up
     outdated/incorrect lessons. This removes the lesson from:
     - The persistent store (SQLite)
-    - The vector store (ChromaDB)
+    - The vector store (Qdrant)
     - The graph (NetworkX)
 
     Args:
@@ -605,7 +605,7 @@ async def delete_lesson(lesson_id: str) -> str:
     if not deleted:
         return f"Failed to delete lesson: {lesson_id}"
 
-    # Remove from vector store (ChromaDB)
+    # Remove from vector store (Qdrant)
     vector_store.remove_vector_lesson(lesson_id)
 
     # Remove from graph (NetworkX)
@@ -2150,7 +2150,7 @@ Data is stored in ~/.mgcp/ by default.
 """)
             return
         elif sys.argv[1] in ("--version", "-V"):
-            print("mgcp 1.0.0")
+            print("mgcp 1.1.0")
             return
 
     mcp.run(transport="stdio")

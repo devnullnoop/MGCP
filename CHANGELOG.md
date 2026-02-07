@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-02-07
+
+### Added
+- **Community detection**: 3 new MCP tools (`detect_communities`, `save_community_summary`, `search_communities`) using Louvain algorithm for auto-clustering lessons into topic groups
+- **Community summary sync**: Improved query bridging between community summaries and lesson search
+- **BGE instruction prefix**: Query embeddings now use BGE-recommended instruction prefix for better retrieval accuracy
+- **YAML bootstrap**: Bootstrap lessons and workflows defined in YAML files for easier editing and review
+- **GitHub Actions publish workflow**: Automated PyPI publishing on tag push using trusted publishing (OIDC)
+
+### Changed
+- **Bootstrap format**: Migrated from Python dictionaries to YAML files (`src/mgcp/bootstrap_data/`)
+- **Trigger format**: Converted bootstrap triggers from keyword bags to narrative descriptions for better BGE embedding quality
+- **Tool count**: 35 → 38 MCP tools (CLAUDE.md updated)
+
+### Fixed
+- **UNIQUE constraint failure**: `save_project_context` no longer fails on legacy project IDs with different path formats
+- **Embedding timeout**: Deferred embedding model load prevents MCP connection timeout on startup
+- **CI lint**: Use `StrEnum` instead of `str + Enum` pattern for Python 3.11+ compatibility
+- **Stale references**: Removed ruff per-file-ignores for deleted bootstrap Python files
+- **README hooks table**: Added missing hook entries
+- **Test stability**: Marked embedding-heavy tests as slow to fix CI timeout; fixed lint error in test file
+
 ## [1.1.0] - 2026-01-21
 
 First tagged release. Includes all changes since initial development.

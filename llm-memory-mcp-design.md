@@ -4,7 +4,7 @@
 
 A persistent, queryable memory system for LLM interactions that stores learned lessons in a graph structure. Instead of loading all context upfront (crushing token counts) or losing lessons to compression, the LLM queries for relevant lessons based on current task context.
 
-> **Status**: v1.1.0 - Alpha/Research project. Phases 1-5 complete, actively dogfooding.
+> **Status**: v1.2.0 - Alpha/Research project. Phases 1-5 complete, actively dogfooding.
 
 ### Core Problem Solved
 

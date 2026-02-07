@@ -677,11 +677,8 @@ async def save_project_context(
 
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
 
-    # Generate project ID from path
-    project_id = hashlib.sha256(project_path.encode()).hexdigest()[:12]
-
-    # Get existing or create new
-    context = await store.get_project_context(project_id)
+    # Look up by path first (handles legacy project IDs)
+    context = await store.get_project_context_by_path(project_path)
 
     if context:
         # Update existing
@@ -699,6 +696,7 @@ async def save_project_context(
         context.last_session_id = telemetry.session_id
     else:
         # Create new
+        project_id = hashlib.sha256(project_path.encode()).hexdigest()[:12]
         name = project_name or Path(project_path).name
         context = ProjectContext(
             project_id=project_id,
@@ -735,12 +733,13 @@ async def add_project_todo(
 
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
 
-    project_id = hashlib.sha256(project_path.encode()).hexdigest()[:12]
-    context = await store.get_project_context(project_id)
+    # Look up by path first (handles legacy project IDs)
+    context = await store.get_project_context_by_path(project_path)
 
     if not context:
         # Create minimal context
         from .models import ProjectContext
+        project_id = hashlib.sha256(project_path.encode()).hexdigest()[:12]
         context = ProjectContext(
             project_id=project_id,
             project_name=Path(project_path).name,
@@ -778,12 +777,10 @@ async def update_project_todo(
         status: New status: pending, in_progress, completed, or blocked
         notes: Updated notes
     """
-    import hashlib
-
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
 
-    project_id = hashlib.sha256(project_path.encode()).hexdigest()[:12]
-    context = await store.get_project_context(project_id)
+    # Look up by path first (handles legacy project IDs)
+    context = await store.get_project_context_by_path(project_path)
 
     if not context:
         return f"No project context found for: {project_path}"

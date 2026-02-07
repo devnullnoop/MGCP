@@ -41,7 +41,7 @@ A Model Context Protocol (MCP) server that exposes a lesson graph plus project c
         ▼             ▼             ▼
 ┌───────────────┐ ┌─────────────┐ ┌─────────────────┐
 │  Graph Store  │ │Vector Store │ │ SQLite/JSON     │
-│  (NetworkX)   │ │ (ChromaDB)  │ │ (Persistence)   │
+│  (NetworkX)   │ │  (Qdrant)   │ │ (Persistence)   │
 └───────────────┘ └─────────────┘ └─────────────────┘
 ```
 
@@ -232,8 +232,8 @@ def get_workflow_step(workflow_id, step_id, expand_lessons) -> WorkflowStep:
 |-----------|--------|-------|
 | MCP Server | FastMCP | Official Python MCP SDK wrapper |
 | Graph Store | NetworkX | In-memory, persisted to JSON |
-| Vector Store | ChromaDB | Local, embedded |
-| Embeddings | sentence-transformers | `all-MiniLM-L6-v2` model |
+| Vector Store | Qdrant | Local embedded or server mode |
+| Embeddings | sentence-transformers | `BAAI/bge-base-en-v1.5` model (768 dim) |
 | Persistence | aiosqlite + JSON | Async SQLite for structured data |
 | Validation | Pydantic | Data models and serialization |
 | Web UI | FastAPI + WebSockets | Dashboard for visualization |
@@ -246,8 +246,8 @@ dependencies = [
     "mcp>=1.0.0",
     "fastmcp>=0.1.0",
     "networkx>=3.0",
-    "chromadb>=0.4.0",
-    "sentence-transformers>=2.2.0",
+    "qdrant-client>=1.12.0",
+    "sentence-transformers>=2.2.2",
     "pydantic>=2.0.0",
     "aiosqlite>=0.19.0",
     "fastapi>=0.100.0",
@@ -271,7 +271,7 @@ dependencies = [
 ### Phase 2: Semantic Search ✅ Complete
 
 - [x] Integrate sentence-transformers for embeddings
-- [x] ChromaDB for vector storage
+- [x] Vector storage (migrated ChromaDB → Qdrant in v1.1.0)
 - [x] Implement `query_lessons(task_description)`
 - [x] Embed lesson triggers + actions for similarity search
 - [x] Relevance scoring and ranking
@@ -324,11 +324,11 @@ MGCP/
 ├── src/
 │   └── mgcp/
 │       ├── __init__.py
-│       ├── server.py            # MCP server (34 tools)
+│       ├── server.py            # MCP server (38 tools)
 │       ├── models.py            # Pydantic models
 │       ├── graph.py             # NetworkX graph operations
-│       ├── vector_store.py      # ChromaDB for lessons
-│       ├── catalogue_vector_store.py  # ChromaDB for catalogue
+│       ├── qdrant_vector_store.py     # Qdrant for lessons
+│       ├── qdrant_catalogue_store.py  # Qdrant for catalogue
 │       ├── persistence.py       # SQLite/JSON storage
 │       ├── telemetry.py         # Usage tracking
 │       ├── web_server.py        # FastAPI dashboard
@@ -371,13 +371,13 @@ MGCP_DATA_DIR=~/.mgcp
 # Database file (default: $MGCP_DATA_DIR/lessons.db)
 MGCP_DB_PATH=~/.mgcp/lessons.db
 
-# ChromaDB directory (default: $MGCP_DATA_DIR/chroma)
-MGCP_CHROMA_DIR=~/.mgcp/chroma
+# Qdrant directory (default: $MGCP_DATA_DIR/qdrant)
+MGCP_QDRANT_DIR=~/.mgcp/qdrant
 ```
 
 Data is stored in `~/.mgcp/` by default:
 - `lessons.db` - SQLite database (lessons, contexts, telemetry)
-- `chroma/` - ChromaDB vector embeddings
+- `qdrant/` - Qdrant vector embeddings
 
 ---
 

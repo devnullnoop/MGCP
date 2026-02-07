@@ -6,54 +6,54 @@
 [![Python](https://img.shields.io/badge/Python-3.11%20|%203.12-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-> **⚠️ Alpha Software** — Actively dogfooding as we build. Working, but APIs may change.
+> **Alpha Software** - Actively dogfooding as we build. Working, but APIs may change.
 
-## The Core Problem
+## The Problem
 
-LLMs are stateless. Every session starts from zero. The AI that helped you debug authentication yesterday has no memory of it today. Lessons learned, project context, architectural decisions—gone.
+LLMs are stateless. Every session starts from zero. The AI that helped you debug authentication yesterday has no memory of it today. Lessons learned, project context, architectural decisions - all gone the moment the session ends.
 
-You've probably experienced this: explaining the same codebase structure repeatedly, watching the AI make a mistake you corrected last week, or losing important context when a session ends.
+You've seen it: explaining the same codebase structure over and over, watching the AI repeat a mistake you corrected last week, losing important context when a session ends.
 
 ## What MGCP Does
 
 MGCP gives your LLM **persistent context that survives session boundaries**.
 
 ```
-Session 1: LLM encounters a bug → adds lesson → stored in database
+Session 1: LLM encounters a bug -> adds lesson -> stored in database
 
 Session 2: LLM has no memory of Session 1
-         → Hook fires: "query lessons before coding"
-         → Semantic search returns relevant lesson
-         → Bug avoided
+         -> Hook fires: "query lessons before coding"
+         -> Semantic search returns relevant lesson
+         -> Bug avoided
 ```
 
 **The primary audience is the LLM, not you.** You configure the system; the LLM reads from and writes to it. The knowledge persists even though the LLM doesn't.
 
-### What makes this powerful:
+### What makes this useful:
 
 - **Semantic search** finds relevant lessons without exact keyword matches
 - **Graph relationships** surface connected knowledge together
-- **Workflows** ensure multi-step processes aren't shortcut
-- **Hooks** make it proactive—reminders fire automatically at key moments
+- **Workflows** ensure multi-step processes don't get shortcut
+- **Hooks** make it proactive - reminders fire automatically at key moments
 - **Project isolation** keeps context separate per codebase
 
 ### What this is NOT:
 
-- Not "AI that learns" — lessons are added explicitly
-- Not self-improving — you/the LLM improve it by adding better content
-- Not magic — it's structured context injection with good tooling
+- Not "AI that learns" - lessons are added explicitly
+- Not self-improving - you (or the LLM) improve it by adding better content
+- Not magic - it's structured context injection with good tooling
 
-**Honest framing:** This is a persistent knowledge store with semantic search, workflow orchestration, and proactive reminders. The value is *continuity*—accumulated guidance that shapes LLM behavior across sessions.
+**Honest framing:** This is a persistent knowledge store with semantic search, workflow orchestration, and proactive reminders. The value is *continuity* - accumulated guidance that shapes LLM behavior across sessions.
 
 ## Real Value Delivered
 
 In active use, MGCP has:
 
-- **Caught bugs before they happened** — lessons from past mistakes surface before repeating them
-- **Kept documentation in sync** — workflow steps enforce doc review before commits
-- **Maintained project context** — picking up exactly where the last session left off
-- **Enforced quality gates** — workflows with checklists prevent skipped steps
-- **Preserved architectural decisions** — rationale survives session boundaries
+- **Caught bugs before they happened** - lessons from past mistakes surface before repeating them
+- **Kept documentation in sync** - workflow steps enforce doc review before commits
+- **Maintained project context** - picking up exactly where the last session left off
+- **Enforced quality gates** - workflows with checklists prevent skipped steps
+- **Preserved architectural decisions** - rationale survives session boundaries
 
 The system isn't intelligent. But an LLM with accumulated context *behaves* more intelligently than one starting fresh every time.
 
@@ -91,10 +91,10 @@ Step-by-step processes with linked lessons:
 ```
 workflow: api-endpoint-development
 steps:
-  1. Design → linked lessons: [api-contract, error-responses]
-  2. Implement → linked lessons: [verify-method-exists]
-  3. Test → linked lessons: [manual-ui-test-required]
-  4. Document → linked lessons: [update-openapi]
+  1. Design -> linked lessons: [api-contract, error-responses]
+  2. Implement -> linked lessons: [verify-method-exists]
+  3. Test -> linked lessons: [manual-ui-test-required]
+  4. Document -> linked lessons: [update-openapi]
 ```
 
 Each step surfaces relevant guidance. Checklists prevent skipping.
@@ -143,7 +143,7 @@ git clone https://github.com/devnullnoop/MGCP.git
 cd MGCP
 python3 -m venv .venv
 source .venv/bin/activate
-python check_install.py --install
+pip install -e .
 ```
 
 ### 2. Configure Your LLM Client
@@ -159,7 +159,10 @@ Supports: Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Continue, Cline, S
 Restart your LLM client. MGCP tools are now available.
 
 ```bash
-# Optional: Start the dashboard
+# Optional: seed starter lessons and workflows
+mgcp-bootstrap
+
+# Optional: start the web dashboard
 mgcp-dashboard
 ```
 
@@ -273,7 +276,7 @@ Without hooks, the LLM must remember to query. With hooks, it happens automatica
 
 ## Beyond Software Development
 
-The architecture is domain-agnostic. Replace our bootstrap with:
+The architecture is domain-agnostic. Replace the bootstrap with your own content:
 
 | Domain | Example Lessons |
 |--------|-----------------|
@@ -285,11 +288,11 @@ The architecture is domain-agnostic. Replace our bootstrap with:
 
 Same tools, different content.
 
-## Potential Applicability to Agentic Workflows
+## Agentic Workflows
 
-> **Note:** We have not built or tested this. Our focus is development workflows. The following is speculation about what the architecture *could* support—not a proven capability.
+> **Note:** We haven't built or tested this. Our focus is development workflows. The following is speculation about what the architecture *could* support.
 
-Any agent operating across invocations faces statelessness. The components here—lessons, workflows, semantic search, hooks—could theoretically address that for agentic systems beyond coding assistants. We haven't tried it, but the pieces are:
+Any agent operating across invocations faces statelessness. The components here - lessons, workflows, semantic search, hooks - could theoretically address that for agentic systems beyond coding assistants. We haven't tried it, but the pieces are there:
 
 | Component | Potential Use |
 |-----------|---------------|
@@ -298,14 +301,14 @@ Any agent operating across invocations faces statelessness. The components here�
 | `workflows` | Multi-step processes with enforcement |
 | Hooks (event triggers) | Inject context at decision points |
 
-This wouldn't be machine learning—it would be **systematic accumulation** through explicit capture. The agent (or human) would need to add lessons when relevant; nothing is automatic.
+This wouldn't be machine learning - it would be **systematic accumulation** through explicit capture. The agent (or human) would need to add lessons when relevant; nothing is automatic.
 
 A hypothetical multi-agent pattern:
 
 ```
-Agent A completes task → explicitly adds lesson about edge case
+Agent A completes task -> explicitly adds lesson about edge case
 
-Agent B starts related task → queries lessons → edge case surfaces
+Agent B starts related task -> queries lessons -> edge case surfaces
 ```
 
 **What would be required to actually try this:**
@@ -313,18 +316,18 @@ Agent B starts related task → queries lessons → edge case surfaces
 - Discipline around lesson capture (garbage in, garbage out)
 - Tuning of triggers to match how your agents describe tasks
 
-If someone tries this, we'd be interested to hear how it goes. The architecture is domain-agnostic; whether it's useful for orchestration is an open question.
+If someone tries this, we'd be interested to hear how it goes.
 
 ## Project Status
 
 | Phase | Status |
 |-------|--------|
-| Basic Storage & Retrieval | ✅ Complete |
-| Semantic Search | ✅ Complete |
-| Graph Traversal | ✅ Complete |
-| Refinement & Learning | ✅ Complete |
-| Quality of Life | ✅ Complete |
-| Proactive Intelligence | 🔄 In Progress |
+| Basic Storage & Retrieval | Complete |
+| Semantic Search | Complete |
+| Graph Traversal | Complete |
+| Refinement & Learning | Complete |
+| Quality of Life | Complete |
+| Proactive Intelligence | In Progress |
 
 ## Contributing
 
@@ -332,7 +335,7 @@ Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-[O'Saasy License](https://osaasy.dev/) — Free to use, modify, distribute.
+[O'Saasy License](https://osaasy.dev/) - Free to use, modify, distribute.
 
 ---
 

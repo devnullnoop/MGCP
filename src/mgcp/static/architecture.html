@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LLM Lesson Memory System - Architecture</title>
+    <title>MGCP - Architecture</title>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <style>
         * {
@@ -13,38 +13,69 @@
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             min-height: 100vh;
-            color: #e0e0e0;
             padding: 2rem;
+            transition: background 0.3s, color 0.3s;
+        }
+        body.dark {
+            background: #0d1117;
+            color: #c9d1d9;
+        }
+        body.light {
+            background: #ffffff;
+            color: #1f2328;
         }
         .container {
-            max-width: 1200px;
+            max-width: 960px;
             margin: 0 auto;
         }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
         h1 {
-            text-align: center;
-            margin-bottom: 0.5rem;
-            color: #fff;
-            font-size: 2rem;
+            font-size: 1.6rem;
+            font-weight: 600;
         }
-        .subtitle {
-            text-align: center;
-            color: #888;
-            margin-bottom: 2rem;
-        }
-        .diagram-section {
-            background: rgba(255, 255, 255, 0.05);
+        body.dark h1 { color: #f0f6fc; }
+        body.light h1 { color: #1f2328; }
+        .version {
+            font-size: 0.8rem;
+            font-weight: 400;
+            padding: 2px 8px;
             border-radius: 12px;
-            padding: 2rem;
-            margin-bottom: 2rem;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            margin-left: 0.75rem;
+            vertical-align: middle;
         }
-        .diagram-section h2 {
-            color: #4fc3f7;
+        body.dark .version { background: #1f6feb33; color: #58a6ff; }
+        body.light .version { background: #ddf4ff; color: #0969da; }
+        .theme-toggle {
+            background: none;
+            border: 1px solid;
+            border-radius: 6px;
+            padding: 4px 12px;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        body.dark .theme-toggle { border-color: #30363d; color: #c9d1d9; }
+        body.light .theme-toggle { border-color: #d0d7de; color: #1f2328; }
+        .diagram-section {
+            border-radius: 8px;
+            padding: 1.5rem;
             margin-bottom: 1.5rem;
-            font-size: 1.3rem;
+            border: 1px solid;
         }
+        body.dark .diagram-section { background: #161b22; border-color: #30363d; }
+        body.light .diagram-section { background: #f6f8fa; border-color: #d0d7de; }
+        .diagram-section h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+        body.dark .diagram-section h2 { color: #f0f6fc; }
+        body.light .diagram-section h2 { color: #1f2328; }
         .mermaid {
             display: flex;
             justify-content: center;
@@ -53,162 +84,178 @@
             display: flex;
             flex-wrap: wrap;
             gap: 1rem;
-            margin-top: 1.5rem;
+            margin-top: 1rem;
             justify-content: center;
+            font-size: 0.85rem;
         }
         .legend-item {
             display: flex;
             align-items: center;
-            gap: 0.5rem;
-            font-size: 0.9rem;
+            gap: 0.4rem;
         }
         .legend-color {
-            width: 16px;
-            height: 16px;
-            border-radius: 4px;
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
         }
-        .color-llm { background: #4fc3f7; }
-        .color-server { background: #81c784; }
-        .color-storage { background: #ffb74d; }
+        .tech-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 0.75rem;
+            margin-top: 1rem;
+        }
+        .tech-item {
+            padding: 0.75rem;
+            border-radius: 6px;
+            border: 1px solid;
+            font-size: 0.85rem;
+        }
+        body.dark .tech-item { background: #0d1117; border-color: #30363d; }
+        body.light .tech-item { background: #ffffff; border-color: #d0d7de; }
+        .tech-item strong {
+            display: block;
+            margin-bottom: 0.25rem;
+            font-size: 0.9rem;
+        }
+        body.dark .tech-item strong { color: #f0f6fc; }
+        body.light .tech-item strong { color: #1f2328; }
+        .tech-item span {
+            font-size: 0.8rem;
+        }
+        body.dark .tech-item span { color: #8b949e; }
+        body.light .tech-item span { color: #656d76; }
     </style>
 </head>
-<body>
+<body class="dark">
     <div class="container">
-        <h1>LLM Lesson Memory System</h1>
-        <p class="subtitle">Architecture Overview</p>
+        <header>
+            <h1>MGCP Architecture <span class="version">v1.2.0</span></h1>
+            <button class="theme-toggle" onclick="toggleTheme()">Toggle theme</button>
+        </header>
 
         <div class="diagram-section">
-            <h2>System Architecture</h2>
+            <h2>System Overview</h2>
             <div class="mermaid">
 flowchart TB
     subgraph Client["Client Layer"]
-        LLM["Claude / LLM"]
+        LLM["Claude / LLM Client"]
     end
 
-    subgraph Protocol["Protocol Layer"]
+    subgraph Protocol["Protocol"]
         MCP["MCP Protocol"]
     end
 
-    subgraph Server["MCP Lesson Server"]
-        QH["Query Handler"]
-        LM["Lesson Manager"]
-        GW["Graph Walker"]
+    subgraph Server["MGCP Server &mdash; 38 MCP Tools"]
+        direction LR
+        subgraph Core["Core"]
+            QH["Query Handler"]
+            LM["Lesson Manager"]
+            GW["Graph Walker"]
+        end
+        subgraph Context["Context"]
+            PC["Project Context"]
+            CT["Catalogue"]
+            WF["Workflows"]
+        end
+        subgraph Intelligence["Intelligence"]
+            CD["Community Detection"]
+            RM["Reminders"]
+            TL["Telemetry"]
+        end
     end
 
     subgraph Storage["Storage Layer"]
-        GS[("Graph Store<br/>(NetworkX)")]
-        VS[("Vector Store<br/>(Qdrant)")]
+        GS[("NetworkX<br/>Graph")]
+        VS[("Qdrant<br/>Vectors")]
+        DB[("SQLite<br/>Persistence")]
     end
 
     LLM <-->|"Tools & Responses"| MCP
-    MCP <--> QH
-    MCP <--> LM
-    MCP <--> GW
+    MCP <--> Server
+
     QH --> GS
     QH --> VS
     LM --> GS
     LM --> VS
+    LM --> DB
     GW --> GS
+    PC --> DB
+    CT --> VS
+    CT --> DB
+    WF --> VS
+    WF --> DB
+    CD --> GS
+    CD --> VS
+    TL --> DB
 
-    style LLM fill:#4fc3f7,stroke:#0288d1,color:#000
-    style MCP fill:#4fc3f7,stroke:#0288d1,color:#000
-    style QH fill:#81c784,stroke:#388e3c,color:#000
-    style LM fill:#81c784,stroke:#388e3c,color:#000
-    style GW fill:#81c784,stroke:#388e3c,color:#000
-    style GS fill:#ffb74d,stroke:#f57c00,color:#000
-    style VS fill:#ffb74d,stroke:#f57c00,color:#000
+    style LLM fill:#58a6ff,stroke:#388bfd,color:#000
+    style MCP fill:#58a6ff,stroke:#388bfd,color:#000
+    style QH fill:#3fb950,stroke:#2ea043,color:#000
+    style LM fill:#3fb950,stroke:#2ea043,color:#000
+    style GW fill:#3fb950,stroke:#2ea043,color:#000
+    style PC fill:#d2a8ff,stroke:#a371f7,color:#000
+    style CT fill:#d2a8ff,stroke:#a371f7,color:#000
+    style WF fill:#d2a8ff,stroke:#a371f7,color:#000
+    style CD fill:#f778ba,stroke:#db61a2,color:#000
+    style RM fill:#f778ba,stroke:#db61a2,color:#000
+    style TL fill:#f778ba,stroke:#db61a2,color:#000
+    style GS fill:#ffa657,stroke:#d29922,color:#000
+    style VS fill:#ffa657,stroke:#d29922,color:#000
+    style DB fill:#ffa657,stroke:#d29922,color:#000
             </div>
             <div class="legend">
                 <div class="legend-item">
-                    <div class="legend-color color-llm"></div>
+                    <div class="legend-color" style="background:#58a6ff"></div>
                     <span>Client & Protocol</span>
                 </div>
                 <div class="legend-item">
-                    <div class="legend-color color-server"></div>
-                    <span>Server Components</span>
+                    <div class="legend-color" style="background:#3fb950"></div>
+                    <span>Core Engine</span>
                 </div>
                 <div class="legend-item">
-                    <div class="legend-color color-storage"></div>
-                    <span>Storage Backends</span>
+                    <div class="legend-color" style="background:#d2a8ff"></div>
+                    <span>Context & Workflows</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background:#f778ba"></div>
+                    <span>Intelligence</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background:#ffa657"></div>
+                    <span>Storage</span>
                 </div>
             </div>
         </div>
 
         <div class="diagram-section">
-            <h2>Lesson Graph Structure</h2>
-            <div class="mermaid">
-flowchart TD
-    ROOT["global-verify-before-assert"]
-
-    API["global-research-apis"]
-    CALC["global-verify-calculations"]
-    TEST["global-test-before-integrate"]
-
-    RUST_CRATE["rust-check-crate-versions"]
-    PY_PYPI["python-check-pypi-versions"]
-    JS_NPM["js-check-npm-versions"]
-
-    RUST_MEM["rust-memory-estimation"]
-    PY_NUMPY["python-numpy-broadcasting"]
-    SANITY["global-sanity-check-magnitude"]
-
-    RUST_TEST["rust-test-with-known-inputs"]
-    PY_TEST["python-test-with-known-inputs"]
-
-    ROOT --> API
-    ROOT --> CALC
-    ROOT --> TEST
-
-    API --> RUST_CRATE
-    API --> PY_PYPI
-    API --> JS_NPM
-
-    CALC --> RUST_MEM
-    CALC --> PY_NUMPY
-    CALC --> SANITY
-
-    TEST --> RUST_TEST
-    TEST --> PY_TEST
-
-    RUST_MEM -.->|related| SANITY
-    RUST_MEM -.->|related| RUST_TEST
-
-    style ROOT fill:#e91e63,stroke:#c2185b,color:#fff
-    style API fill:#9c27b0,stroke:#7b1fa2,color:#fff
-    style CALC fill:#9c27b0,stroke:#7b1fa2,color:#fff
-    style TEST fill:#9c27b0,stroke:#7b1fa2,color:#fff
-            </div>
-        </div>
-
-        <div class="diagram-section">
-            <h2>MCP Interaction Flow</h2>
+            <h2>Query Flow</h2>
             <div class="mermaid">
 sequenceDiagram
-    participant LLM as Claude/LLM
-    participant MCP as MCP Server
-    participant Graph as Graph Store
-    participant Vector as Vector Store
+    participant LLM as Claude / LLM
+    participant MCP as MGCP Server
+    participant V as Qdrant
+    participant G as NetworkX
 
-    Note over LLM: Receives task:<br/>"Implement memory estimation"
+    Note over LLM: Task: "implement auth middleware"
 
-    LLM->>MCP: query_lessons("memory estimation")
-    MCP->>Vector: Semantic search
-    Vector-->>MCP: Matching lesson IDs
-    MCP->>Graph: Fetch lessons
-    Graph-->>MCP: Lesson details
-    MCP-->>LLM: [rust-memory-estimation, ...]
+    LLM->>MCP: query_lessons("auth middleware")
+    MCP->>V: Semantic search (BGE embeddings)
+    V-->>MCP: Matching lesson IDs + scores
+    MCP->>G: Fetch lesson details
+    G-->>MCP: Lessons with relationships
+    MCP-->>LLM: Ranked lessons
 
-    LLM->>MCP: spider_lessons("rust-memory-estimation", depth=1)
-    MCP->>Graph: Walk graph
-    Graph-->>MCP: Related lessons
-    MCP-->>LLM: [global-verify-calculations, ...]
+    LLM->>MCP: spider_lessons("verify-method-exists", depth=2)
+    MCP->>G: Traverse graph
+    G-->>MCP: Related lessons
+    MCP-->>LLM: Connected knowledge
 
-    Note over LLM: Implements with<br/>verification built-in
+    Note over LLM: Implements with lessons applied
 
-    LLM->>MCP: refine_lesson("rust-memory-estimation", "...")
-    MCP->>Graph: Update lesson
-    MCP->>Vector: Update embeddings
-    MCP-->>LLM: Updated lesson
+    LLM->>MCP: refine_lesson("verify-method-exists", "also check middleware order")
+    MCP->>G: Update lesson (version++)
+    MCP->>V: Re-embed updated text
+    MCP-->>LLM: Lesson refined
             </div>
         </div>
 
@@ -221,41 +268,105 @@ classDiagram
         +str trigger
         +str action
         +str rationale
-        +list~Example~ examples
-        +int version
-        +datetime created_at
-        +datetime last_refined
         +list~str~ tags
+        +int version
         +str parent_id
-        +list~str~ related_ids
+        +dict relationships
     }
 
-    class Example {
-        +str label
-        +str code
-        +str explanation
+    class ProjectContext {
+        +str project_path
+        +list~Todo~ todos
+        +list~str~ active_files
+        +list~str~ decisions
+        +str notes
     }
 
-    Lesson "1" --> "*" Example : contains
-    Lesson "0..1" --> "*" Lesson : parent_id
-    Lesson "*" --> "*" Lesson : related_ids
+    class Catalogue {
+        +list arch_notes
+        +list security_notes
+        +list conventions
+        +list couplings
+        +list decisions
+        +list error_patterns
+    }
+
+    class Workflow {
+        +str workflow_id
+        +str name
+        +list~Step~ steps
+        +str trigger
+    }
+
+    Lesson "1" --> "*" Lesson : parent/child
+    Lesson "*" --> "*" Lesson : typed relationships
+    ProjectContext "1" --> "1" Catalogue
+    Workflow "*" --> "*" Lesson : linked at steps
+            </div>
+        </div>
+
+        <div class="diagram-section">
+            <h2>Technology Stack</h2>
+            <div class="tech-grid">
+                <div class="tech-item">
+                    <strong>Qdrant</strong>
+                    <span>Vector search, local or server mode. BGE embeddings (768 dim).</span>
+                </div>
+                <div class="tech-item">
+                    <strong>NetworkX</strong>
+                    <span>In-memory graph. Typed relationships, Louvain community detection.</span>
+                </div>
+                <div class="tech-item">
+                    <strong>SQLite</strong>
+                    <span>Async via aiosqlite. Lessons, contexts, telemetry, communities.</span>
+                </div>
+                <div class="tech-item">
+                    <strong>FastMCP</strong>
+                    <span>MCP server framework. 38 tools exposed to LLM clients.</span>
+                </div>
+                <div class="tech-item">
+                    <strong>sentence-transformers</strong>
+                    <span>BAAI/bge-base-en-v1.5 model. Instruction-prefixed queries.</span>
+                </div>
+                <div class="tech-item">
+                    <strong>FastAPI</strong>
+                    <span>Web dashboard with WebSocket updates and graph visualization.</span>
+                </div>
             </div>
         </div>
     </div>
 
     <script>
-        mermaid.initialize({
-            startOnLoad: true,
-            theme: 'dark',
-            flowchart: {
-                useMaxWidth: true,
-                htmlLabels: true,
-                curve: 'basis'
-            },
-            sequence: {
-                useMaxWidth: true,
-                wrap: true
-            }
+        function toggleTheme() {
+            document.body.classList.toggle('dark');
+            document.body.classList.toggle('light');
+            initMermaid();
+        }
+
+        function initMermaid() {
+            const isDark = document.body.classList.contains('dark');
+            mermaid.initialize({
+                startOnLoad: false,
+                theme: isDark ? 'dark' : 'default',
+                flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' },
+                sequence: { useMaxWidth: true, wrap: true }
+            });
+            document.querySelectorAll('.mermaid').forEach(el => {
+                const original = el.getAttribute('data-original');
+                if (original) {
+                    el.removeAttribute('data-processed');
+                    el.innerHTML = original;
+                }
+            });
+            mermaid.run();
+        }
+
+        // Save original mermaid source before first render
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('.mermaid').forEach(el => {
+                el.setAttribute('data-original', el.innerHTML);
+            });
+            initMermaid();
         });
     </script>
 </body>

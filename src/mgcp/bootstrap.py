@@ -21,7 +21,9 @@ from .persistence import LessonStore
 from .qdrant_vector_store import QdrantVectorStore
 
 
-async def seed_lessons(lessons: list, store: LessonStore, vector_store: QdrantVectorStore, graph: LessonGraph) -> tuple[int, int]:
+async def seed_lessons(
+    lessons: list, store: LessonStore, vector_store: QdrantVectorStore, graph: LessonGraph,
+) -> tuple[int, int]:
     """Seed lessons into the database.
 
     Returns (added, skipped) counts.

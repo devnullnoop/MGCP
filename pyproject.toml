@@ -70,9 +70,6 @@ select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["E741"]  # Allow single-letter variables in comprehensions
 
 [tool.ruff.lint.per-file-ignores]
-"src/mgcp/bootstrap.py" = ["E501"]  # Bootstrap has code examples in strings
-"src/mgcp/bootstrap_core.py" = ["E501"]  # Core MGCP lessons have long content strings
-"src/mgcp/bootstrap_dev.py" = ["E501"]  # Dev lessons have long content strings
 "tests/*" = ["E501", "N806"]  # Tests can have long lines and mock variable names
 
 [tool.pytest.ini_options]

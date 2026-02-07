@@ -10,10 +10,14 @@ API Reference:
 - BGE models: https://huggingface.co/BAAI/bge-base-en-v1.5
 """
 
+from __future__ import annotations
+
 import logging
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
-from sentence_transformers import SentenceTransformer
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger("mgcp.embedding")
 
@@ -33,8 +37,14 @@ def get_embedding_model() -> SentenceTransformer:
     Uses lru_cache to ensure single instance across all stores.
     First call downloads the model (~415MB) if not cached.
     """
+    from sentence_transformers import SentenceTransformer
+
     logger.info(f"Loading embedding model: {MODEL_NAME}")
-    model = SentenceTransformer(MODEL_NAME)
+    try:
+        model = SentenceTransformer(MODEL_NAME, local_files_only=True)
+    except OSError:
+        # First run: download the model
+        model = SentenceTransformer(MODEL_NAME)
     logger.info(f"Embedding model loaded (dimension={EMBEDDING_DIMENSION})")
     return model
 

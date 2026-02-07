@@ -425,7 +425,8 @@ class LessonStore:
                     project_id, project_name, project_path, catalogue, todos, active_files,
                     recent_decisions, last_session_id, last_accessed, session_count, notes
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(project_id) DO UPDATE SET
+                ON CONFLICT(project_path) DO UPDATE SET
+                    project_id = excluded.project_id,
                     project_name = excluded.project_name,
                     catalogue = excluded.catalogue,
                     todos = excluded.todos,

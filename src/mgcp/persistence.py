@@ -1,6 +1,7 @@
 """SQLite persistence layer for MGCP lessons and telemetry."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -117,7 +118,67 @@ CREATE TABLE IF NOT EXISTS community_summaries (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS lesson_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lesson_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    trigger TEXT NOT NULL,
+    action TEXT NOT NULL,
+    rationale TEXT,
+    tags JSON NOT NULL DEFAULT '[]',
+    timestamp TEXT NOT NULL,
+    refinement_reason TEXT,
+    session_id TEXT,
+    FOREIGN KEY (lesson_id) REFERENCES lessons(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_lesson_versions_lesson ON lesson_versions(lesson_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_lesson_versions_unique ON lesson_versions(lesson_id, version);
+
+CREATE TABLE IF NOT EXISTS context_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    session_number INTEGER NOT NULL,
+    timestamp TEXT NOT NULL,
+    notes TEXT,
+    active_files JSON NOT NULL DEFAULT '[]',
+    todos JSON NOT NULL DEFAULT '[]',
+    recent_decisions JSON NOT NULL DEFAULT '[]',
+    catalogue_hash TEXT,
+    catalogue_delta JSON,
+    FOREIGN KEY (project_id) REFERENCES project_contexts(project_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_context_history_project ON context_history(project_id);
+CREATE INDEX IF NOT EXISTS idx_context_history_time ON context_history(timestamp);
+
+CREATE TABLE IF NOT EXISTS rem_state (
+    operation TEXT PRIMARY KEY,
+    last_run_session INTEGER NOT NULL DEFAULT 0,
+    last_run_timestamp TEXT NOT NULL,
+    last_run_result JSON,
+    next_due_session INTEGER
+);
 """
+
+
+def _compute_catalogue_delta(prev_json: str, new_json: str) -> dict:
+    """Compute a simple delta between two catalogue JSON strings.
+
+    Returns a dict with 'changed' keys mapping to their new values.
+    Only includes top-level keys that actually differ.
+    """
+    prev = json.loads(prev_json)
+    new = json.loads(new_json)
+    delta = {}
+    all_keys = set(prev.keys()) | set(new.keys())
+    for key in all_keys:
+        old_val = prev.get(key)
+        new_val = new.get(key)
+        if old_val != new_val:
+            delta[key] = new_val
+    return delta
 
 
 class LessonStore:
@@ -296,9 +357,38 @@ class LessonStore:
             rows = await cursor.fetchall()
             return [self._row_to_lesson(row) for row in rows]
 
-    async def update_lesson(self, lesson: Lesson) -> None:
-        """Update an existing lesson."""
+    async def update_lesson(
+        self, lesson: Lesson, refinement_reason: str | None = None
+    ) -> None:
+        """Update an existing lesson, snapshotting previous version first."""
         async with self._connection(commit=True) as conn:
+            # Snapshot current state into lesson_versions before overwriting
+            cursor = await conn.execute(
+                "SELECT id, version, trigger, action, rationale, tags FROM lessons WHERE id = ?",
+                (lesson.id,),
+            )
+            prev = await cursor.fetchone()
+            if prev and prev["version"] < lesson.version:
+                await conn.execute(
+                    """
+                    INSERT OR IGNORE INTO lesson_versions (
+                        lesson_id, version, trigger, action, rationale, tags,
+                        timestamp, refinement_reason, session_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        prev["id"],
+                        prev["version"],
+                        prev["trigger"],
+                        prev["action"],
+                        prev["rationale"],
+                        prev["tags"],
+                        datetime.now(UTC).isoformat(),
+                        refinement_reason,
+                        None,  # session_id populated by caller if available
+                    ),
+                )
+
             await conn.execute(
                 """
                 UPDATE lessons SET
@@ -417,8 +507,26 @@ class LessonStore:
             return self._row_to_project_context(row)
 
     async def save_project_context(self, context: ProjectContext) -> None:
-        """Save or update project context."""
+        """Save or update project context and append to history."""
+        catalogue_json = json.dumps(context.catalogue.model_dump(mode="json"))
+        todos_json = json.dumps([t.model_dump(mode="json") for t in context.todos])
+        active_files_json = json.dumps(context.active_files)
+        decisions_json = json.dumps(context.recent_decisions)
+
         async with self._connection(commit=True) as conn:
+            # Fetch previous catalogue hash for delta computation
+            prev_hash = None
+            prev_catalogue_json = None
+            cursor = await conn.execute(
+                "SELECT catalogue FROM project_contexts WHERE project_path = ?",
+                (context.project_path,),
+            )
+            row = await cursor.fetchone()
+            if row and row["catalogue"]:
+                prev_catalogue_json = row["catalogue"]
+                prev_hash = hashlib.sha256(prev_catalogue_json.encode()).hexdigest()
+
+            # Upsert current state (existing behavior)
             await conn.execute(
                 """
                 INSERT INTO project_contexts (
@@ -441,16 +549,46 @@ class LessonStore:
                     context.project_id,
                     context.project_name,
                     context.project_path,
-                    json.dumps(context.catalogue.model_dump(mode="json")),
-                    json.dumps([t.model_dump(mode="json") for t in context.todos]),
-                    json.dumps(context.active_files),
-                    json.dumps(context.recent_decisions),
+                    catalogue_json,
+                    todos_json,
+                    active_files_json,
+                    decisions_json,
                     context.last_session_id,
                     context.last_accessed.isoformat(),
                     context.session_count,
                     context.notes,
                 ),
             )
+
+            # Append to context_history
+            new_hash = hashlib.sha256(catalogue_json.encode()).hexdigest()
+            catalogue_delta = None
+            if prev_hash and prev_hash != new_hash and prev_catalogue_json:
+                catalogue_delta = json.dumps(
+                    _compute_catalogue_delta(prev_catalogue_json, catalogue_json)
+                )
+
+            await conn.execute(
+                """
+                INSERT INTO context_history (
+                    project_id, session_number, timestamp, notes,
+                    active_files, todos, recent_decisions,
+                    catalogue_hash, catalogue_delta
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    context.project_id,
+                    context.session_count,
+                    datetime.now(UTC).isoformat(),
+                    context.notes,
+                    active_files_json,
+                    todos_json,
+                    decisions_json,
+                    new_hash,
+                    catalogue_delta,
+                ),
+            )
+
             logger.debug(f"Saved project context: {context.project_name}")
 
     async def get_all_project_contexts(self) -> list[ProjectContext]:
@@ -489,6 +627,85 @@ class LessonStore:
             session_count=row["session_count"],
             notes=row["notes"],
         )
+
+    # =========================================================================
+    # Version History Methods (REM cycle - not used during normal sessions)
+    # =========================================================================
+
+    async def get_lesson_versions(self, lesson_id: str) -> list[dict]:
+        """Get all version snapshots for a lesson, ordered oldest to newest.
+
+        This is for REM cycle analysis and finetuning data extraction only.
+        Normal lesson retrieval uses get_lesson() which returns current state.
+        """
+        async with self._connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT * FROM lesson_versions
+                WHERE lesson_id = ?
+                ORDER BY version ASC
+                """,
+                (lesson_id,),
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def get_context_history(
+        self, project_id: str, limit: int = 50
+    ) -> list[dict]:
+        """Get context history snapshots for a project, most recent first.
+
+        This is for REM cycle analysis only. Normal context retrieval uses
+        get_project_context() which returns current state.
+        """
+        async with self._connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT * FROM context_history
+                WHERE project_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (project_id, limit),
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def get_rem_state(self) -> list[dict]:
+        """Get the current state of all REM operations."""
+        async with self._connection() as conn:
+            cursor = await conn.execute("SELECT * FROM rem_state ORDER BY operation")
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def update_rem_state(
+        self,
+        operation: str,
+        session_number: int,
+        result: dict | None = None,
+        next_due: int | None = None,
+    ) -> None:
+        """Update the state of a REM operation after it runs."""
+        async with self._connection(commit=True) as conn:
+            await conn.execute(
+                """
+                INSERT INTO rem_state
+                    (operation, last_run_session, last_run_timestamp, last_run_result, next_due_session)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(operation) DO UPDATE SET
+                    last_run_session = excluded.last_run_session,
+                    last_run_timestamp = excluded.last_run_timestamp,
+                    last_run_result = excluded.last_run_result,
+                    next_due_session = excluded.next_due_session
+                """,
+                (
+                    operation,
+                    session_number,
+                    datetime.now(UTC).isoformat(),
+                    json.dumps(result) if result else None,
+                    next_due,
+                ),
+            )
 
     # =========================================================================
     # Workflow Methods

@@ -1,0 +1,183 @@
+model: claude-haiku-4-5-20251001
+prompt: "Classify the user's message into zero or more intents. Only include intents\n\
+  where the user is clearly performing or requesting that action \u2014 not merely\n\
+  mentioning the topic in passing.\n\nIntents:\n- git_operation: User wants to commit,\
+  \ push, merge, deploy, create a PR, or ship code\n- catalogue_dependency: User mentions\
+  \ adopting, installing, or choosing a library/package/framework\n- catalogue_security:\
+  \ User identifies a security vulnerability, auth weakness, or exploit risk\n- catalogue_decision:\
+  \ User announces a technical choice (\"went with X over Y\", \"decided on X\")\n\
+  - catalogue_arch_note: User flags a gotcha, quirk, caveat, or surprising behavior\n\
+  - catalogue_convention: User states a coding rule, naming convention, or style standard\n\
+  - task_start: User wants to fix, implement, build, refactor, debug, or set up something\n\
+  \nIf none apply, return: none\n\nRespond with ONLY the intent label(s), comma-separated.\
+  \ No explanation."
+classifications:
+- text: let's commit this
+  intents:
+  - git_operation
+- text: push to main
+  intents:
+  - git_operation
+- text: create a pull request
+  intents:
+  - git_operation
+- text: merge the feature branch
+  intents:
+  - git_operation
+- text: I installed the requests library for HTTP calls
+  intents:
+  - catalogue_dependency
+- text: we chose FastAPI as our framework
+  intents:
+  - catalogue_decision
+- text: there's a security concern about the auth module
+  intents:
+  - catalogue_security
+- text: the exploit creates a risk for our login endpoint
+  intents:
+  - catalogue_security
+- text: decided to use PostgreSQL over SQLite for the backend
+  intents:
+  - catalogue_decision
+- text: went with Redis instead of Memcached for caching
+  intents:
+  - catalogue_decision
+- text: watch out for the race condition in the queue handler
+  intents:
+  - catalogue_arch_note
+- text: there's a gotcha with the connection pool timeout
+  intents:
+  - catalogue_arch_note
+- text: we always use snake_case for function names
+  intents:
+  - catalogue_convention
+- text: the convention is to never use wildcard imports
+  intents:
+  - catalogue_convention
+- text: fix the bug in the login flow
+  intents:
+  - task_start
+- text: implement the export feature
+  intents:
+  - task_start
+- text: refactor the database module
+  intents:
+  - task_start
+- text: build the new API endpoint
+  intents:
+  - task_start
+- text: can you add a dark mode toggle
+  intents:
+  - task_start
+- text: let's set up the CI pipeline
+  intents:
+  - task_start
+- text: ship it
+  intents:
+  - git_operation
+- text: send it upstream
+  intents:
+  - git_operation
+- text: land the changes
+  intents:
+  - git_operation
+- text: get this into production
+  intents:
+  - git_operation
+- text: we need something to handle PDF generation
+  intents:
+  - catalogue_dependency
+  - task_start
+- text: I found a package that does exactly what we need for email
+  intents:
+  - catalogue_dependency
+- text: the login page is wide open to injection
+  intents:
+  - catalogue_security
+- text: anyone could bypass the rate limiter
+  intents:
+  - catalogue_security
+- text: I landed on using WebSockets for real-time updates
+  intents:
+  - catalogue_decision
+- text: after weighing the options, monorepo makes more sense
+  intents:
+  - catalogue_decision
+- text: heads up, the ORM silently drops NULL columns
+  intents:
+  - catalogue_arch_note
+- text: be careful, the API returns 200 even on errors
+  intents:
+  - catalogue_arch_note
+- text: the codebase looks messy, let's clean it up
+  intents:
+  - task_start
+- text: this module needs some love
+  intents:
+  - none
+- text: make the search faster
+  intents:
+  - task_start
+- text: the git book was really interesting
+  intents:
+  - none
+- text: push back on that idea
+  intents:
+  - none
+- text: I'll commit to reviewing it tomorrow
+  intents:
+  - none
+- text: the security guard at the office is friendly
+  intents:
+  - none
+- text: let's not fix what isn't broken
+  intents:
+  - none
+- text: I decided to go for a walk
+  intents:
+  - none
+- text: commit this security fix
+  intents:
+  - git_operation
+- text: push the PR, I added the new auth library
+  intents:
+  - catalogue_dependency
+  - git_operation
+- text: fix the vulnerability and deploy it
+  intents:
+  - git_operation
+  - task_start
+- text: decided to use pytest over unittest, let's set it up
+  intents:
+  - catalogue_decision
+  - task_start
+- text: thanks
+  intents:
+  - none
+- text: ok
+  intents:
+  - none
+- text: sounds good
+  intents:
+  - none
+- text: what does this function do?
+  intents:
+  - none
+- text: can you explain this error message?
+  intents:
+  - none
+- text: the tests are failing
+  intents:
+  - none
+- text: something is wrong with the deploy
+  intents:
+  - task_start
+- text: npm install keeps crashing
+  intents:
+  - task_start
+- text: we should follow the Google style guide
+  intents:
+  - catalogue_convention
+- text: the tricky part is the async initialization
+  intents:
+  - catalogue_arch_note

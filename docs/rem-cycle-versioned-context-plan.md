@@ -1,4 +1,4 @@
-# REM: Recalculate Everything in Memory
+# REM: Recalibrate Everything in Memory
 
 ## Versioned Context & Periodic Knowledge Consolidation
 

@@ -166,7 +166,7 @@ mgcp-bootstrap
 mgcp-dashboard
 ```
 
-## MCP Tools (38 total)
+## MCP Tools (41 total)
 
 ### Lesson Discovery (5)
 | Tool | Purpose |
@@ -227,6 +227,13 @@ mgcp-dashboard
 | `detect_communities` | Auto-detect topic clusters via Louvain |
 | `save_community_summary` | Persist LLM-generated community summary |
 | `search_communities` | Semantic search community summaries |
+
+### REM Cycle (3)
+| Tool | Purpose |
+|------|---------|
+| `rem_run` | Run consolidation cycle (staleness, duplicates, communities) |
+| `rem_report` | View last cycle's findings |
+| `rem_status` | Show schedule state and what's due |
 
 ### Reminders (2)
 | Tool | Purpose |

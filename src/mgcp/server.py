@@ -479,8 +479,8 @@ async def refine_lesson(
     lesson.version += 1
     lesson.last_refined = datetime.now(UTC)
 
-    # Save
-    await store.update_lesson(lesson)
+    # Save (pass refinement reason for version history)
+    await store.update_lesson(lesson, refinement_reason=refinement)
     vector_store.add_lesson(lesson)  # Re-index
 
     # Log
@@ -2106,6 +2106,131 @@ async def reset_reminder_state() -> str:
 
     reset_state()
     return "Reminder state reset. Call count: 0, no scheduled reminders."
+
+
+# ============================================================================
+# REM CYCLE TOOLS
+# ============================================================================
+
+
+@mcp.tool()
+async def rem_run(
+    operations: str = "",
+) -> str:
+    """Trigger a REM (Recalibrate Everything in Memory) cycle.
+
+    Runs periodic consolidation operations: staleness scan, duplicate detection,
+    community detection, knowledge extraction. Each finding is returned for
+    interactive review.
+
+    Args:
+        operations: Comma-separated list of operations to run. Empty = run all due.
+                   Options: staleness_scan, duplicate_detection, community_detection,
+                   knowledge_extraction, context_summary
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    from .rem_cycle import RemEngine
+
+    engine = RemEngine(store=store)
+
+    # Get current session count from the first project context
+    projects = await store.get_all_project_contexts()
+    session_number = max((p.session_count for p in projects), default=1)
+
+    ops = [o.strip() for o in operations.split(",") if o.strip()] if operations else None
+
+    report = await engine.run(session_number=session_number, operations=ops)
+
+    # Format report as readable output
+    lines = [
+        f"## REM Cycle Report (Session {report.session_number})",
+        f"Duration: {report.duration_ms:.0f}ms",
+        f"Operations run: {', '.join(report.operations_run) or 'none'}",
+        f"Operations skipped: {', '.join(report.operations_skipped) or 'none'}",
+        "",
+    ]
+
+    if not report.findings:
+        lines.append("No findings. Knowledge base looks healthy.")
+    else:
+        lines.append(f"### {len(report.findings)} Finding(s)\n")
+        for i, finding in enumerate(report.findings, 1):
+            lines.append(f"**{i}. [{finding.operation}] {finding.title}**")
+            lines.append(finding.description)
+            if finding.options:
+                lines.append("\nOptions:")
+                for j, opt in enumerate(finding.options):
+                    rec = " (Recommended)" if j == finding.recommended else ""
+                    lines.append(f"  {j + 1}. {opt['label']}{rec} - {opt['description']}")
+            lines.append("")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def rem_report() -> str:
+    """View the last REM cycle's findings without running a new one.
+
+    Shows schedule state and results from the most recent run of each operation.
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    states = await store.get_rem_state()
+
+    if not states:
+        return "No REM cycles have been run yet. Use rem_run to trigger one."
+
+    lines = ["## REM Cycle Status\n"]
+    for state in states:
+        lines.append(f"**{state['operation']}**")
+        lines.append(f"  Last run: session {state['last_run_session']} ({state['last_run_timestamp'][:19]})")
+        if state.get("next_due_session"):
+            lines.append(f"  Next due: session {state['next_due_session']}")
+        if state.get("last_run_result"):
+            import json
+            try:
+                result = json.loads(state["last_run_result"])
+                lines.append(f"  Result: {result}")
+            except (json.JSONDecodeError, TypeError):
+                pass
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def rem_status() -> str:
+    """Show REM schedule state: what ran when, what's due next.
+
+    Displays all configured operations with their scheduling strategy,
+    last run time, and next due session.
+    """
+    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    from .rem_cycle import RemEngine
+
+    engine = RemEngine(store=store)
+    status = await engine.get_status()
+
+    # Get current session number
+    projects = await store.get_all_project_contexts()
+    current = max((p.session_count for p in projects), default=0)
+
+    lines = [
+        f"## REM Schedule (Current Session: {current})\n",
+        "| Operation | Strategy | Last Run | Next Due | Status |",
+        "|-----------|----------|----------|----------|--------|",
+    ]
+
+    for s in status:
+        last = f"Session {s['last_run_session']}" if s["last_run_session"] else "Never"
+        next_s = f"Session {s['next_due_session']}" if s.get("next_due_session") else "?"
+        is_due = s.get("next_due_session") and current >= s["next_due_session"]
+        status_str = "DUE" if is_due else "OK"
+        lines.append(
+            f"| {s['operation']} | {s['strategy']} | {last} | {next_s} | {status_str} |"
+        )
+
+    return "\n".join(lines)
 
 
 # ============================================================================

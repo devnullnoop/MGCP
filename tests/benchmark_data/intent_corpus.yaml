@@ -1,0 +1,263 @@
+# Intent Routing Benchmark Corpus
+#
+# Ground-truth labeled user messages for testing intent classifiers.
+# Each message has:
+#   - text: The user message as-is
+#   - intents: List of ground-truth intent labels
+#   - category: Test category (direct, indirect, false_positive, multi_intent, no_intent, edge_case)
+#
+# Intent Labels:
+#   git_operation        - Commit, push, PR, merge, deploy
+#   catalogue_dependency - Library/package/framework mentions
+#   catalogue_security   - Security vulnerabilities, auth concerns
+#   catalogue_decision   - "Went with X over Y" style choices
+#   catalogue_arch_note  - Gotchas, quirks, caveats
+#   catalogue_convention - Naming, style, coding rules
+#   task_start           - Fix, implement, refactor, build
+#   none                 - No actionable intent
+
+messages:
+
+  # ===========================================================================
+  # DIRECT PHRASINGS (~20) — obvious matches both systems should catch
+  # ===========================================================================
+
+  - text: "let's commit this"
+    intents: [git_operation]
+    category: direct
+
+  - text: "push to main"
+    intents: [git_operation]
+    category: direct
+
+  - text: "create a pull request"
+    intents: [git_operation]
+    category: direct
+
+  - text: "merge the feature branch"
+    intents: [git_operation]
+    category: direct
+
+  - text: "I installed the requests library for HTTP calls"
+    intents: [catalogue_dependency]
+    category: direct
+
+  - text: "we chose FastAPI as our framework"
+    intents: [catalogue_dependency]
+    category: direct
+
+  - text: "there's a security concern about the auth module"
+    intents: [catalogue_security]
+    category: direct
+
+  - text: "the exploit creates a risk for our login endpoint"
+    intents: [catalogue_security]
+    category: direct
+
+  - text: "decided to use PostgreSQL over SQLite for the backend"
+    intents: [catalogue_decision]
+    category: direct
+
+  - text: "went with Redis instead of Memcached for caching"
+    intents: [catalogue_decision]
+    category: direct
+
+  - text: "watch out for the race condition in the queue handler"
+    intents: [catalogue_arch_note]
+    category: direct
+
+  - text: "there's a gotcha with the connection pool timeout"
+    intents: [catalogue_arch_note]
+    category: direct
+
+  - text: "we always use snake_case for function names"
+    intents: [catalogue_convention]
+    category: direct
+
+  - text: "the convention is to never use wildcard imports"
+    intents: [catalogue_convention]
+    category: direct
+
+  - text: "fix the bug in the login flow"
+    intents: [task_start]
+    category: direct
+
+  - text: "implement the export feature"
+    intents: [task_start]
+    category: direct
+
+  - text: "refactor the database module"
+    intents: [task_start]
+    category: direct
+
+  - text: "build the new API endpoint"
+    intents: [task_start]
+    category: direct
+
+  - text: "can you add a dark mode toggle"
+    intents: [task_start]
+    category: direct
+
+  - text: "let's set up the CI pipeline"
+    intents: [task_start]
+    category: direct
+
+  # ===========================================================================
+  # INDIRECT PHRASINGS (~15) — natural language that regex will miss
+  # ===========================================================================
+
+  - text: "ship it"
+    intents: [git_operation]
+    category: indirect
+
+  - text: "send it upstream"
+    intents: [git_operation]
+    category: indirect
+
+  - text: "land the changes"
+    intents: [git_operation]
+    category: indirect
+
+  - text: "get this into production"
+    intents: [git_operation]
+    category: indirect
+
+  - text: "we need something to handle PDF generation"
+    intents: [catalogue_dependency]
+    category: indirect
+
+  - text: "I found a package that does exactly what we need for email"
+    intents: [catalogue_dependency]
+    category: indirect
+
+  - text: "the login page is wide open to injection"
+    intents: [catalogue_security]
+    category: indirect
+
+  - text: "anyone could bypass the rate limiter"
+    intents: [catalogue_security]
+    category: indirect
+
+  - text: "I landed on using WebSockets for real-time updates"
+    intents: [catalogue_decision]
+    category: indirect
+
+  - text: "after weighing the options, monorepo makes more sense"
+    intents: [catalogue_decision]
+    category: indirect
+
+  - text: "heads up, the ORM silently drops NULL columns"
+    intents: [catalogue_arch_note]
+    category: indirect
+
+  - text: "be careful, the API returns 200 even on errors"
+    intents: [catalogue_arch_note]
+    category: indirect
+
+  - text: "the codebase looks messy, let's clean it up"
+    intents: [task_start]
+    category: indirect
+
+  - text: "this module needs some love"
+    intents: [task_start]
+    category: indirect
+
+  - text: "make the search faster"
+    intents: [task_start]
+    category: indirect
+
+  # ===========================================================================
+  # FALSE POSITIVES (~6) — keyword traps that should NOT trigger
+  # ===========================================================================
+
+  - text: "the git book was really interesting"
+    intents: [none]
+    category: false_positive
+
+  - text: "push back on that idea"
+    intents: [none]
+    category: false_positive
+
+  - text: "I'll commit to reviewing it tomorrow"
+    intents: [none]
+    category: false_positive
+
+  - text: "the security guard at the office is friendly"
+    intents: [none]
+    category: false_positive
+
+  - text: "let's not fix what isn't broken"
+    intents: [none]
+    category: false_positive
+
+  - text: "I decided to go for a walk"
+    intents: [none]
+    category: false_positive
+
+  # ===========================================================================
+  # MULTI-INTENT (~4) — messages with 2+ intents
+  # ===========================================================================
+
+  - text: "commit this security fix"
+    intents: [git_operation, task_start]
+    category: multi_intent
+
+  - text: "push the PR, I added the new auth library"
+    intents: [git_operation, catalogue_dependency]
+    category: multi_intent
+
+  - text: "fix the vulnerability and deploy it"
+    intents: [task_start, catalogue_security]
+    category: multi_intent
+
+  - text: "decided to use pytest over unittest, let's set it up"
+    intents: [catalogue_decision, task_start]
+    category: multi_intent
+
+  # ===========================================================================
+  # NO INTENT (~5) — neutral messages that should return nothing
+  # ===========================================================================
+
+  - text: "thanks"
+    intents: [none]
+    category: no_intent
+
+  - text: "ok"
+    intents: [none]
+    category: no_intent
+
+  - text: "sounds good"
+    intents: [none]
+    category: no_intent
+
+  - text: "what does this function do?"
+    intents: [none]
+    category: no_intent
+
+  - text: "can you explain this error message?"
+    intents: [none]
+    category: no_intent
+
+  # ===========================================================================
+  # EDGE CASES (~5) — ambiguous or context-dependent
+  # ===========================================================================
+
+  - text: "the tests are failing"
+    intents: [task_start]
+    category: edge_case
+
+  - text: "something is wrong with the deploy"
+    intents: [task_start]
+    category: edge_case
+
+  - text: "npm install keeps crashing"
+    intents: [catalogue_dependency, task_start]
+    category: edge_case
+
+  - text: "we should follow the Google style guide"
+    intents: [catalogue_convention]
+    category: edge_case
+
+  - text: "the tricky part is the async initialization"
+    intents: [catalogue_arch_note]
+    category: edge_case

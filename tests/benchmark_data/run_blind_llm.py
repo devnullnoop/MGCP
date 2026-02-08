@@ -83,7 +83,7 @@ def main():
         corpus = yaml.safe_load(f)["messages"]
 
     print(f"Classifying {len(corpus)} messages with {model}...")
-    print(f"Estimated cost: ~$0.01 (55 haiku calls)\n")
+    print("Estimated cost: ~$0.01 (55 haiku calls)\n")
 
     classifications = []
     for i, msg in enumerate(corpus):

@@ -357,7 +357,7 @@ Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-[O'Saasy License](https://osaasy.dev/) - Free to use, modify, distribute.
+[O'Saasy License](https://osaasy.dev/) - Free for individual and internal use; commercial SaaS requires a license.
 
 ---
 

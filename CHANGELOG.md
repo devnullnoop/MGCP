@@ -150,7 +150,9 @@ mgcp-migrate --dry-run    # Preview first
 - Duplicate detection
 - Proactive hooks (UserPromptSubmit)
 
-### Phase 6: Proactive Intelligence (Planned)
-- Automatic lesson suggestions
-- Pattern detection
-- Cross-project knowledge transfer
+### Phase 6: Proactive Intelligence (Complete)
+- Intent-based LLM self-routing (replaces regex hooks, 87% accuracy)
+- REM cycle engine (staleness scan, duplicate detection, community detection, knowledge extraction)
+- Versioned context history and lesson version snapshots
+- Workflow state management and scheduled reminders
+- Community detection with Louvain algorithm

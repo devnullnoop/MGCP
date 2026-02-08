@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **MGCP** (Memory Graph Core Primitives) is a Python MCP server providing persistent, graph-based memory for LLM interactions. The system stores lessons learned during LLM sessions in a graph structure, allowing semantic querying without loading full context histories.
 
-**Status**: v2.0.0 - Alpha/Research project. Phases 1-6 complete, actively dogfooding.
+**Status**: v2.0.0 - Alpha/Research project. Phases 1-7 complete, actively dogfooding.
 
 ## Documentation Preferences
 
@@ -228,4 +228,4 @@ The key insight: LLM self-routing (87% accuracy) outperforms regex (58%), is sim
 4. ~~Phase 4: Refinement, versioning, and learning loops~~ Complete
 5. ~~Phase 5: Quality of Life~~ Complete - Multi-client support, export/import, backup/restore, proactive hooks
 6. ~~Phase 6: Proactive Intelligence~~ Complete - Intent-based LLM self-routing, REM intent calibration, workflow state management
-7. Phase 7: Feedback Loops (planned) - Auto-suggestions, git integration, telemetry-driven refinement
+7. ~~Phase 7: Feedback Loops~~ Complete - REM cycle engine (staleness scan, duplicate detection, community detection, knowledge extraction), versioned context history, lesson version snapshots, scheduled reminders

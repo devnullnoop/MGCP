@@ -13,7 +13,6 @@ import json
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 import pytest
@@ -293,7 +292,7 @@ class TestUpdateWorkflowState:
 
     def test_activate_workflow(self):
         """Setting active_workflow updates state correctly."""
-        from mgcp.reminder_state import load_state, save_state, update_workflow_state
+        from mgcp.reminder_state import save_state, update_workflow_state
 
         with backup_and_restore_state():
             save_state({"current_call_count": 0})
@@ -338,6 +337,7 @@ class TestIntentCalibration:
     def test_intent_calibration_detects_unmapped(self):
         """REM operation detects communities with unmapped tags."""
         import asyncio
+
         from mgcp.persistence import LessonStore
         from mgcp.rem_cycle import RemEngine
 
@@ -386,10 +386,6 @@ class TestIntentCalibration:
 
             findings = asyncio.run(run())
             # Should find unmapped tags like "workflow" and "process-management"
-            unmapped_found = any(
-                f.operation == "intent_calibration" and "unmapped" in f.title.lower()
-                for f in findings
-            )
             # This may or may not produce findings depending on community detection
             # (small graph may not cluster well), but it shouldn't crash
             assert isinstance(findings, list)
@@ -406,6 +402,7 @@ class TestIntentCalibration:
     def test_rem_engine_routes_to_intent_calibration(self):
         """RemEngine._run_operation dispatches to _intent_calibration."""
         import asyncio
+
         from mgcp.persistence import LessonStore
         from mgcp.rem_cycle import RemEngine
 

@@ -413,13 +413,7 @@ class RemEngine:
         """
         from .graph import LessonGraph
 
-        KNOWN_INTENTS = {
-            "git_operation", "catalogue_dependency", "catalogue_security",
-            "catalogue_decision", "catalogue_arch_note", "catalogue_convention",
-            "task_start",
-        }
-
-        TAG_TO_INTENT = {
+        tag_to_intent = {
             "git": "git_operation",
             "version-control": "git_operation",
             "branching": "git_operation",
@@ -477,8 +471,8 @@ class RemEngine:
                 continue
 
             # Map tags to known intents
-            matched_intents = {TAG_TO_INTENT.get(t.lower()) for t in tags} - {None}
-            unmatched_tags = {t for t in tags if t.lower() not in TAG_TO_INTENT}
+            matched_intents = {tag_to_intent.get(t.lower()) for t in tags} - {None}
+            unmatched_tags = {t for t in tags if t.lower() not in tag_to_intent}
 
             if unmatched_tags and comm.get("size", 0) >= 3:
                 findings.append(RemFinding(

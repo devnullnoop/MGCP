@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **MGCP** (Memory Graph Core Primitives) is a Python MCP server providing persistent, graph-based memory for LLM interactions. The system stores lessons learned during LLM sessions in a graph structure, allowing semantic querying without loading full context histories.
 
-**Status**: v1.2.0 - Alpha/Research project. Phases 1-5 complete, actively dogfooding.
+**Status**: v2.0.0 - Alpha/Research project. Phases 1-6 complete, actively dogfooding.
 
 ## Documentation Preferences
 
@@ -85,7 +85,7 @@ The system flows from Claude/LLM through MCP Protocol to the MGCP Server, which 
 
 All source files are in `src/mgcp/`:
 
-- `server.py` - MCP server with 41 tools
+- `server.py` - MCP server with 42 tools
 - `models.py` - Pydantic models (Lesson, ProjectContext, ProjectCatalogue, SecurityNote, Convention, etc.)
 - `graph.py` - NetworkX graph operations with typed relationships and Louvain community detection
 - `embedding.py` - Centralized BGE embedding model (`BAAI/bge-base-en-v1.5`)
@@ -125,7 +125,7 @@ All source files are in `src/mgcp/`:
 - Decisions with rationale
 - Error patterns with solutions
 
-### MCP Tools (41 total)
+### MCP Tools (42 total)
 
 **Lesson Discovery & Retrieval (5):**
 - `query_lessons` - Semantic search for relevant lessons
@@ -180,6 +180,9 @@ All source files are in `src/mgcp/`:
 - `rem_report` - View last cycle's findings
 - `rem_status` - Show schedule state and what's due
 
+**Workflow State (1):**
+- `update_workflow_state` - Update active workflow, current step, and completion status
+
 **Reminder Control (2):**
 - `schedule_reminder` - Schedule self-directed reminders for workflow continuity
 - `reset_reminder_state` - Reset reminder state to defaults
@@ -204,19 +207,18 @@ Data is stored in `~/.mgcp/` by default.
 
 ## Claude Code Hooks
 
-MGCP uses Claude Code hooks to make lessons proactive rather than passive:
+MGCP v2.0 uses intent-based LLM self-routing instead of regex pattern matching. The LLM classifies each user message into 7 intent categories and follows an intent-action map to call the right tools.
 
 | Hook | Event | Purpose |
 |------|-------|---------|
-| `session-init.py` | SessionStart | Load project context, inject usage instructions |
-| `user-prompt-dispatcher.py` | UserPromptSubmit | Phase-based workflow routing and scheduled reminders |
-| `git-reminder.py` | UserPromptSubmit | Detect "commit/push/git" and remind to query lessons |
-| `catalogue-reminder.py` | UserPromptSubmit | Detect library/security/decision mentions, remind to catalogue |
-| `task-start-reminder.py` | UserPromptSubmit | Detect "fix/implement/work on" and remind to query lessons + workflows |
+| `session-init.py` | SessionStart | Inject routing prompt, intent-action map, workflow instructions (~800 tokens) |
+| `user-prompt-dispatcher.py` | UserPromptSubmit | Scheduled reminders + workflow state injection (zero regex, ~60 lines) |
 | `mgcp-reminder.py` | PostToolUse (Edit/Write) | Prompt to capture patterns and gotchas after code changes |
 | `mgcp-precompact.py` | PreCompact | Critical reminder to save before context compression |
 
-The `UserPromptSubmit` hook is key - it inspects user messages for keywords and injects reminders, making the memory system automatic rather than relying on manual queries.
+Legacy hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
+
+The key insight: LLM self-routing (87% accuracy) outperforms regex (58%), is simpler (~130 lines vs ~380), and injects fewer tokens (~800 vs ~2000). Intent calibration via the REM cycle continuously refines the routing prompt using community detection.
 
 ## Implementation Roadmap
 
@@ -225,4 +227,5 @@ The `UserPromptSubmit` hook is key - it inspects user messages for keywords and 
 3. ~~Phase 3: Graph traversal and hierarchical structure~~ Complete
 4. ~~Phase 4: Refinement, versioning, and learning loops~~ Complete
 5. ~~Phase 5: Quality of Life~~ Complete - Multi-client support, export/import, backup/restore, proactive hooks
-6. Phase 6: Proactive Intelligence (planned) - Auto-suggestions, feedback loops, git integration
+6. ~~Phase 6: Proactive Intelligence~~ Complete - Intent-based LLM self-routing, REM intent calibration, workflow state management
+7. Phase 7: Feedback Loops (planned) - Auto-suggestions, git integration, telemetry-driven refinement

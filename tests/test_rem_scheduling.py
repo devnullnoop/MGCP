@@ -83,7 +83,7 @@ class TestDefaultSchedules:
     def test_all_operations_have_schedules(self):
         expected = {
             "staleness_scan", "duplicate_detection", "community_detection",
-            "knowledge_extraction", "context_summary",
+            "knowledge_extraction", "context_summary", "intent_calibration",
         }
         assert set(DEFAULT_SCHEDULES.keys()) == expected
 

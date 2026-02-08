@@ -145,6 +145,8 @@ class RemEngine:
             findings = await self._knowledge_extraction(session_number)
         elif operation == "context_summary":
             findings = await self._context_summary()
+        elif operation == "intent_calibration":
+            findings = await self._intent_calibration()
         else:
             findings = []
 
@@ -400,5 +402,106 @@ class RemEngine:
                 recommended=0,
                 metadata={"project_id": project.project_id, "snapshot_count": len(history)},
             ))
+
+        return findings
+
+    async def _intent_calibration(self) -> list[RemFinding]:
+        """Compare community structure against intent categories.
+
+        Detects when lesson graph communities don't map to any known intent,
+        suggesting the routing prompt may need new or modified intents.
+        """
+        from .graph import LessonGraph
+
+        KNOWN_INTENTS = {
+            "git_operation", "catalogue_dependency", "catalogue_security",
+            "catalogue_decision", "catalogue_arch_note", "catalogue_convention",
+            "task_start",
+        }
+
+        TAG_TO_INTENT = {
+            "git": "git_operation",
+            "version-control": "git_operation",
+            "branching": "git_operation",
+            "commits": "git_operation",
+            "deployment": "git_operation",
+            "dependencies": "catalogue_dependency",
+            "supply-chain": "catalogue_dependency",
+            "package-management": "catalogue_dependency",
+            "security": "catalogue_security",
+            "owasp": "catalogue_security",
+            "authentication": "catalogue_security",
+            "authorization": "catalogue_security",
+            "encryption": "catalogue_security",
+            "input-validation": "catalogue_security",
+            "xss": "catalogue_security",
+            "sql-injection": "catalogue_security",
+            "csrf": "catalogue_security",
+            "session-management": "catalogue_security",
+            "crypto": "catalogue_security",
+            "data-protection": "catalogue_security",
+            "architecture": "catalogue_arch_note",
+            "gotcha": "catalogue_arch_note",
+            "performance": "catalogue_arch_note",
+            "caching": "catalogue_arch_note",
+            "error-handling": "catalogue_arch_note",
+            "naming": "catalogue_convention",
+            "style": "catalogue_convention",
+            "code-quality": "catalogue_convention",
+            "linting": "catalogue_convention",
+            "debugging": "task_start",
+            "testing": "task_start",
+            "implementation": "task_start",
+            "refactoring": "task_start",
+            "development": "task_start",
+            "feature": "task_start",
+            "bug": "task_start",
+            "fix": "task_start",
+        }
+
+        graph = LessonGraph()
+        lessons = await self.store.get_all_lessons()
+
+        if len(lessons) < 5:
+            return []
+
+        for lesson in lessons:
+            graph.add_lesson(lesson)
+
+        communities = graph.detect_communities()
+        findings = []
+
+        for comm in communities:
+            tags = set(comm.get("aggregate_tags", {}).keys())
+            if not tags:
+                continue
+
+            # Map tags to known intents
+            matched_intents = {TAG_TO_INTENT.get(t.lower()) for t in tags} - {None}
+            unmatched_tags = {t for t in tags if t.lower() not in TAG_TO_INTENT}
+
+            if unmatched_tags and comm.get("size", 0) >= 3:
+                findings.append(RemFinding(
+                    operation="intent_calibration",
+                    title=f"Unmapped community tags: {', '.join(sorted(unmatched_tags))}",
+                    description=(
+                        f"Community with {comm['size']} members has tags not mapped to any "
+                        f"intent: {sorted(unmatched_tags)}. "
+                        f"Mapped intents: {sorted(matched_intents) if matched_intents else 'none'}. "
+                        f"Members: {', '.join(comm.get('top_members', []))}"
+                    ),
+                    options=[
+                        {"label": "Add new intent", "description": "Create a new intent category for these tags"},
+                        {"label": "Map to existing", "description": "Add these tags to an existing intent mapping"},
+                        {"label": "Skip", "description": "Not actionable"},
+                    ],
+                    recommended=1,
+                    metadata={
+                        "community_id": comm["community_id"],
+                        "unmatched_tags": sorted(unmatched_tags),
+                        "matched_intents": sorted(matched_intents),
+                        "size": comm["size"],
+                    },
+                ))
 
         return findings

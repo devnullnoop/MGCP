@@ -109,4 +109,5 @@ DEFAULT_SCHEDULES: dict[str, OperationSchedule] = {
         strategy="logarithmic", base_interval=10, scale=2.0
     ),
     "context_summary": OperationSchedule(strategy="linear", interval=20),
+    "intent_calibration": OperationSchedule(strategy="linear", interval=10),
 }

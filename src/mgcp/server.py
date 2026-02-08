@@ -2108,6 +2108,46 @@ async def reset_reminder_state() -> str:
     return "Reminder state reset. Call count: 0, no scheduled reminders."
 
 
+@mcp.tool()
+async def update_workflow_state(
+    active_workflow: str = "",
+    current_step: str = "",
+    step_completed: str = "",
+    workflow_complete: bool = False,
+) -> str:
+    """Update the current workflow execution state.
+
+    Call this when activating, progressing through, or completing a workflow.
+    The hook reads this state to inject workflow context on subsequent messages.
+
+    Args:
+        active_workflow: Set the active workflow ID (e.g., "feature-development")
+        current_step: Set the current step ID (e.g., "research")
+        step_completed: Mark a step as completed (appends to completed list)
+        workflow_complete: Mark the entire workflow as complete
+    """
+    from .reminder_state import update_workflow_state as do_update
+
+    result = do_update(
+        active_workflow=active_workflow,
+        current_step=current_step,
+        step_completed=step_completed,
+        workflow_complete=workflow_complete,
+    )
+
+    lines = ["Workflow state updated:"]
+    if result["active_workflow"]:
+        lines.append(f"  Workflow: {result['active_workflow']}")
+    if result["current_step"]:
+        lines.append(f"  Current step: {result['current_step']}")
+    if result["steps_completed"]:
+        lines.append(f"  Completed: {', '.join(result['steps_completed'])}")
+    if result["workflow_complete"]:
+        lines.append("  Status: COMPLETE")
+
+    return "\n".join(lines)
+
+
 # ============================================================================
 # REM CYCLE TOOLS
 # ============================================================================
@@ -2272,7 +2312,7 @@ Data is stored in ~/.mgcp/ by default.
 """)
             return
         elif sys.argv[1] in ("--version", "-V"):
-            print("mgcp 1.1.0")
+            print("mgcp 2.0.0")
             return
 
     mcp.run(transport="stdio")

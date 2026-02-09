@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
-"""
-SessionStart hook for MGCP (Memory Graph Core Primitives).
-Injects context telling Claude to load lessons and project context.
+"""SessionStart hook for MGCP v2.0.
+
+Injects:
+1. Project context loading instructions
+2. Intent routing prompt (LLM self-classifies each message)
+3. Intent-action map (what tools to call per intent)
+4. Workflow and reminder instructions
+
+Target: ~800 tokens total injection (down from ~2000 in v1.2).
 """
 import json
 import os
@@ -37,93 +43,51 @@ Example format:
 
 Only show sections that have content. Keep it concise. Then address the user's message.
 
-### CRITICAL: Workflow-Based Development (ALWAYS-ON)
+<intent-routing>
+Classify each user message into zero or more intents before acting.
+Only include intents where the user clearly performs or requests the action.
 
-For ANY task that involves writing or modifying code, you MUST:
+- git_operation: commit, push, merge, deploy, create PR, ship code
+- catalogue_dependency: adopting, installing, choosing a library/package/framework
+- catalogue_security: security vulnerability, auth weakness, exploit risk
+- catalogue_decision: technical choice ("went with X over Y", "decided on X")
+- catalogue_arch_note: gotcha, quirk, caveat, surprising behavior
+- catalogue_convention: coding rule, naming convention, style standard
+- task_start: fix, implement, build, refactor, debug, set up something
 
-1. **Call `mcp__mgcp__query_workflows("<task description>")`** - Matches your task against workflows
-2. **If a workflow matches (relevance >= 50%), ACTIVATE IT** - Follow every step in order
-3. **If unsure, query anyway** - The semantic matching handles synonyms and paraphrasing
+If none apply: proceed normally.
+</intent-routing>
 
-This applies even when the user doesn't say "implement" or "fix" explicitly. Examples:
-- "make the animation smoother" → query_workflows("improve animation smoothness") → feature-development
-- "the tests are failing" → query_workflows("failing tests") → bug-fix
-- "wire up the websocket" → query_workflows("add websocket connection") → feature-development
+<intent-actions>
+git_operation → call save_project_context FIRST, then query_lessons("git commit"), read results before any git command
+catalogue_dependency → search_catalogue for the dependency, add_catalogue_dependency if new
+catalogue_security → add_catalogue_security_note immediately
+catalogue_decision → add_catalogue_decision with rationale and alternatives
+catalogue_arch_note → add_catalogue_arch_note
+catalogue_convention → add_catalogue_convention
+task_start → call query_workflows("<task description>"), activate if ≥50% match, else query_lessons
+Multi-intent → union all actions (e.g., git_operation + task_start = save context + query workflow)
+</intent-actions>
 
-**Available workflows:**
-- `feature-development` (6 steps): Research → Plan → Document → Execute → Test → Review
-- `bug-fix` (4 steps): Reproduce → Investigate → Fix → Verify
-- `secure-code-review` (8 steps): Input Validation → Output Encoding → Authentication → Authorization → Cryptography → Data Protection → Error Handling → File Handling
+### Workflow Execution
 
-**How to execute a workflow:**
-1. Call `mcp__mgcp__get_workflow("<workflow_id>")` to load the full workflow
-2. Create TodoWrite entries for each step (e.g., "Step 1: Research - understand existing code")
-3. For EACH step:
-   - Mark it in_progress in TodoWrite
-   - Call `mcp__mgcp__get_workflow_step("<workflow_id>", "<step_id>", expand_lessons=true)`
-   - READ and APPLY the linked lessons
-   - Spider critical lessons: `mcp__mgcp__spider_lessons("<lesson_id>")`
-   - Complete ALL checklist items before moving to next step
-   - Mark step completed
-4. NEVER skip steps - each prevents specific mistakes you've made before
+When a workflow is activated (via task_start intent or explicitly):
+1. Call `get_workflow("<workflow_id>")` to load it
+2. Create task entries for each step
+3. For EACH step: call `get_workflow_step("<workflow_id>", "<step_id>", expand_lessons=true)`, READ and APPLY linked lessons
+4. Call `update_workflow_state(active_workflow=..., current_step=...)` to track progress
+5. NEVER skip steps — each prevents specific mistakes
 
-### During the Session - Use MGCP Tools at These Triggers:
+### Self-Directed Reminders
 
-**When you make an architectural decision:**
-→ `mcp__mgcp__add_catalogue_decision` (title, decision, rationale, alternatives)
-
-**When you discover files that change together:**
-→ `mcp__mgcp__add_catalogue_coupling` (files, reason)
-
-**When you find a gotcha, quirk, or important pattern:**
-→ `mcp__mgcp__add_catalogue_arch_note` (title, description, category)
-
-**When you notice a security concern:**
-→ `mcp__mgcp__add_catalogue_security_note` (title, description, severity)
-
-**When you establish or notice a coding convention:**
-→ `mcp__mgcp__add_catalogue_convention` (title, rule, category)
-
-**When you learn something reusable for ANY future session:**
-→ `mcp__mgcp__add_lesson` (id, trigger, action, rationale)
+When you complete a workflow step, schedule a reminder for the next step BEFORE responding:
+```
+schedule_reminder(after_calls=1, message="EXECUTE <next step> NOW", workflow_step="<workflow>/<step>")
+```
+This ensures continuity even when the user says "ok" with no keywords.
 
 ### Before Session End or Committing:
-ALWAYS call `mcp__mgcp__save_project_context` with:
-- `notes`: Summary of what was accomplished
-- `active_files`: Key files you worked on
-- `decision`: Any major decisions made (optional)
-
-### Trigger Phrases to Watch For:
-- "let's commit" / "commit this" → save_project_context FIRST
-- "shutting down" / "end session" / "done for now" → save_project_context
-- "decided to" / "chose X over Y" → add_catalogue_decision
-- "these files are related" / "coupled" → add_catalogue_coupling
-- "watch out for" / "gotcha" / "quirk" → add_catalogue_arch_note
-
-### Self-Directed Reminders - MANDATORY FOR WORKFLOW STEPS
-
-**THIS IS NOT OPTIONAL.** When you complete ANY workflow step, you MUST schedule a reminder for the next step BEFORE responding to the user.
-
-**WHY:** The user might say "ok" or "continue" - no keywords, no pattern hook fires. Without a scheduled reminder, you WILL skip the next step's lessons and make preventable mistakes.
-
-**EXECUTE THIS PATTERN:**
-```
-# You just finished Research step. BEFORE your response:
-schedule_reminder(
-    after_calls=1,
-    message="EXECUTE Plan step NOW. Call get_workflow_step('feature-development', 'plan', expand_lessons=true) BEFORE doing anything else.",
-    workflow_step="feature-development/plan"
-)
-# THEN send your response
-```
-
-**FORMAT YOUR MESSAGES AS COMMANDS:**
-- DO: "EXECUTE X NOW", "CALL Y BEFORE proceeding", "YOU MUST Z"
-- NOT: "consider", "remember to", "might want to"
-
-Future-you will be processing the user's next message. A suggestion competes with the task. A command overrides it. Write reminders that future-you cannot ignore.
-
-**IF YOU SKIP THIS:** You will forget the next step. You will jump straight to coding. You will miss critical lessons. This has happened before. That's why this system exists.
+ALWAYS call `save_project_context` with notes, active_files, and decision (if any).
 """
 
 output = {

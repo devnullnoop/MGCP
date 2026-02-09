@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **REM cycle**: Periodic knowledge consolidation with 3 new MCP tools (`rem_run`, `rem_report`, `rem_status`). Operations: staleness scan, duplicate detection, community detection, knowledge extraction, context summary
+- **Versioned context history**: `save_project_context` now appends snapshots to `context_history` table with catalogue delta tracking
+- **Lesson version history**: `refine_lesson` now snapshots previous version into `lesson_versions` table before overwriting
+- **Multi-strategy scheduling**: REM operations run on independent schedules - linear (staleness), fibonacci (community detection), logarithmic (knowledge extraction)
+- **Interactive findings**: REM cycle produces structured findings with selectable options for human-in-the-loop review
+- **Backfill migrations**: Existing lessons and projects get version history records on upgrade (migrations 5-7)
+
 ## [1.2.0] - 2026-02-07
 
 ### Added
@@ -142,7 +150,9 @@ mgcp-migrate --dry-run    # Preview first
 - Duplicate detection
 - Proactive hooks (UserPromptSubmit)
 
-### Phase 6: Proactive Intelligence (Planned)
-- Automatic lesson suggestions
-- Pattern detection
-- Cross-project knowledge transfer
+### Phase 6: Proactive Intelligence (Complete)
+- Intent-based LLM self-routing (replaces regex hooks, 87% accuracy)
+- REM cycle engine (staleness scan, duplicate detection, community detection, knowledge extraction)
+- Versioned context history and lesson version snapshots
+- Workflow state management and scheduled reminders
+- Community detection with Louvain algorithm

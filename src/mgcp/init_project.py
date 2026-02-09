@@ -200,7 +200,9 @@ You have access to the MGCP (Memory Graph Core Primitives) MCP server. At the st
 
 1. Call `mcp__mgcp__get_project_context` with project_path: "{project_path}"
 2. Call `mcp__mgcp__query_lessons` with a task_description based on what the user is asking about
+3. Call `mcp__mgcp__rem_status` to check if any REM cycle operations are due
 
+If rem_status shows any operations as "DUE", mention it to the user and offer to run `rem_run`.
 This ensures you have relevant lessons and project context loaded before proceeding.
 """
 

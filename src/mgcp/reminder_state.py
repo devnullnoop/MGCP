@@ -204,6 +204,78 @@ def reset_state() -> dict:
         "reminder_message": "",
         "lesson_ids": [],
         "workflow_step": "",
+        # Workflow execution state (preserved across resets unless explicit)
+        "active_workflow": None,
+        "current_step": None,
+        "steps_completed": [],
+        "workflow_complete": False,
     }
     save_state(state)
     return state
+
+
+# ============================================================================
+# WORKFLOW STATE MANAGEMENT
+# ============================================================================
+
+
+def get_workflow_state() -> dict:
+    """Get the current workflow execution state."""
+    state = load_state()
+    return {
+        "active_workflow": state.get("active_workflow"),
+        "current_step": state.get("current_step"),
+        "steps_completed": state.get("steps_completed", []),
+        "workflow_complete": state.get("workflow_complete", False),
+    }
+
+
+def update_workflow_state(
+    active_workflow: str = "",
+    current_step: str = "",
+    step_completed: str = "",
+    workflow_complete: bool = False,
+) -> dict:
+    """Update workflow execution state.
+
+    Args:
+        active_workflow: Set the active workflow ID (e.g., "feature-development").
+                        Empty string = no change, None-like values clear it.
+        current_step: Set the current step ID (e.g., "research").
+        step_completed: Mark a step as completed (appends to steps_completed).
+        workflow_complete: Mark the entire workflow as complete.
+
+    Returns:
+        Updated workflow state dict.
+    """
+    state = load_state()
+
+    if active_workflow:
+        state["active_workflow"] = active_workflow
+        # Starting a new workflow resets step tracking
+        if active_workflow != state.get("active_workflow"):
+            state["current_step"] = None
+            state["steps_completed"] = []
+            state["workflow_complete"] = False
+
+    if current_step:
+        state["current_step"] = current_step
+
+    if step_completed:
+        completed = state.get("steps_completed", [])
+        if step_completed not in completed:
+            completed.append(step_completed)
+        state["steps_completed"] = completed
+
+    if workflow_complete:
+        state["workflow_complete"] = True
+        state["current_step"] = None
+
+    save_state(state)
+
+    return {
+        "active_workflow": state.get("active_workflow"),
+        "current_step": state.get("current_step"),
+        "steps_completed": state.get("steps_completed", []),
+        "workflow_complete": state.get("workflow_complete", False),
+    }

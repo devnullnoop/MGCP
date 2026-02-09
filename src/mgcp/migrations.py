@@ -1,14 +1,18 @@
 """Database migrations for MGCP (Memory Graph Core Primitives)."""
 
 import asyncio
+import hashlib
 import json
 import logging
+import os
+import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import aiosqlite
 
 from .models import Relationship
-from .persistence import DEFAULT_DB_PATH, LessonStore
+from .persistence import DEFAULT_DB_PATH, SCHEMA, LessonStore
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +293,184 @@ async def ensure_unique_project_path(db_path: str = DEFAULT_DB_PATH) -> bool:
         return True
 
 
+async def ensure_version_tables(db_path: str = DEFAULT_DB_PATH) -> bool:
+    """
+    Ensure lesson_versions, context_history, and rem_state tables exist.
+
+    These are new tables added for the REM cycle. CREATE TABLE IF NOT EXISTS
+    is safe to run repeatedly. Returns True if tables were created.
+    """
+    db_full_path = Path(os.path.expanduser(db_path))
+    if not db_full_path.exists():
+        return False
+
+    async with aiosqlite.connect(db_full_path) as conn:
+        # Check if lesson_versions already exists
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='lesson_versions'"
+        )
+        already_exists = await cursor.fetchone()
+
+        if already_exists:
+            logger.info("Version tables already exist")
+            return False
+
+        # Create all three tables from the SCHEMA constant
+        # (which includes them via CREATE TABLE IF NOT EXISTS)
+        await conn.executescript(SCHEMA)
+        await conn.commit()
+        logger.info("Created lesson_versions, context_history, and rem_state tables")
+        return True
+
+
+async def backfill_lesson_versions(db_path: str = DEFAULT_DB_PATH) -> int:
+    """
+    Create initial version records for all existing lessons.
+
+    For lessons at v1: insert one record from current state.
+    For lessons at v2+: insert current state as latest version,
+    then parse [vN] annotations from rationale to reconstruct
+    refinement reasons (old action text is lost).
+
+    Idempotent: skips lessons that already have version records.
+    """
+    store = LessonStore(db_path)
+    lessons = await store.get_all_lessons()
+
+    db_full_path = Path(os.path.expanduser(db_path))
+    inserted = 0
+
+    async with aiosqlite.connect(db_full_path) as conn:
+        conn.row_factory = aiosqlite.Row
+
+        for lesson in lessons:
+            # Check if already backfilled
+            cursor = await conn.execute(
+                "SELECT COUNT(*) as cnt FROM lesson_versions WHERE lesson_id = ?",
+                (lesson.id,),
+            )
+            row = await cursor.fetchone()
+            if row and row["cnt"] > 0:
+                continue
+
+            # Always insert a v1 record with current state as baseline
+            await conn.execute(
+                """
+                INSERT INTO lesson_versions (
+                    lesson_id, version, trigger, action, rationale, tags,
+                    timestamp, refinement_reason, session_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    lesson.id,
+                    1,
+                    lesson.trigger,
+                    lesson.action,  # For v1, current action is all we have
+                    lesson.rationale.split("\n\n[v")[0] if lesson.rationale else None,
+                    json.dumps(lesson.tags),
+                    lesson.created_at.isoformat(),
+                    None,
+                    None,
+                ),
+            )
+            inserted += 1
+
+            # For refined lessons, parse [vN] annotations for refinement reasons
+            if lesson.version > 1 and lesson.rationale:
+                version_pattern = re.compile(r'\[v(\d+)\]\s*(.*?)(?=\n\n\[v|\Z)', re.DOTALL)
+                for match in version_pattern.finditer(lesson.rationale):
+                    ver_num = int(match.group(1))
+                    reason = match.group(2).strip()
+                    if ver_num > 1:
+                        await conn.execute(
+                            """
+                            INSERT OR IGNORE INTO lesson_versions (
+                                lesson_id, version, trigger, action, rationale, tags,
+                                timestamp, refinement_reason, session_id
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                lesson.id,
+                                ver_num,
+                                lesson.trigger,
+                                lesson.action,  # Action text at this version is lost
+                                lesson.rationale,
+                                json.dumps(lesson.tags),
+                                lesson.last_refined.isoformat(),
+                                reason,
+                                None,
+                            ),
+                        )
+                        inserted += 1
+
+        await conn.commit()
+
+    logger.info(f"Backfilled {inserted} lesson version records")
+    return inserted
+
+
+async def seed_context_history(db_path: str = DEFAULT_DB_PATH) -> int:
+    """
+    Create one initial history record for each existing project context.
+
+    Gives every project a starting point in history. Future saves
+    append real session-by-session records.
+
+    Idempotent: skips projects that already have history.
+    """
+    db_full_path = Path(os.path.expanduser(db_path))
+    if not db_full_path.exists():
+        return 0
+
+    inserted = 0
+
+    async with aiosqlite.connect(db_full_path) as conn:
+        conn.row_factory = aiosqlite.Row
+
+        cursor = await conn.execute("SELECT * FROM project_contexts")
+        projects = await cursor.fetchall()
+
+        for proj in projects:
+            # Check if already seeded
+            cursor = await conn.execute(
+                "SELECT COUNT(*) as cnt FROM context_history WHERE project_id = ?",
+                (proj["project_id"],),
+            )
+            row = await cursor.fetchone()
+            if row and row["cnt"] > 0:
+                continue
+
+            catalogue_json = proj["catalogue"] or "{}"
+            catalogue_hash = hashlib.sha256(catalogue_json.encode()).hexdigest()
+
+            await conn.execute(
+                """
+                INSERT INTO context_history (
+                    project_id, session_number, timestamp, notes,
+                    active_files, todos, recent_decisions,
+                    catalogue_hash, catalogue_delta
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    proj["project_id"],
+                    proj["session_count"] or 0,
+                    proj["last_accessed"] or datetime.now(UTC).isoformat(),
+                    proj["notes"],
+                    proj["active_files"] or "[]",
+                    proj["todos"] or "[]",
+                    proj["recent_decisions"] or "[]",
+                    catalogue_hash,
+                    None,  # No delta for initial snapshot
+                ),
+            )
+            inserted += 1
+
+        await conn.commit()
+
+    logger.info(f"Seeded {inserted} context history records")
+    return inserted
+
+
 async def run_all_migrations(db_path: str = DEFAULT_DB_PATH) -> dict:
     """Run all pending migrations."""
     results = {}
@@ -306,6 +488,15 @@ async def run_all_migrations(db_path: str = DEFAULT_DB_PATH) -> dict:
 
     # Migration 4: Ensure unique project_path constraint
     results["unique_path_added"] = await ensure_unique_project_path(db_path)
+
+    # Migration 5: Create version history tables (REM cycle)
+    results["version_tables_created"] = await ensure_version_tables(db_path)
+
+    # Migration 6: Backfill lesson versions from existing data
+    results["lesson_versions_backfilled"] = await backfill_lesson_versions(db_path)
+
+    # Migration 7: Seed context history from existing projects
+    results["context_history_seeded"] = await seed_context_history(db_path)
 
     logger.info(f"Migrations complete: {results}")
     return results

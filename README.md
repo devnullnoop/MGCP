@@ -166,7 +166,7 @@ mgcp-bootstrap
 mgcp-dashboard
 ```
 
-## MCP Tools (38 total)
+## MCP Tools (42 total)
 
 ### Lesson Discovery (5)
 | Tool | Purpose |
@@ -228,6 +228,18 @@ mgcp-dashboard
 | `save_community_summary` | Persist LLM-generated community summary |
 | `search_communities` | Semantic search community summaries |
 
+### REM Cycle (3)
+
+Knowledge stores rot. Lessons go stale, duplicates accumulate, and topic clusters shift as a project evolves. REM (Recalibrate Everything in Memory) runs periodic consolidation to keep the knowledge base healthy without manual curation.
+
+Each operation runs on its own schedule — staleness scans every 5 sessions, duplicate detection every 10, community detection on fibonacci intervals (5, 8, 13, 21...), knowledge extraction on a logarithmic curve that starts frequent and slows down as the project matures. The schedules are configurable but the defaults work well in practice.
+
+| Tool | Purpose |
+|------|---------|
+| `rem_run` | Run consolidation cycle (staleness, duplicates, communities) |
+| `rem_report` | View last cycle's findings |
+| `rem_status` | Show schedule state and what's due |
+
 ### Reminders (2)
 | Tool | Purpose |
 |------|---------|
@@ -236,19 +248,28 @@ mgcp-dashboard
 
 ## Claude Code Hooks
 
-Hooks make the system proactive:
+### The problem with regex routing
 
-| Hook | Trigger | Purpose |
-|------|---------|---------|
-| `session-init.py` | Session start | Load context, query lessons |
-| `user-prompt-dispatcher.py` | User messages | Phase-based workflow routing and scheduled reminders |
-| `git-reminder.py` | "commit", "push" | Query git lessons first |
-| `task-start-reminder.py` | "fix", "implement" | Activate relevant workflow |
-| `catalogue-reminder.py` | Library/security mentions | Remind to catalogue |
-| `mgcp-reminder.py` | After code edits | Prompt to capture patterns and gotchas |
-| `mgcp-precompact.py` | Before compression | Save before context lost |
+MGCP v1 used dedicated hook scripts to detect user intent from message text. `git-reminder.py` matched keywords like "commit" and "push". `catalogue-reminder.py` matched library names. `task-start-reminder.py` matched "fix", "implement", etc. Three scripts, hundreds of lines of regex patterns, and they missed nearly half of real user messages.
 
-Without hooks, the LLM must remember to query. With hooks, it happens automatically.
+The failure mode was predictable: users don't say "let's commit this" — they say "ship it", "we're done here, push it up", or "ready to merge". Regex can't keep up with natural language variation. We also tested graph-community classification (embed the message, search community summaries) but it performed even worse — communities describe topics, not actions.
+
+### LLM self-routing
+
+v2 replaces all three regex hooks with a single routing prompt injected at session start (~800 tokens). The LLM classifies each message into 7 intent categories using its own language understanding, then follows an intent-action map to call the right tools.
+
+We benchmarked all three approaches against a ground-truth corpus covering direct phrasing, indirect phrasing, false positives, multi-intent, no intent, and edge cases. LLM self-routing improved accuracy by ~50% over regex while cutting the hook codebase nearly in half. Graph-community classification was not competitive for intent detection (it remains valuable for knowledge retrieval, just not action classification).
+
+### Current hooks
+
+| Hook | Event | Purpose |
+|------|-------|---------|
+| `session-init.py` | SessionStart | Inject routing prompt, intent-action map, workflow instructions |
+| `user-prompt-dispatcher.py` | UserPromptSubmit | Scheduled reminders and workflow state injection (no regex) |
+| `mgcp-reminder.py` | PostToolUse (Edit/Write) | Prompt to capture patterns and gotchas after code changes |
+| `mgcp-precompact.py` | PreCompact | Save context before compression |
+
+Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
 
 ## Commands
 
@@ -327,7 +348,8 @@ If someone tries this, we'd be interested to hear how it goes.
 | Graph Traversal | Complete |
 | Refinement & Learning | Complete |
 | Quality of Life | Complete |
-| Proactive Intelligence | In Progress |
+| Proactive Intelligence | Complete |
+| Feedback Loops (REM) | Complete |
 
 ## Contributing
 
@@ -335,7 +357,7 @@ Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-[O'Saasy License](https://osaasy.dev/) - Free to use, modify, distribute.
+[O'Saasy License](https://osaasy.dev/) - Free for individual and internal use; commercial SaaS requires a license.
 
 ---
 

@@ -200,6 +200,40 @@ class CommunitySummary(BaseModel):
 
 
 # ============================================================================
+# VERSION HISTORY MODELS (REM cycle)
+# ============================================================================
+
+
+class LessonVersion(BaseModel):
+    """A snapshot of a lesson at a specific version."""
+
+    lesson_id: str
+    version: int
+    trigger: str
+    action: str
+    rationale: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    timestamp: datetime
+    refinement_reason: str | None = None
+    session_id: str | None = None
+
+
+class ContextSnapshot(BaseModel):
+    """A snapshot of project context at a point in time."""
+
+    id: int | None = None
+    project_id: str
+    session_number: int
+    timestamp: datetime
+    notes: str | None = None
+    active_files: list[str] = Field(default_factory=list)
+    todos: list["ProjectTodo"] = Field(default_factory=list)
+    recent_decisions: list[str] = Field(default_factory=list)
+    catalogue_hash: str | None = None
+    catalogue_delta: dict | None = None
+
+
+# ============================================================================
 # WORKFLOW MODELS
 # ============================================================================
 

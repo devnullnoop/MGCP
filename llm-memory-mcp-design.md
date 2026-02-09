@@ -301,14 +301,15 @@ dependencies = [
 - [x] Proactive hooks (UserPromptSubmit for git/catalogue reminders)
 - [x] Project deduplication with unique constraints
 
-### Phase 6: Proactive Intelligence 🔮 Planned
+### Phase 6: Proactive Intelligence ✅ Complete
 
-- [ ] Auto-suggest lessons from conversations
-- [ ] Feedback loop (track which lessons were helpful)
-- [ ] Git integration (parse commits/PRs for learnings)
-- [ ] Cross-project global lessons
-- [ ] Lesson templates (Error→Solution, Gotcha→Workaround)
-- [ ] Lesson quality scoring
+- [x] Intent-based LLM self-routing (replaces regex hooks, 87% accuracy)
+- [x] REM cycle engine (staleness, duplicates, communities, knowledge extraction)
+- [x] Versioned context history and lesson version snapshots
+- [x] Workflow state management and scheduled reminders
+- [x] Community detection with Louvain algorithm
+- [ ] Cross-project global lessons (future)
+- [ ] Lesson quality scoring (future)
 
 ---
 
@@ -502,8 +503,7 @@ User: "Implement memory estimation for a cache"
 
 ## Next Steps
 
-1. **Phase 6**: Implement proactive intelligence features
-2. **Feedback loop**: Track which lessons are helpful
-3. **Git integration**: Parse commits for learnings
-4. **Lesson templates**: Structured formats for common patterns
-5. **Cross-project globals**: Lessons that apply everywhere
+1. **BGE instruction prefix**: Add query/passage prefixes to improve embedding retrieval
+2. **Retrieval miss tracking**: Record when queries fail to surface relevant lessons
+3. **Cross-project globals**: Lessons that apply everywhere
+4. **Lesson quality scoring**: Track which lessons are actually helpful

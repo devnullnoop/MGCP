@@ -1612,13 +1612,55 @@ class TestGlobalHooks:
 class TestEnsureEmbeddingModel:
     """Tests for ensure_embedding_model function."""
 
-    def test_ensure_model_returns_cached(self):
+    def test_ensure_model_cached(self, monkeypatch):
         """Should detect already-cached model without downloading."""
+        from unittest.mock import MagicMock
+
+        mock_st = MagicMock()
+        monkeypatch.setattr("mgcp.init_project.SentenceTransformer", mock_st, raising=False)
+
+        # Simulate: local_files_only=True succeeds (model is cached)
+        import mgcp.init_project as mod
+        original = mod.ensure_embedding_model
+
+        def patched():
+            import sentence_transformers
+            monkeypatch.setattr(
+                sentence_transformers, "SentenceTransformer",
+                mock_st,
+            )
+            return original()
+
+        # Just mock at the function level: local_files_only succeeds
+        mock_st.side_effect = None  # No exception = cached
         result = ensure_embedding_model()
 
         assert result["error"] is None
         assert result["downloaded"] is False
         assert "already cached" in result["message"]
+
+    def test_ensure_model_downloads_when_not_cached(self, monkeypatch):
+        """Should download model when not cached locally."""
+        from unittest.mock import MagicMock
+
+        call_count = 0
+
+        def mock_st_constructor(name, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if kwargs.get("local_files_only"):
+                raise OSError("not cached")
+            return MagicMock()
+
+        import sentence_transformers
+        monkeypatch.setattr(sentence_transformers, "SentenceTransformer", mock_st_constructor)
+
+        result = ensure_embedding_model()
+
+        assert result["error"] is None
+        assert result["downloaded"] is True
+        assert "downloaded and ready" in result["message"]
+        assert call_count == 2  # first local_files_only, then full download
 
     def test_ensure_model_returns_dict_structure(self):
         """Should return dict with expected keys."""

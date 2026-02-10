@@ -255,6 +255,10 @@ def _build_global_hook_settings() -> dict:
 
     Unlike _build_hook_settings() which uses $CLAUDE_PROJECT_DIR relative paths,
     this uses absolute paths to ~/.mgcp/hooks/ so hooks fire in every project.
+
+    Includes mcpServers so the MCP server, hooks, and permissions are all in one
+    file. Without this, hooks fire and reference tools that don't exist because
+    the server isn't configured.
     """
     hooks: dict[str, list] = {}
     for filename, (event_type, matcher) in V2_HOOK_FILES.items():
@@ -270,6 +274,9 @@ def _build_global_hook_settings() -> dict:
             hooks[event_type] = []
         hooks[event_type].append(entry)
     return {
+        "mcpServers": {
+            "mgcp": get_mcp_server_config(),
+        },
         "permissions": {
             "allow": ["mcp__mgcp__*"],
         },
@@ -280,6 +287,7 @@ def _build_global_hook_settings() -> dict:
 def _merge_settings(existing: dict, mgcp_settings: dict) -> bool:
     """Merge MGCP settings into existing settings.json.
 
+    - Adds/updates mcpServers.mgcp without clobbering other servers
     - Adds mcp__mgcp__* to permissions.allow without clobbering existing perms
     - Checks for MGCP hooks by command string, not just by hook type presence
     - Appends MGCP hooks when the hook type exists but MGCP command is missing
@@ -287,6 +295,15 @@ def _merge_settings(existing: dict, mgcp_settings: dict) -> bool:
     Returns True if any changes were made.
     """
     changed = False
+
+    # Merge mcpServers (if present in mgcp_settings)
+    if "mcpServers" in mgcp_settings:
+        if "mcpServers" not in existing:
+            existing["mcpServers"] = {}
+        mcp_config = mgcp_settings["mcpServers"]["mgcp"]
+        if existing["mcpServers"].get("mgcp") != mcp_config:
+            existing["mcpServers"]["mgcp"] = mcp_config
+            changed = True
 
     # Merge permissions.allow
     mgcp_perm = "mcp__mgcp__*"

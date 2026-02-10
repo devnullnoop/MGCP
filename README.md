@@ -152,6 +152,11 @@ pip install -e .
 mgcp-init
 ```
 
+This will:
+- Auto-detect installed LLM clients and configure the MCP server
+- Deploy global hooks (Claude Code) for proactive reminders
+- **Download the embedding model (~415MB) on first run** — this powers semantic search and only needs to happen once. Subsequent runs are instant.
+
 Supports: Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Continue, Cline, Sourcegraph Cody
 
 ### 3. Start Using

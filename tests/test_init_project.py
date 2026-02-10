@@ -23,6 +23,7 @@ from mgcp.init_project import (
     _merge_settings,
     configure_client,
     detect_installed_clients,
+    ensure_embedding_model,
     get_mcp_server_config,
     get_mgcp_install_dir,
     get_mgcp_python_path,
@@ -1562,6 +1563,32 @@ class TestGlobalHooks:
         assert "mgcp" in settings["mcpServers"]
         assert settings["mcpServers"]["mgcp"] == get_mcp_server_config()
 
+    def test_global_deploy_skips_claude_code_configure_client(self, mock_global_paths, mock_config_paths):
+        """Global deployment should NOT call configure_client for claude-code.
+
+        When deploying global hooks, mcpServers.mgcp is included in
+        ~/.claude/settings.json. Writing it to ~/.claude.json too would
+        create a duplicate MCP server definition that fails to start.
+        """
+        # Make claude-code "installed" so it would be detected
+        config_path = mock_config_paths["claude-code"]
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text("{}")
+
+        # Run global hooks deployment
+        init_global_hooks()
+
+        # claude-code config file should NOT have been modified with mcpServers
+        config = json.loads(config_path.read_text())
+        assert "mcpServers" not in config, (
+            "configure_client should not write to ~/.claude.json during global deployment"
+        )
+
+        # But settings.json SHOULD have mcpServers
+        settings = json.loads(mock_global_paths["settings_path"].read_text())
+        assert "mcpServers" in settings
+        assert "mgcp" in settings["mcpServers"]
+
     def test_build_global_hook_settings_uses_absolute_paths(self, mock_global_paths):
         """_build_global_hook_settings should use absolute paths."""
         settings = _build_global_hook_settings()
@@ -1576,3 +1603,46 @@ class TestGlobalHooks:
             assert "$CLAUDE_PROJECT_DIR" not in cmd
             # Command should start with python3 followed by an absolute path
             assert cmd.startswith("python3 /") or cmd.startswith("python3 C:"), f"Not absolute: {cmd}"
+
+
+# ============================================================================
+# Tests: Embedding Model Download
+# ============================================================================
+
+class TestEnsureEmbeddingModel:
+    """Tests for ensure_embedding_model function."""
+
+    def test_ensure_model_returns_cached(self):
+        """Should detect already-cached model without downloading."""
+        result = ensure_embedding_model()
+
+        assert result["error"] is None
+        assert result["downloaded"] is False
+        assert "already cached" in result["message"]
+
+    def test_ensure_model_returns_dict_structure(self):
+        """Should return dict with expected keys."""
+        result = ensure_embedding_model()
+
+        assert "downloaded" in result
+        assert "message" in result
+        assert "error" in result
+        assert isinstance(result["downloaded"], bool)
+        assert isinstance(result["message"], str)
+
+    def test_ensure_model_handles_import_error(self, monkeypatch):
+        """Should handle missing sentence-transformers gracefully."""
+        import builtins
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "sentence_transformers":
+                raise ImportError("No module named 'sentence_transformers'")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        result = ensure_embedding_model()
+
+        assert result["error"] is not None
+        assert "Could not load" in result["message"]

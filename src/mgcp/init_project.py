@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -243,6 +244,37 @@ def _build_hook_settings() -> dict:
 
 
 HOOK_SETTINGS = _build_hook_settings()
+
+# Global hooks: deploy once, fire in every Claude Code session
+GLOBAL_HOOKS_DIR = Path.home() / ".mgcp" / "hooks"
+GLOBAL_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
+
+
+def _build_global_hook_settings() -> dict:
+    """Build hook settings with absolute paths for global deployment.
+
+    Unlike _build_hook_settings() which uses $CLAUDE_PROJECT_DIR relative paths,
+    this uses absolute paths to ~/.mgcp/hooks/ so hooks fire in every project.
+    """
+    hooks: dict[str, list] = {}
+    for filename, (event_type, matcher) in V2_HOOK_FILES.items():
+        abs_path = GLOBAL_HOOKS_DIR / filename
+        entry_hook = {
+            "type": "command",
+            "command": f"python3 {abs_path}",
+        }
+        entry: dict = {"hooks": [entry_hook]}
+        if matcher:
+            entry["matcher"] = matcher
+        if event_type not in hooks:
+            hooks[event_type] = []
+        hooks[event_type].append(entry)
+    return {
+        "permissions": {
+            "allow": ["mcp__mgcp__*"],
+        },
+        "hooks": hooks,
+    }
 
 
 def _merge_settings(existing: dict, mgcp_settings: dict) -> bool:
@@ -521,6 +553,136 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False, force: bool = Fa
     return results
 
 
+def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
+    """
+    Deploy MGCP hooks globally so they fire in every Claude Code session.
+
+    Copies hook scripts to ~/.mgcp/hooks/ and configures ~/.claude/settings.json
+    with absolute paths. This means hooks fire automatically in every project
+    without needing per-project deployment.
+
+    Args:
+        dry_run: If True, don't write changes, just report what would happen
+        force: If True, overwrite existing hooks
+
+    Returns dict with status info (same shape as init_claude_hooks).
+    """
+    results = {
+        "created": [],
+        "would_create": [],
+        "updated": [],
+        "would_update": [],
+        "skipped": [],
+        "removed": [],
+        "would_remove": [],
+        "errors": [],
+        "upgrade_available": False,
+    }
+
+    hooks_dir = GLOBAL_HOOKS_DIR
+    settings_file = GLOBAL_SETTINGS_PATH
+    version_file = hooks_dir / VERSION_MARKER
+    current_version = _get_hook_version()
+
+    # Create ~/.mgcp/hooks/ directory
+    if not dry_run:
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check existing version marker
+    if not force and version_file.exists():
+        installed_version = version_file.read_text().strip()
+        if installed_version != current_version:
+            results["upgrade_available"] = True
+
+    # Copy hook scripts from templates to ~/.mgcp/hooks/
+    for filename in V2_HOOK_FILES:
+        src = HOOK_TEMPLATES_DIR / filename
+        dst = hooks_dir / filename
+
+        if dst.exists():
+            if force:
+                if dry_run:
+                    results["would_update"].append(str(dst))
+                else:
+                    shutil.copy2(src, dst)
+                    dst.chmod(0o755)
+                    results["updated"].append(str(dst))
+            else:
+                results["skipped"].append(str(dst))
+        else:
+            if dry_run:
+                results["would_create"].append(str(dst))
+            else:
+                shutil.copy2(src, dst)
+                dst.chmod(0o755)
+                results["created"].append(str(dst))
+
+    # Remove legacy hook files when force is set
+    if force:
+        for legacy_name in LEGACY_HOOK_FILES:
+            legacy_file = hooks_dir / legacy_name
+            if legacy_file.exists():
+                if dry_run:
+                    results["would_remove"].append(str(legacy_file))
+                else:
+                    legacy_file.unlink()
+                    results["removed"].append(str(legacy_file))
+
+    # Write version marker
+    if not dry_run:
+        version_file.write_text(current_version + "\n")
+
+    # Build settings with absolute paths
+    global_settings = _build_global_hook_settings()
+
+    # Merge into ~/.claude/settings.json
+    if settings_file.exists():
+        try:
+            existing = json.loads(settings_file.read_text())
+
+            if force:
+                # Remove legacy hook commands from settings
+                if "hooks" in existing:
+                    for hook_type in list(existing["hooks"].keys()):
+                        groups = existing["hooks"][hook_type]
+                        for group in groups:
+                            hooks_list = group.get("hooks", [])
+                            group["hooks"] = [
+                                h for h in hooks_list
+                                if not any(
+                                    legacy in h.get("command", "")
+                                    for legacy in LEGACY_HOOK_FILES
+                                )
+                            ]
+                        existing["hooks"][hook_type] = [
+                            g for g in groups if g.get("hooks")
+                        ]
+                        if not existing["hooks"][hook_type]:
+                            del existing["hooks"][hook_type]
+
+            needs_update = _merge_settings(existing, global_settings)
+
+            if needs_update or force:
+                if dry_run:
+                    results["would_update"].append(str(settings_file))
+                else:
+                    settings_file.write_text(json.dumps(existing, indent=2) + "\n")
+                    results["updated"].append(str(settings_file))
+            else:
+                results["skipped"].append(str(settings_file))
+        except json.JSONDecodeError:
+            results["errors"].append(f"Could not parse existing {settings_file}")
+    else:
+        if dry_run:
+            results["would_create"].append(str(settings_file))
+        else:
+            settings_file.parent.mkdir(parents=True, exist_ok=True)
+            settings_file.write_text(json.dumps(global_settings, indent=2) + "\n")
+            results["created"].append(str(settings_file))
+
+    return results
+
+
 def configure_claude_code_project(project_path: str, dry_run: bool = False) -> dict:
     """
     Configure MGCP for a specific project in Claude Code's project-level config.
@@ -730,6 +892,29 @@ def verify_setup() -> dict:
 # Main CLI
 # ============================================================================
 
+def _print_hook_results(hook_results: dict) -> None:
+    """Print hook deployment results in a consistent format."""
+    for f in hook_results["created"]:
+        print(f"    + {f}")
+    for f in hook_results["would_create"]:
+        print(f"    ? {f} (would create)")
+    for f in hook_results["updated"]:
+        print(f"    ~ {f} (overwritten)")
+    for f in hook_results["would_update"]:
+        print(f"    ? {f} (would overwrite)")
+    for f in hook_results["removed"]:
+        print(f"    - {f} (legacy removed)")
+    for f in hook_results["would_remove"]:
+        print(f"    ? {f} (would remove legacy)")
+    for f in hook_results["skipped"]:
+        print(f"    = {f} (already exists)")
+    for e in hook_results["errors"]:
+        print(f"    ! {e}")
+
+    if hook_results["upgrade_available"]:
+        print("\n    Note: Hook upgrade available. Run with --force to upgrade.")
+
+
 def main():
     """CLI entry point for mgcp-init."""
     import argparse
@@ -743,27 +928,29 @@ def main():
 Supported clients: {', '.join(client_names)}
 
 Examples:
-  mgcp-init                          # Auto-detect and configure installed clients
+  mgcp-init                          # Deploy global hooks (default)
+  mgcp-init --force                  # Force overwrite global hooks
+  mgcp-init --local /path/to/proj    # Deploy project-local hooks
+  mgcp-init --local --force /path    # Force overwrite project-local hooks
   mgcp-init --client cursor          # Configure only Cursor
-  mgcp-init --client claude-code --client cursor  # Configure multiple clients
   mgcp-init --list                   # List supported clients
   mgcp-init --detect                 # Show which clients are installed
-  mgcp-init --force /path/to/project # Upgrade hooks to v2 (overwrites existing)
 
-For Claude Code users, this also creates v2 project hooks:
-  .claude/hooks/session-init.py           # Intent-routing + context loading
-  .claude/hooks/user-prompt-dispatcher.py # Scheduled reminders + workflow state
-  .claude/hooks/mgcp-reminder.py          # Proof-based checkpoint after edits
-  .claude/hooks/mgcp-precompact.py        # Critical save before context compression
-  .claude/settings.json                   # Hook config + MGCP permissions
+Global hooks (default):
+  Deploys to ~/.mgcp/hooks/ + ~/.claude/settings.json
+  Fires in every Claude Code session automatically.
+
+Project-local hooks (--local):
+  Deploys to <project>/.claude/hooks/ + .claude/settings.json
+  Only fires in that specific project.
         """,
     )
 
     parser.add_argument(
         "directory",
         nargs="?",
-        default=".",
-        help="Project directory for Claude Code hooks (default: current directory)",
+        default=None,
+        help="Project directory for --local hooks (required with --local)",
     )
 
     parser.add_argument(
@@ -771,6 +958,12 @@ For Claude Code users, this also creates v2 project hooks:
         action="append",
         choices=client_names + ["all"],
         help="LLM client(s) to configure (can specify multiple). Default: auto-detect",
+    )
+
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="Deploy project-local hooks instead of global (requires directory argument)",
     )
 
     parser.add_argument(
@@ -794,7 +987,7 @@ For Claude Code users, this also creates v2 project hooks:
     parser.add_argument(
         "--no-hooks",
         action="store_true",
-        help="Skip creating Claude Code project hooks",
+        help="Skip creating Claude Code hooks",
     )
 
     parser.add_argument(
@@ -911,6 +1104,10 @@ For Claude Code users, this also creates v2 project hooks:
         print()
         return
 
+    # Validate --local requires a directory
+    if args.local and args.directory is None:
+        parser.error("--local requires a directory argument")
+
     # Determine which clients to configure
     if args.client:
         if "all" in args.client:
@@ -925,13 +1122,11 @@ For Claude Code users, this also creates v2 project hooks:
             print(f"  Supported: {', '.join(client_names)}\n")
             return
 
-    project_dir = Path(args.directory).resolve()
     dry_run = args.dry_run
 
     if dry_run:
         print("\n  DRY RUN - no changes will be made\n")
-    print("  Initializing MGCP")
-    print(f"  Project: {project_dir}\n")
+    print("  Initializing MGCP\n")
 
     # Configure each client
     print("  Configuring LLM clients:\n")
@@ -956,33 +1151,23 @@ For Claude Code users, this also creates v2 project hooks:
         if client_name == "claude-code":
             configured_claude_code = True
 
-    # Create Claude Code hooks if applicable
+    # Deploy hooks if Claude Code was configured
     if configured_claude_code and not args.no_hooks:
-        print("\n  Creating Claude Code v2 project hooks:\n")
-        hook_results = init_claude_hooks(project_dir, dry_run=dry_run, force=args.force)
+        if args.local:
+            # Project-local hooks (old behavior)
+            project_dir = Path(args.directory).resolve()
+            print(f"\n  Deploying project-local hooks to {project_dir}:\n")
+            hook_results = init_claude_hooks(project_dir, dry_run=dry_run, force=args.force)
+        else:
+            # Global hooks (new default)
+            print(f"\n  Deploying global hooks to {GLOBAL_HOOKS_DIR}:\n")
+            hook_results = init_global_hooks(dry_run=dry_run, force=args.force)
 
-        for f in hook_results["created"]:
-            print(f"    + {f}")
-        for f in hook_results["would_create"]:
-            print(f"    ? {f} (would create)")
-        for f in hook_results["updated"]:
-            print(f"    ~ {f} (overwritten)")
-        for f in hook_results["would_update"]:
-            print(f"    ? {f} (would overwrite)")
-        for f in hook_results["removed"]:
-            print(f"    - {f} (legacy removed)")
-        for f in hook_results["would_remove"]:
-            print(f"    ? {f} (would remove legacy)")
-        for f in hook_results["skipped"]:
-            print(f"    = {f} (already exists)")
-        for e in hook_results["errors"]:
-            print(f"    ! {e}")
-
-        if hook_results["upgrade_available"]:
-            print("\n    Note: Hook upgrade available. Run with --force to upgrade to latest v2 hooks.")
+        _print_hook_results(hook_results)
 
     # Configure project-specific MCP server if requested
     if configured_claude_code and args.project_config:
+        project_dir = Path(args.directory or ".").resolve()
         print("\n  Configuring project-specific MCP server:\n")
         proj_result = configure_claude_code_project(str(project_dir), dry_run=dry_run)
 

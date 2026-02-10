@@ -18,6 +18,7 @@ from mgcp.init_project import (
     V2_HOOK_FILES,
     VERSION_MARKER,
     LLMClient,
+    _build_global_hook_settings,
     _get_hook_version,
     _merge_settings,
     configure_client,
@@ -26,6 +27,7 @@ from mgcp.init_project import (
     get_mgcp_install_dir,
     get_mgcp_python_path,
     init_claude_hooks,
+    init_global_hooks,
 )
 
 # ============================================================================
@@ -1347,3 +1349,206 @@ class TestVersionMarker:
         result = init_claude_hooks(temp_project)
 
         assert result["upgrade_available"] is False
+
+
+# ============================================================================
+# Tests: Global Hooks
+# ============================================================================
+
+@pytest.fixture
+def mock_global_paths(tmp_path, monkeypatch):
+    """Mock global hooks paths to use temp directories."""
+    hooks_dir = tmp_path / ".mgcp" / "hooks"
+    settings_path = tmp_path / ".claude" / "settings.json"
+
+    import mgcp.init_project as mod
+    monkeypatch.setattr(mod, "GLOBAL_HOOKS_DIR", hooks_dir)
+    monkeypatch.setattr(mod, "GLOBAL_SETTINGS_PATH", settings_path)
+
+    return {"hooks_dir": hooks_dir, "settings_path": settings_path}
+
+
+class TestGlobalHooks:
+    """Tests for global hook deployment."""
+
+    def test_init_global_hooks_creates_scripts(self, mock_global_paths):
+        """Should copy all hook scripts to ~/.mgcp/hooks/."""
+        hooks_dir = mock_global_paths["hooks_dir"]
+
+        result = init_global_hooks()
+
+        for filename in V2_HOOK_FILES:
+            assert (hooks_dir / filename).exists(), f"Missing: {filename}"
+        assert len(result["created"]) >= 4  # 4 scripts
+
+    def test_init_global_hooks_creates_settings(self, mock_global_paths):
+        """Should create ~/.claude/settings.json with hook config."""
+        settings_path = mock_global_paths["settings_path"]
+
+        init_global_hooks()
+
+        assert settings_path.exists()
+        settings = json.loads(settings_path.read_text())
+        assert "hooks" in settings
+        assert "permissions" in settings
+        assert "SessionStart" in settings["hooks"]
+
+    def test_init_global_hooks_uses_absolute_paths(self, mock_global_paths):
+        """Global hook commands should use absolute paths, not $CLAUDE_PROJECT_DIR."""
+        settings_path = mock_global_paths["settings_path"]
+        hooks_dir = mock_global_paths["hooks_dir"]
+
+        init_global_hooks()
+
+        settings = json.loads(settings_path.read_text())
+        all_commands = []
+        for entries in settings["hooks"].values():
+            for entry in entries:
+                for h in entry.get("hooks", []):
+                    all_commands.append(h.get("command", ""))
+
+        # Should NOT contain project-relative paths
+        for cmd in all_commands:
+            assert "$CLAUDE_PROJECT_DIR" not in cmd
+
+        # Should contain absolute paths to the hooks dir
+        for cmd in all_commands:
+            assert str(hooks_dir) in cmd
+
+    def test_init_global_hooks_merges_existing_settings(self, mock_global_paths):
+        """Should preserve existing settings when merging."""
+        settings_path = mock_global_paths["settings_path"]
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps({
+            "mcpServers": {"other": {"command": "other"}},
+            "customSetting": True,
+        }))
+
+        init_global_hooks()
+
+        settings = json.loads(settings_path.read_text())
+        assert settings["customSetting"] is True
+        assert "other" in settings["mcpServers"]
+        assert "hooks" in settings
+        assert "mcp__mgcp__*" in settings["permissions"]["allow"]
+
+    def test_init_global_hooks_idempotent(self, mock_global_paths):
+        """Second run should skip existing files."""
+        # First run
+        result1 = init_global_hooks()
+        assert len(result1["created"]) >= 4
+
+        # Second run
+        result2 = init_global_hooks()
+        assert len(result2["skipped"]) >= 4
+        assert len(result2["created"]) == 0
+
+    def test_init_global_hooks_force_overwrites(self, mock_global_paths):
+        """Force should overwrite existing hook files."""
+        hooks_dir = mock_global_paths["hooks_dir"]
+
+        # First install
+        init_global_hooks()
+
+        # Modify a hook file
+        hook_file = hooks_dir / "session-init.py"
+        hook_file.write_text("# custom modification")
+
+        # Force reinstall
+        result = init_global_hooks(force=True)
+
+        assert len(result["updated"]) >= 4
+        assert hook_file.read_text() != "# custom modification"
+
+    def test_init_global_hooks_version_marker(self, mock_global_paths):
+        """Should write version marker to ~/.mgcp/hooks/."""
+        hooks_dir = mock_global_paths["hooks_dir"]
+
+        init_global_hooks()
+
+        version_file = hooks_dir / VERSION_MARKER
+        assert version_file.exists()
+        assert version_file.read_text().strip() == "2.0"
+
+    def test_global_hooks_permissions(self, mock_global_paths):
+        """Settings should include mcp__mgcp__* permission."""
+        settings_path = mock_global_paths["settings_path"]
+
+        init_global_hooks()
+
+        settings = json.loads(settings_path.read_text())
+        assert "permissions" in settings
+        assert "allow" in settings["permissions"]
+        assert "mcp__mgcp__*" in settings["permissions"]["allow"]
+
+    def test_global_hooks_scripts_are_executable(self, mock_global_paths):
+        """Hook scripts should be executable."""
+        hooks_dir = mock_global_paths["hooks_dir"]
+
+        init_global_hooks()
+
+        for filename in V2_HOOK_FILES:
+            hook_file = hooks_dir / filename
+            mode = hook_file.stat().st_mode
+            assert mode & stat.S_IXUSR, f"{filename} should be executable"
+
+    def test_global_hooks_scripts_match_templates(self, mock_global_paths):
+        """Deployed scripts should match the template originals."""
+        hooks_dir = mock_global_paths["hooks_dir"]
+
+        init_global_hooks()
+
+        for filename in V2_HOOK_FILES:
+            deployed = (hooks_dir / filename).read_text()
+            template = (HOOK_TEMPLATES_DIR / filename).read_text()
+            assert deployed == template, f"{filename} content mismatch"
+
+    def test_global_hooks_dry_run(self, mock_global_paths):
+        """Dry run should not create files."""
+        hooks_dir = mock_global_paths["hooks_dir"]
+        settings_path = mock_global_paths["settings_path"]
+
+        result = init_global_hooks(dry_run=True)
+
+        assert len(result["would_create"]) >= 4  # scripts + settings
+        assert not hooks_dir.exists()
+        assert not settings_path.exists()
+
+    def test_global_hooks_upgrade_available(self, mock_global_paths):
+        """Should report upgrade_available when version marker is outdated."""
+        hooks_dir = mock_global_paths["hooks_dir"]
+
+        init_global_hooks()
+
+        # Fake an old version
+        version_file = hooks_dir / VERSION_MARKER
+        version_file.write_text("1.0\n")
+
+        result = init_global_hooks()
+        assert result["upgrade_available"] is True
+
+    def test_global_hooks_handles_malformed_settings(self, mock_global_paths):
+        """Should report error for malformed settings.json."""
+        settings_path = mock_global_paths["settings_path"]
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text("not json {{{")
+
+        result = init_global_hooks()
+
+        assert len(result["errors"]) > 0
+        assert "parse" in result["errors"][0].lower()
+
+    def test_build_global_hook_settings_uses_absolute_paths(self, mock_global_paths):
+        """_build_global_hook_settings should use absolute paths."""
+        settings = _build_global_hook_settings()
+
+        all_commands = []
+        for entries in settings["hooks"].values():
+            for entry in entries:
+                for h in entry.get("hooks", []):
+                    all_commands.append(h.get("command", ""))
+
+        for cmd in all_commands:
+            assert "$CLAUDE_PROJECT_DIR" not in cmd
+            # Command should start with python3 followed by an absolute path
+            assert cmd.startswith("python3 /") or cmd.startswith("python3 C:"), f"Not absolute: {cmd}"

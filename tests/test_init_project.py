@@ -1662,8 +1662,13 @@ class TestEnsureEmbeddingModel:
         assert "downloaded and ready" in result["message"]
         assert call_count == 2  # first local_files_only, then full download
 
-    def test_ensure_model_returns_dict_structure(self):
+    def test_ensure_model_returns_dict_structure(self, monkeypatch):
         """Should return dict with expected keys."""
+        from unittest.mock import MagicMock
+
+        import sentence_transformers
+        monkeypatch.setattr(sentence_transformers, "SentenceTransformer", MagicMock())
+
         result = ensure_embedding_model()
 
         assert "downloaded" in result

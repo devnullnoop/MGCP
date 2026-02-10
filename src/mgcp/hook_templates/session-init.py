@@ -7,7 +7,7 @@ Injects:
 3. Intent-action map (what tools to call per intent)
 4. Workflow and reminder instructions
 
-Copy to your project's .claude/hooks/ directory, or run `mgcp-init` to deploy automatically.
+Target: ~800 tokens total injection (down from ~2000 in v1.2).
 """
 import json
 import os

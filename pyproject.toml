@@ -75,6 +75,7 @@ ignore = ["E741"]  # Allow single-letter variables in comprehensions
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501", "N806"]  # Tests can have long lines and mock variable names
+"src/mgcp/hook_templates/*" = ["N999", "E501", "UP024", "F841"]  # Standalone scripts: hyphenated names, long strings, legacy compat
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

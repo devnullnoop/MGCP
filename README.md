@@ -245,6 +245,11 @@ Each operation runs on its own schedule — staleness scans every 5 sessions, du
 | `rem_report` | View last cycle's findings |
 | `rem_status` | Show schedule state and what's due |
 
+### Workflow State (1)
+| Tool | Purpose |
+|------|---------|
+| `update_workflow_state` | Track active workflow and step progress |
+
 ### Reminders (2)
 | Tool | Purpose |
 |------|---------|
@@ -280,14 +285,15 @@ Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-remi
 
 | Command | Description |
 |---------|-------------|
-| `mgcp-init` | Configure for your LLM client |
+| `mgcp-init` | Configure LLM clients, deploy hooks, download embedding model |
 | `mgcp` | Start MCP server |
-| `mgcp-bootstrap` | Seed initial lessons |
+| `mgcp-bootstrap` | Seed initial lessons and workflows |
 | `mgcp-dashboard` | Start web UI |
-| `mgcp-export` | Export lessons |
-| `mgcp-import` | Import lessons |
-| `mgcp-duplicates` | Find duplicates |
-| `mgcp-backup` | Backup/restore |
+| `mgcp-export` | Export lessons/projects to JSON |
+| `mgcp-import` | Import lessons from JSON |
+| `mgcp-duplicates` | Find semantically similar lessons |
+| `mgcp-backup` | Backup/restore all MGCP data |
+| `mgcp-migrate` | Migrate from ChromaDB to Qdrant (legacy installs) |
 
 ## API & Dashboard
 

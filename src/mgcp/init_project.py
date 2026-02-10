@@ -1150,6 +1150,15 @@ Project-local hooks (--local):
     configured_claude_code = False
 
     for client_name in clients_to_configure:
+        # Skip claude-code client config when deploying global hooks.
+        # Global hooks already include mcpServers.mgcp in ~/.claude/settings.json,
+        # so writing it to ~/.claude.json too creates a duplicate server definition.
+        if client_name == "claude-code" and not args.local and not args.no_hooks:
+            configured_claude_code = True
+            print("    = Claude Code: mcpServers included in global hooks settings")
+            print(f"      {GLOBAL_SETTINGS_PATH}")
+            continue
+
         client = LLM_CLIENTS[client_name]
         result = configure_client(client, dry_run=dry_run)
 
@@ -1201,10 +1210,61 @@ Project-local hooks (--local):
         print(f"    {status_icon} {proj_result['message']}")
         print(f"      ~/.claude.json → projects.{project_dir}.mcpServers.mgcp")
 
+    # Pre-download embedding model so first query doesn't hang
+    if not dry_run:
+        print("\n  Checking embedding model:\n")
+        model_result = ensure_embedding_model()
+        status = "+" if model_result["downloaded"] else "="
+        print(f"    {status} {model_result['message']}")
+        if model_result.get("size"):
+            print(f"      {model_result['size']}")
+    else:
+        print("\n  Embedding model: would verify/download if needed")
+
     if dry_run:
         print("\n  Dry run complete. Run without --dry-run to apply changes.\n")
     else:
         print("\n  Done! Restart your LLM client for changes to take effect.\n")
+
+
+def ensure_embedding_model() -> dict:
+    """Ensure the BGE embedding model is downloaded and cached.
+
+    Downloads ~415MB on first run. Subsequent calls are near-instant.
+
+    Returns dict with status info.
+    """
+    result = {
+        "downloaded": False,
+        "message": None,
+        "size": None,
+        "error": None,
+    }
+
+    try:
+        from sentence_transformers import SentenceTransformer
+
+        from mgcp.embedding import MODEL_NAME
+
+        # Try local-only first to check if already cached
+        try:
+            SentenceTransformer(MODEL_NAME, local_files_only=True)
+            result["message"] = f"{MODEL_NAME} (already cached)"
+            return result
+        except OSError:
+            pass
+
+        # Need to download
+        print(f"    Downloading {MODEL_NAME} (~415MB, first time only)...")
+        SentenceTransformer(MODEL_NAME)
+        result["downloaded"] = True
+        result["message"] = f"{MODEL_NAME} downloaded and ready"
+        return result
+
+    except Exception as e:
+        result["message"] = f"Could not load embedding model: {e}"
+        result["error"] = str(e)
+        return result
 
 
 if __name__ == "__main__":

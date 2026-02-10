@@ -12,8 +12,14 @@ import pytest
 from mgcp.init_project import (
     HOOK_SCRIPT,
     HOOK_SETTINGS,
+    HOOK_TEMPLATES_DIR,
+    LEGACY_HOOK_FILES,
     LLM_CLIENTS,
+    V2_HOOK_FILES,
+    VERSION_MARKER,
     LLMClient,
+    _get_hook_version,
+    _merge_settings,
     configure_client,
     detect_installed_clients,
     get_mcp_server_config,
@@ -482,12 +488,10 @@ class TestClaudeHooks:
         """Should return list of created files."""
         result = init_claude_hooks(temp_project)
 
-        # Creates 6 hook scripts + settings.json = 7 files
-        assert len(result["created"]) == 7
+        # Creates 4 hook scripts + settings.json = 5 files
+        assert len(result["created"]) == 5
         assert any("session-init.py" in f for f in result["created"])
-        assert any("git-reminder.py" in f for f in result["created"])
-        assert any("catalogue-reminder.py" in f for f in result["created"])
-        assert any("task-start-reminder.py" in f for f in result["created"])
+        assert any("user-prompt-dispatcher.py" in f for f in result["created"])
         assert any("mgcp-reminder.py" in f for f in result["created"])
         assert any("mgcp-precompact.py" in f for f in result["created"])
         assert any("settings.json" in f for f in result["created"])
@@ -716,13 +720,13 @@ class TestIntegration:
 
     def test_idempotent_hooks(self, temp_project):
         """Running hook init twice should be idempotent."""
-        # First run - creates 6 hook scripts + settings.json = 7 files
+        # First run - creates 4 hook scripts + settings.json = 5 files
         result1 = init_claude_hooks(temp_project)
-        assert len(result1["created"]) == 7
+        assert len(result1["created"]) == 5
 
         # Second run - all hooks should be skipped, settings.json skipped too
         result2 = init_claude_hooks(temp_project)
-        assert len(result2["skipped"]) == 7
+        assert len(result2["skipped"]) == 5
         assert len(result2["created"]) == 0
 
 
@@ -951,6 +955,7 @@ class TestConfigFormat:
     def test_hook_settings_format(self):
         """Hook settings should have correct format."""
         assert "hooks" in HOOK_SETTINGS
+        assert "permissions" in HOOK_SETTINGS
         assert "SessionStart" in HOOK_SETTINGS["hooks"]
 
         session_hooks = HOOK_SETTINGS["hooks"]["SessionStart"]
@@ -960,6 +965,29 @@ class TestConfigFormat:
         first_hook = session_hooks[0]
         assert "hooks" in first_hook
         assert isinstance(first_hook["hooks"], list)
+
+    def test_hook_settings_has_permissions(self):
+        """Hook settings should include MGCP permissions."""
+        assert "permissions" in HOOK_SETTINGS
+        assert "allow" in HOOK_SETTINGS["permissions"]
+        assert "mcp__mgcp__*" in HOOK_SETTINGS["permissions"]["allow"]
+
+    def test_hook_settings_has_v2_hooks(self):
+        """Hook settings should reference v2 hook files."""
+        all_commands = []
+        for hook_type, entries in HOOK_SETTINGS["hooks"].items():
+            for entry in entries:
+                for h in entry.get("hooks", []):
+                    all_commands.append(h.get("command", ""))
+
+        assert any("session-init.py" in c for c in all_commands)
+        assert any("user-prompt-dispatcher.py" in c for c in all_commands)
+        assert any("mgcp-reminder.py" in c for c in all_commands)
+        assert any("mgcp-precompact.py" in c for c in all_commands)
+        # No legacy hooks
+        assert not any("git-reminder.py" in c for c in all_commands)
+        assert not any("catalogue-reminder.py" in c for c in all_commands)
+        assert not any("task-start-reminder.py" in c for c in all_commands)
 
 
 # ============================================================================
@@ -1000,8 +1028,8 @@ class TestDryRun:
         """Dry run should not create hook files."""
         result = init_claude_hooks(temp_project, dry_run=True)
 
-        # Would create 6 hook scripts + settings.json = 7 files
-        assert len(result["would_create"]) == 7
+        # Would create 4 hook scripts + settings.json = 5 files
+        assert len(result["would_create"]) == 5
         assert len(result["created"]) == 0
         assert not (temp_project / ".claude").exists()
 
@@ -1084,9 +1112,238 @@ class TestHookScriptContent:
     def test_hook_script_mentions_mgcp(self):
         """Hook script should mention MGCP."""
         assert "MGCP" in HOOK_SCRIPT
-        assert "Memory Graph Core Primitives" in HOOK_SCRIPT
 
     def test_hook_script_mentions_tools(self):
         """Hook script should mention MCP tools to call."""
         assert "get_project_context" in HOOK_SCRIPT
         assert "query_lessons" in HOOK_SCRIPT
+
+
+# ============================================================================
+# Tests: v2 Hook Templates
+# ============================================================================
+
+class TestHookTemplates:
+    """Tests for v2 hook template package."""
+
+    def test_hook_templates_dir_exists(self):
+        """Hook templates directory should exist."""
+        assert HOOK_TEMPLATES_DIR.exists()
+        assert HOOK_TEMPLATES_DIR.is_dir()
+
+    def test_hook_templates_version_file_exists(self):
+        """VERSION file should exist in templates."""
+        version_file = HOOK_TEMPLATES_DIR / "VERSION"
+        assert version_file.exists()
+        assert version_file.read_text().strip() == "2.0"
+
+    def test_all_v2_templates_exist(self):
+        """All v2 hook template files should exist."""
+        for filename in V2_HOOK_FILES:
+            template = HOOK_TEMPLATES_DIR / filename
+            assert template.exists(), f"Missing template: {filename}"
+
+    def test_templates_are_valid_python(self):
+        """All hook templates should be valid Python."""
+        for filename in V2_HOOK_FILES:
+            template = HOOK_TEMPLATES_DIR / filename
+            code = template.read_text()
+            compile(code, str(template), "exec")
+
+    def test_get_hook_version(self):
+        """_get_hook_version should return version string."""
+        version = _get_hook_version()
+        assert version == "2.0"
+
+
+# ============================================================================
+# Tests: Force Upgrade
+# ============================================================================
+
+class TestForceUpgrade:
+    """Tests for --force hook upgrade functionality."""
+
+    def test_force_overwrites_existing_hooks(self, temp_project):
+        """Force should overwrite existing hook files."""
+        # First install
+        init_claude_hooks(temp_project)
+
+        # Modify a hook file
+        hook_file = temp_project / ".claude" / "hooks" / "session-init.py"
+        hook_file.write_text("# custom modification")
+
+        # Force reinstall
+        result = init_claude_hooks(temp_project, force=True)
+
+        assert len(result["updated"]) >= 4  # 4 hooks overwritten
+        assert hook_file.read_text() != "# custom modification"
+
+    def test_force_removes_legacy_hooks(self, temp_project):
+        """Force should remove legacy v1 hook files."""
+        hooks_dir = temp_project / ".claude" / "hooks"
+        hooks_dir.mkdir(parents=True)
+
+        # Create legacy files
+        for legacy_name in LEGACY_HOOK_FILES:
+            (hooks_dir / legacy_name).write_text("# legacy")
+
+        result = init_claude_hooks(temp_project, force=True)
+
+        assert len(result["removed"]) == 3
+        for legacy_name in LEGACY_HOOK_FILES:
+            assert not (hooks_dir / legacy_name).exists()
+
+    def test_force_dry_run_reports_removals(self, temp_project):
+        """Force dry-run should report what legacy files would be removed."""
+        hooks_dir = temp_project / ".claude" / "hooks"
+        hooks_dir.mkdir(parents=True)
+
+        for legacy_name in LEGACY_HOOK_FILES:
+            (hooks_dir / legacy_name).write_text("# legacy")
+
+        result = init_claude_hooks(temp_project, force=True, dry_run=True)
+
+        assert len(result["would_remove"]) == 3
+        # Legacy files should still exist (dry run)
+        for legacy_name in LEGACY_HOOK_FILES:
+            assert (hooks_dir / legacy_name).exists()
+
+    def test_force_cleans_legacy_from_settings(self, temp_project):
+        """Force should remove legacy hook commands from settings.json."""
+        claude_dir = temp_project / ".claude"
+        claude_dir.mkdir()
+        settings_file = claude_dir / "settings.json"
+
+        # Create settings with legacy hooks
+        legacy_settings = {
+            "hooks": {
+                "UserPromptSubmit": [{
+                    "hooks": [
+                        {"type": "command", "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/git-reminder.py"},
+                        {"type": "command", "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/catalogue-reminder.py"},
+                    ]
+                }]
+            }
+        }
+        settings_file.write_text(json.dumps(legacy_settings))
+
+        init_claude_hooks(temp_project, force=True)
+
+        settings = json.loads(settings_file.read_text())
+        all_commands = []
+        for entries in settings["hooks"].values():
+            for entry in entries:
+                for h in entry.get("hooks", []):
+                    all_commands.append(h.get("command", ""))
+
+        assert not any("git-reminder.py" in c for c in all_commands)
+        assert not any("catalogue-reminder.py" in c for c in all_commands)
+        # v2 hooks should be present
+        assert any("user-prompt-dispatcher.py" in c for c in all_commands)
+
+
+# ============================================================================
+# Tests: Settings Merge
+# ============================================================================
+
+class TestSettingsMerge:
+    """Tests for _merge_settings function."""
+
+    def test_merge_adds_permissions_to_empty(self):
+        """Should add permissions to empty settings."""
+        existing = {}
+        changed = _merge_settings(existing, HOOK_SETTINGS)
+
+        assert changed
+        assert "permissions" in existing
+        assert "mcp__mgcp__*" in existing["permissions"]["allow"]
+
+    def test_merge_preserves_existing_permissions(self):
+        """Should preserve existing permissions while adding MGCP."""
+        existing = {
+            "permissions": {
+                "allow": ["other_tool__*"],
+            }
+        }
+        _merge_settings(existing, HOOK_SETTINGS)
+
+        assert "other_tool__*" in existing["permissions"]["allow"]
+        assert "mcp__mgcp__*" in existing["permissions"]["allow"]
+
+    def test_merge_does_not_duplicate_permission(self):
+        """Should not duplicate permission if already present."""
+        existing = {
+            "permissions": {
+                "allow": ["mcp__mgcp__*"],
+            },
+            "hooks": HOOK_SETTINGS["hooks"].copy(),
+        }
+        changed = _merge_settings(existing, HOOK_SETTINGS)
+
+        assert not changed
+        assert existing["permissions"]["allow"].count("mcp__mgcp__*") == 1
+
+    def test_merge_adds_missing_hook_types(self):
+        """Should add hook types that don't exist."""
+        existing = {"hooks": {"CustomHook": []}}
+        _merge_settings(existing, HOOK_SETTINGS)
+
+        assert "CustomHook" in existing["hooks"]  # Preserved
+        assert "SessionStart" in existing["hooks"]  # Added
+
+    def test_merge_appends_mgcp_hooks_to_existing_type(self):
+        """Should append MGCP hooks when hook type exists but MGCP command missing."""
+        existing = {
+            "hooks": {
+                "SessionStart": [{
+                    "hooks": [{"type": "command", "command": "python3 other-hook.py"}]
+                }]
+            }
+        }
+        changed = _merge_settings(existing, HOOK_SETTINGS)
+
+        assert changed
+        # Should have both the original and MGCP hooks
+        commands = []
+        for entry in existing["hooks"]["SessionStart"]:
+            for h in entry.get("hooks", []):
+                commands.append(h.get("command", ""))
+        assert any("other-hook.py" in c for c in commands)
+        assert any("session-init.py" in c for c in commands)
+
+
+# ============================================================================
+# Tests: Version Marker
+# ============================================================================
+
+class TestVersionMarker:
+    """Tests for hook version marker functionality."""
+
+    def test_version_marker_created(self, temp_project):
+        """Version marker file should be created after hook deployment."""
+        init_claude_hooks(temp_project)
+
+        version_file = temp_project / ".claude" / "hooks" / VERSION_MARKER
+        assert version_file.exists()
+        assert version_file.read_text().strip() == "2.0"
+
+    def test_upgrade_available_when_version_mismatch(self, temp_project):
+        """Should report upgrade_available when version marker is outdated."""
+        # First install
+        init_claude_hooks(temp_project)
+
+        # Fake an old version
+        version_file = temp_project / ".claude" / "hooks" / VERSION_MARKER
+        version_file.write_text("1.0\n")
+
+        result = init_claude_hooks(temp_project)
+
+        assert result["upgrade_available"] is True
+
+    def test_no_upgrade_when_version_matches(self, temp_project):
+        """Should not report upgrade when version matches."""
+        init_claude_hooks(temp_project)
+
+        result = init_claude_hooks(temp_project)
+
+        assert result["upgrade_available"] is False

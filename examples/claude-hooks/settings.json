@@ -1,4 +1,9 @@
 {
+  "permissions": {
+    "allow": [
+      "mcp__mgcp__*"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -6,6 +11,37 @@
           {
             "type": "command",
             "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/session-init.py"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/user-prompt-dispatcher.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/mgcp-reminder.py"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/mgcp-precompact.py"
           }
         ]
       }

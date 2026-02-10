@@ -181,251 +181,114 @@ LLM_CLIENTS: dict[str, LLMClient] = {
 
 
 # ============================================================================
-# Claude Code Hooks (Claude Code specific feature)
+# Claude Code Hooks (v2 - intent-based LLM self-routing)
 # ============================================================================
 
-HOOK_SCRIPT = '''#!/usr/bin/env python3
-"""
-SessionStart hook for MGCP (Memory Graph Core Primitives).
-Injects context telling the LLM to load lessons and project context.
-"""
-import json
-import os
+HOOK_TEMPLATES_DIR = Path(__file__).parent / "hook_templates"
 
-project_path = os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd())
+# Legacy hook filenames (v1) - removed during --force upgrade
+LEGACY_HOOK_FILES = [
+    "git-reminder.py",
+    "catalogue-reminder.py",
+    "task-start-reminder.py",
+]
 
-context = f"""## Session Startup Instructions
+# v2 hook files: filename -> (hook event type, optional matcher)
+V2_HOOK_FILES = {
+    "session-init.py": ("SessionStart", None),
+    "user-prompt-dispatcher.py": ("UserPromptSubmit", None),
+    "mgcp-reminder.py": ("PostToolUse", "Edit|Write"),
+    "mgcp-precompact.py": ("PreCompact", None),
+}
 
-You have access to the MGCP (Memory Graph Core Primitives) MCP server. At the start of this session:
+VERSION_MARKER = ".mgcp-hook-version"
 
-1. Call `mcp__mgcp__get_project_context` with project_path: "{project_path}"
-2. Call `mcp__mgcp__query_lessons` with a task_description based on what the user is asking about
-3. Call `mcp__mgcp__rem_status` to check if any REM cycle operations are due
 
-If rem_status shows any operations as "DUE", mention it to the user and offer to run `rem_run`.
-This ensures you have relevant lessons and project context loaded before proceeding.
-"""
+def _load_hook_template(filename: str) -> str:
+    """Read a hook template from the package templates directory."""
+    template_path = HOOK_TEMPLATES_DIR / filename
+    return template_path.read_text()
 
-output = {
-    "hookSpecificOutput": {
-        "hookEventName": "SessionStart",
-        "additionalContext": context
+
+def _get_hook_version() -> str:
+    """Read the hook template version."""
+    version_path = HOOK_TEMPLATES_DIR / "VERSION"
+    return version_path.read_text().strip()
+
+
+# Backward compat: HOOK_SCRIPT is still importable for tests
+HOOK_SCRIPT = _load_hook_template("session-init.py")
+
+
+def _build_hook_settings() -> dict:
+    """Build the v2 HOOK_SETTINGS dict from V2_HOOK_FILES."""
+    hooks: dict[str, list] = {}
+    for filename, (event_type, matcher) in V2_HOOK_FILES.items():
+        entry_hook = {
+            "type": "command",
+            "command": f"python3 $CLAUDE_PROJECT_DIR/.claude/hooks/{filename}",
+        }
+        entry: dict = {"hooks": [entry_hook]}
+        if matcher:
+            entry["matcher"] = matcher
+        if event_type not in hooks:
+            hooks[event_type] = []
+        hooks[event_type].append(entry)
+    return {
+        "permissions": {
+            "allow": ["mcp__mgcp__*"],
+        },
+        "hooks": hooks,
     }
-}
 
-print(json.dumps(output))
-'''
 
-REMINDER_HOOK_SCRIPT = '''#!/usr/bin/env python3
-"""PostToolUse hook - short reminder after code changes."""
-print("[MGCP] Did you learn something worth saving? Use mcp__mgcp__add_lesson")
-'''
+HOOK_SETTINGS = _build_hook_settings()
 
-PRECOMPACT_HOOK_SCRIPT = '''#!/usr/bin/env python3
-"""PreCompact hook - CRITICAL reminder before context compression."""
-print("""
-╔════════════════════════════════════════════════════════════════════╗
-║  CONTEXT COMPRESSION IMMINENT - SAVE YOUR LESSONS NOW              ║
-╠════════════════════════════════════════════════════════════════════╣
-║  Before this context compresses, you MUST:                         ║
-║                                                                    ║
-║  1. ADD any lessons learned this session:                          ║
-║     → mcp__mgcp__add_lesson                                        ║
-║                                                                    ║
-║  2. SAVE project context for next session:                         ║
-║     → mcp__mgcp__save_project_context                              ║
-║                                                                    ║
-║  If you learned ANYTHING worth remembering, add it NOW or lose it. ║
-╚════════════════════════════════════════════════════════════════════╝
-""")
-'''
 
-GIT_REMINDER_HOOK_SCRIPT = '''#!/usr/bin/env python3
-"""UserPromptSubmit hook that detects git operations and reminds to query lessons."""
-import json
-import re
-import sys
+def _merge_settings(existing: dict, mgcp_settings: dict) -> bool:
+    """Merge MGCP settings into existing settings.json.
 
-GIT_KEYWORDS = [r"\\bcommit\\b", r"\\bpush\\b", r"\\bgit\\b", r"\\bpr\\b", r"\\bpull request\\b", r"\\bmerge\\b"]
+    - Adds mcp__mgcp__* to permissions.allow without clobbering existing perms
+    - Checks for MGCP hooks by command string, not just by hook type presence
+    - Appends MGCP hooks when the hook type exists but MGCP command is missing
 
-def main():
-    try:
-        hook_input = json.load(sys.stdin)
-    except json.JSONDecodeError:
-        sys.exit(0)
+    Returns True if any changes were made.
+    """
+    changed = False
 
-    prompt = hook_input.get("prompt", "").lower()
+    # Merge permissions.allow
+    mgcp_perm = "mcp__mgcp__*"
+    if "permissions" not in existing:
+        existing["permissions"] = {}
+    if "allow" not in existing["permissions"]:
+        existing["permissions"]["allow"] = []
+    if mgcp_perm not in existing["permissions"]["allow"]:
+        existing["permissions"]["allow"].append(mgcp_perm)
+        changed = True
 
-    for pattern in GIT_KEYWORDS:
-        if re.search(pattern, prompt, re.IGNORECASE):
-            print("""<user-prompt-submit-hook>
-BEFORE executing any git operation (commit, push, PR):
-1. Call mcp__mgcp__query_lessons with "git commit workflow"
-2. Follow any project-specific git lessons (like attribution rules)
-3. Then proceed with the git operation
-</user-prompt-submit-hook>""")
-            sys.exit(0)
+    # Merge hooks
+    if "hooks" not in existing:
+        existing["hooks"] = {}
 
-    sys.exit(0)
+    for hook_type, hook_entries in mgcp_settings["hooks"].items():
+        if hook_type not in existing["hooks"]:
+            existing["hooks"][hook_type] = hook_entries
+            changed = True
+        else:
+            # Hook type exists - check if MGCP hooks are already present
+            existing_commands = set()
+            for group in existing["hooks"][hook_type]:
+                for h in group.get("hooks", []):
+                    existing_commands.add(h.get("command", ""))
 
-if __name__ == "__main__":
-    main()
-'''
+            for entry in hook_entries:
+                for h in entry.get("hooks", []):
+                    if h.get("command", "") not in existing_commands:
+                        existing["hooks"][hook_type].append(entry)
+                        changed = True
+                        break  # Only append the entry once
 
-CATALOGUE_REMINDER_HOOK_SCRIPT = '''#!/usr/bin/env python3
-"""UserPromptSubmit hook that detects library/security/decision mentions."""
-import json
-import re
-import sys
-
-CATALOGUE_PATTERNS = [
-    (r"\\b(using|chose|picked|selected|installed|added)\\b.{0,30}\\b(library|package|framework|tool)\\b", "dependency"),
-    (r"\\b(pip install|npm install|cargo add|go get)\\b", "dependency"),
-    (r"\\b(security|vulnerability|cve|exploit)\\b.{0,20}\\b(issue|bug|concern|risk)\\b", "security"),
-    (r"\\b(decided|choosing|picked|went with)\\b.{0,20}\\b(over|instead of)\\b", "decision"),
-    (r"\\b(gotcha|quirk|caveat|watch out|careful|tricky)\\b", "arch_note"),
-    (r"\\b(convention|naming|style|always|never)\\b.{0,20}\\b(use|follow|do|avoid)\\b", "convention"),
-]
-
-REMINDERS = {
-    "dependency": "mcp__mgcp__add_catalogue_dependency (name, purpose, version)",
-    "security": "mcp__mgcp__add_catalogue_security_note (title, description, severity)",
-    "decision": "mcp__mgcp__add_catalogue_decision (title, decision, rationale)",
-    "arch_note": "mcp__mgcp__add_catalogue_arch_note (title, description, category)",
-    "convention": "mcp__mgcp__add_catalogue_convention (title, rule, category)",
-}
-
-def main():
-    try:
-        hook_input = json.load(sys.stdin)
-    except json.JSONDecodeError:
-        sys.exit(0)
-
-    prompt = hook_input.get("prompt", "")
-    detected = set()
-
-    for pattern, cat_type in CATALOGUE_PATTERNS:
-        if re.search(pattern, prompt, re.IGNORECASE):
-            detected.add(cat_type)
-
-    if detected:
-        print("<user-prompt-submit-hook>")
-        print("Consider cataloguing: " + ", ".join(REMINDERS[t] for t in detected))
-        print("</user-prompt-submit-hook>")
-
-    sys.exit(0)
-
-if __name__ == "__main__":
-    main()
-'''
-
-TASK_START_HOOK_SCRIPT = '''#!/usr/bin/env python3
-"""UserPromptSubmit hook that detects task-start phrases and reminds to query lessons."""
-import json
-import re
-import sys
-
-# Patterns that indicate a new task is starting
-TASK_START_PATTERNS = [
-    r"\\b(fix|fixing|debug|debugging)\\b.{0,30}\\b(bug|issue|error|problem)\\b",
-    r"\\b(implement|implementing|add|adding|create|creating|build|building)\\b.{0,30}\\b(feature|function|method|class|component|endpoint|api)\\b",
-    r"\\b(refactor|refactoring|restructure|reorganize|clean up)\\b",
-    r"\\b(update|updating|change|changing|modify|modifying)\\b.{0,20}\\b(the|this|that)\\b",
-    r"\\blet'?s\\s+(fix|implement|add|create|build|refactor|update|change|work on)\\b",
-    r"\\b(can you|could you|please|i need you to)\\b.{0,20}\\b(fix|implement|add|create|build|refactor|update)\\b",
-    r"\\b(work on|working on|tackle|tackling|handle|handling)\\b",
-    r"\\b(set up|setting up|configure|configuring|install|installing)\\b",
-]
-
-# Don't trigger on these (already handled by other hooks or too trivial)
-IGNORE_PATTERNS = [
-    r"\\b(commit|push|pull|merge|git)\\b",  # Handled by git-reminder
-    r"\\b(library|package|framework|security|convention)\\b",  # Handled by catalogue-reminder
-]
-
-def main():
-    try:
-        hook_input = json.load(sys.stdin)
-    except json.JSONDecodeError:
-        sys.exit(0)
-
-    prompt = hook_input.get("prompt", "").lower()
-
-    # Skip if handled by other hooks
-    for pattern in IGNORE_PATTERNS:
-        if re.search(pattern, prompt, re.IGNORECASE):
-            sys.exit(0)
-
-    # Check for task-start patterns
-    for pattern in TASK_START_PATTERNS:
-        if re.search(pattern, prompt, re.IGNORECASE):
-            print("""<user-prompt-submit-hook>
-BEFORE starting this task:
-1. Call mcp__mgcp__query_lessons with a brief description of the task
-2. Call mcp__mgcp__get_workflow to check if bug-fix or feature-development workflow applies
-3. Use TodoWrite to plan the steps, informed by the lessons and workflow
-</user-prompt-submit-hook>""")
-            sys.exit(0)
-
-    sys.exit(0)
-
-if __name__ == "__main__":
-    main()
-'''
-
-HOOK_SETTINGS = {
-    "hooks": {
-        "UserPromptSubmit": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/git-reminder.py"
-                    },
-                    {
-                        "type": "command",
-                        "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/catalogue-reminder.py"
-                    },
-                    {
-                        "type": "command",
-                        "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/task-start-reminder.py"
-                    }
-                ]
-            }
-        ],
-        "SessionStart": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/session-init.py"
-                    }
-                ]
-            }
-        ],
-        "PostToolUse": [
-            {
-                "matcher": "Edit|Write",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/mgcp-reminder.py"
-                    }
-                ]
-            }
-        ],
-        "PreCompact": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/mgcp-precompact.py"
-                    }
-                ]
-            }
-        ]
-    }
-}
+    return changed
 
 
 # ============================================================================
@@ -518,24 +381,23 @@ def detect_installed_clients() -> list[str]:
     return installed
 
 
-def init_claude_hooks(project_dir: Path, dry_run: bool = False) -> dict:
+def init_claude_hooks(project_dir: Path, dry_run: bool = False, force: bool = False) -> dict:
     """
-    Initialize Claude Code hooks in a project directory.
+    Initialize Claude Code v2 hooks in a project directory.
 
     Creates:
-    - .claude/hooks/session-init.py        (SessionStart hook)
-    - .claude/hooks/git-reminder.py        (UserPromptSubmit hook - git operations)
-    - .claude/hooks/catalogue-reminder.py  (UserPromptSubmit hook - catalogue prompts)
-    - .claude/hooks/task-start-reminder.py (UserPromptSubmit hook - task start detection)
-    - .claude/hooks/mgcp-reminder.py       (PostToolUse hook)
-    - .claude/hooks/mgcp-precompact.py     (PreCompact hook)
-    - .claude/settings.json                (Hook configuration)
+    - .claude/hooks/session-init.py           (SessionStart hook)
+    - .claude/hooks/user-prompt-dispatcher.py  (UserPromptSubmit hook)
+    - .claude/hooks/mgcp-reminder.py           (PostToolUse hook)
+    - .claude/hooks/mgcp-precompact.py         (PreCompact hook)
+    - .claude/settings.json                    (Hook + permission configuration)
 
     All hooks are Python for cross-platform Windows compatibility.
 
     Args:
         project_dir: The project directory to initialize
         dry_run: If True, don't write changes, just report what would happen
+        force: If True, overwrite existing hooks and remove legacy files
 
     Returns dict with status info.
     """
@@ -545,30 +407,48 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False) -> dict:
         "updated": [],
         "would_update": [],
         "skipped": [],
+        "removed": [],
+        "would_remove": [],
         "errors": [],
+        "upgrade_available": False,
     }
 
     hooks_dir = project_dir / ".claude" / "hooks"
     settings_file = project_dir / ".claude" / "settings.json"
-
-    # Define all hook files to create (all Python for cross-platform support)
-    hook_files = [
-        (hooks_dir / "session-init.py", HOOK_SCRIPT),
-        (hooks_dir / "git-reminder.py", GIT_REMINDER_HOOK_SCRIPT),
-        (hooks_dir / "catalogue-reminder.py", CATALOGUE_REMINDER_HOOK_SCRIPT),
-        (hooks_dir / "task-start-reminder.py", TASK_START_HOOK_SCRIPT),
-        (hooks_dir / "mgcp-reminder.py", REMINDER_HOOK_SCRIPT),
-        (hooks_dir / "mgcp-precompact.py", PRECOMPACT_HOOK_SCRIPT),
-    ]
+    version_file = hooks_dir / VERSION_MARKER
+    current_version = _get_hook_version()
 
     # Check/create .claude/hooks directory
     if not dry_run:
         hooks_dir.mkdir(parents=True, exist_ok=True)
 
+    # Check existing version marker
+    if not force and version_file.exists():
+        installed_version = version_file.read_text().strip()
+        if installed_version == current_version:
+            # All up to date - still need to check individual files
+            pass
+        else:
+            results["upgrade_available"] = True
+
+    # Build hook file list from templates
+    hook_files = []
+    for filename in V2_HOOK_FILES:
+        content = _load_hook_template(filename)
+        hook_files.append((hooks_dir / filename, content))
+
     # Write all hook files
     for hook_file, hook_content in hook_files:
         if hook_file.exists():
-            results["skipped"].append(str(hook_file))
+            if force:
+                if dry_run:
+                    results["would_update"].append(str(hook_file))
+                else:
+                    hook_file.write_text(hook_content)
+                    hook_file.chmod(0o755)
+                    results["updated"].append(str(hook_file))
+            else:
+                results["skipped"].append(str(hook_file))
         else:
             if dry_run:
                 results["would_create"].append(str(hook_file))
@@ -577,23 +457,51 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False) -> dict:
                 hook_file.chmod(0o755)
                 results["created"].append(str(hook_file))
 
-    # Write project settings.json - MERGE hooks, don't replace
+    # Remove legacy hook files when force is set
+    if force:
+        for legacy_name in LEGACY_HOOK_FILES:
+            legacy_file = hooks_dir / legacy_name
+            if legacy_file.exists():
+                if dry_run:
+                    results["would_remove"].append(str(legacy_file))
+                else:
+                    legacy_file.unlink()
+                    results["removed"].append(str(legacy_file))
+
+    # Write version marker
+    if not dry_run:
+        version_file.write_text(current_version + "\n")
+
+    # Write project settings.json - MERGE hooks and permissions
     if settings_file.exists():
         try:
             existing = json.loads(settings_file.read_text())
-            if "hooks" not in existing:
-                existing["hooks"] = {}
 
-            # Merge MGCP hooks into existing hooks (preserves user's other hooks)
-            needs_update = False
-            for hook_type, hook_config in HOOK_SETTINGS["hooks"].items():
-                if hook_type not in existing["hooks"]:
-                    existing["hooks"][hook_type] = hook_config
-                    needs_update = True
-                # If hook type exists, check if MGCP hook is already there
-                # Don't clobber existing hooks of the same type
+            if force:
+                # Remove legacy hook commands from settings
+                if "hooks" in existing:
+                    for hook_type in list(existing["hooks"].keys()):
+                        groups = existing["hooks"][hook_type]
+                        for group in groups:
+                            hooks_list = group.get("hooks", [])
+                            group["hooks"] = [
+                                h for h in hooks_list
+                                if not any(
+                                    legacy in h.get("command", "")
+                                    for legacy in LEGACY_HOOK_FILES
+                                )
+                            ]
+                        # Remove empty groups
+                        existing["hooks"][hook_type] = [
+                            g for g in groups if g.get("hooks")
+                        ]
+                        # Remove empty hook types
+                        if not existing["hooks"][hook_type]:
+                            del existing["hooks"][hook_type]
 
-            if needs_update:
+            needs_update = _merge_settings(existing, HOOK_SETTINGS)
+
+            if needs_update or force:
                 if dry_run:
                     results["would_update"].append(str(settings_file))
                 else:
@@ -840,15 +748,14 @@ Examples:
   mgcp-init --client claude-code --client cursor  # Configure multiple clients
   mgcp-init --list                   # List supported clients
   mgcp-init --detect                 # Show which clients are installed
+  mgcp-init --force /path/to/project # Upgrade hooks to v2 (overwrites existing)
 
-For Claude Code users, this also creates project hooks:
-  .claude/hooks/session-init.py        # Loads MGCP context on session start
-  .claude/hooks/git-reminder.py        # Reminds to query lessons before git ops
-  .claude/hooks/catalogue-reminder.py  # Prompts to catalogue libraries/decisions
-  .claude/hooks/task-start-reminder.py # Reminds to query lessons before tasks
-  .claude/hooks/mgcp-reminder.py       # Reminds to save lessons after edits
-  .claude/hooks/mgcp-precompact.py     # Critical reminder before context compression
-  .claude/settings.json                # Enables all hooks
+For Claude Code users, this also creates v2 project hooks:
+  .claude/hooks/session-init.py           # Intent-routing + context loading
+  .claude/hooks/user-prompt-dispatcher.py # Scheduled reminders + workflow state
+  .claude/hooks/mgcp-reminder.py          # Proof-based checkpoint after edits
+  .claude/hooks/mgcp-precompact.py        # Critical save before context compression
+  .claude/settings.json                   # Hook config + MGCP permissions
         """,
     )
 
@@ -876,6 +783,12 @@ For Claude Code users, this also creates project hooks:
         "--detect", "-d",
         action="store_true",
         help="Detect which LLM clients are installed",
+    )
+
+    parser.add_argument(
+        "--force", "-f",
+        action="store_true",
+        help="Force overwrite existing hooks and remove legacy v1 hooks",
     )
 
     parser.add_argument(
@@ -1045,21 +958,28 @@ For Claude Code users, this also creates project hooks:
 
     # Create Claude Code hooks if applicable
     if configured_claude_code and not args.no_hooks:
-        print("\n  Creating Claude Code project hooks:\n")
-        hook_results = init_claude_hooks(project_dir, dry_run=dry_run)
+        print("\n  Creating Claude Code v2 project hooks:\n")
+        hook_results = init_claude_hooks(project_dir, dry_run=dry_run, force=args.force)
 
         for f in hook_results["created"]:
             print(f"    + {f}")
         for f in hook_results["would_create"]:
             print(f"    ? {f} (would create)")
         for f in hook_results["updated"]:
-            print(f"    ~ {f}")
+            print(f"    ~ {f} (overwritten)")
         for f in hook_results["would_update"]:
-            print(f"    ? {f} (would update)")
+            print(f"    ? {f} (would overwrite)")
+        for f in hook_results["removed"]:
+            print(f"    - {f} (legacy removed)")
+        for f in hook_results["would_remove"]:
+            print(f"    ? {f} (would remove legacy)")
         for f in hook_results["skipped"]:
             print(f"    = {f} (already exists)")
         for e in hook_results["errors"]:
             print(f"    ! {e}")
+
+        if hook_results["upgrade_available"]:
+            print("\n    Note: Hook upgrade available. Run with --force to upgrade to latest v2 hooks.")
 
     # Configure project-specific MCP server if requested
     if configured_claude_code and args.project_config:

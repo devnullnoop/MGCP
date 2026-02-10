@@ -1382,7 +1382,7 @@ class TestGlobalHooks:
         assert len(result["created"]) >= 4  # 4 scripts
 
     def test_init_global_hooks_creates_settings(self, mock_global_paths):
-        """Should create ~/.claude/settings.json with hook config."""
+        """Should create ~/.claude/settings.json with hook config and MCP server."""
         settings_path = mock_global_paths["settings_path"]
 
         init_global_hooks()
@@ -1391,6 +1391,8 @@ class TestGlobalHooks:
         settings = json.loads(settings_path.read_text())
         assert "hooks" in settings
         assert "permissions" in settings
+        assert "mcpServers" in settings
+        assert "mgcp" in settings["mcpServers"]
         assert "SessionStart" in settings["hooks"]
 
     def test_init_global_hooks_uses_absolute_paths(self, mock_global_paths):
@@ -1429,6 +1431,7 @@ class TestGlobalHooks:
         settings = json.loads(settings_path.read_text())
         assert settings["customSetting"] is True
         assert "other" in settings["mcpServers"]
+        assert "mgcp" in settings["mcpServers"]
         assert "hooks" in settings
         assert "mcp__mgcp__*" in settings["permissions"]["allow"]
 
@@ -1537,6 +1540,27 @@ class TestGlobalHooks:
 
         assert len(result["errors"]) > 0
         assert "parse" in result["errors"][0].lower()
+
+    def test_global_settings_includes_mcp_server(self, mock_global_paths):
+        """Global settings should include mcpServers.mgcp so tools actually exist."""
+        settings_path = mock_global_paths["settings_path"]
+
+        init_global_hooks()
+
+        settings = json.loads(settings_path.read_text())
+        assert "mcpServers" in settings
+        assert "mgcp" in settings["mcpServers"]
+        mgcp_config = settings["mcpServers"]["mgcp"]
+        assert mgcp_config["args"] == ["-m", "mgcp.server"]
+        assert "command" in mgcp_config
+        assert "cwd" in mgcp_config
+
+    def test_build_global_hook_settings_includes_mcp_server(self):
+        """_build_global_hook_settings should include mcpServers."""
+        settings = _build_global_hook_settings()
+        assert "mcpServers" in settings
+        assert "mgcp" in settings["mcpServers"]
+        assert settings["mcpServers"]["mgcp"] == get_mcp_server_config()
 
     def test_build_global_hook_settings_uses_absolute_paths(self, mock_global_paths):
         """_build_global_hook_settings should use absolute paths."""

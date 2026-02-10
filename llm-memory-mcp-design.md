@@ -4,7 +4,7 @@
 
 A persistent, queryable memory system for LLM interactions that stores learned lessons in a graph structure. Instead of loading all context upfront (crushing token counts) or losing lessons to compression, the LLM queries for relevant lessons based on current task context.
 
-> **Status**: v1.2.0 - Alpha/Research project. Phases 1-5 complete, actively dogfooding.
+> **Status**: v2.0.0 - Alpha/Research project. Phases 1-7 complete, actively dogfooding.
 
 ### Core Problem Solved
 
@@ -325,7 +325,7 @@ MGCP/
 ├── src/
 │   └── mgcp/
 │       ├── __init__.py
-│       ├── server.py            # MCP server (38 tools)
+│       ├── server.py            # MCP server (42 tools)
 │       ├── models.py            # Pydantic models
 │       ├── graph.py             # NetworkX graph operations
 │       ├── qdrant_vector_store.py     # Qdrant for lessons

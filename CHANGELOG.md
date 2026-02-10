@@ -7,13 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-02-10
+
 ### Added
+- **Intent-based LLM self-routing**: Replaced regex-based hook dispatching with semantic intent classification (87% accuracy vs 58% for regex). 7 intent categories with an intent-action map injected at session start (~800 tokens vs ~2000)
 - **REM cycle**: Periodic knowledge consolidation with 3 new MCP tools (`rem_run`, `rem_report`, `rem_status`). Operations: staleness scan, duplicate detection, community detection, knowledge extraction, context summary
 - **Versioned context history**: `save_project_context` now appends snapshots to `context_history` table with catalogue delta tracking
 - **Lesson version history**: `refine_lesson` now snapshots previous version into `lesson_versions` table before overwriting
 - **Multi-strategy scheduling**: REM operations run on independent schedules - linear (staleness), fibonacci (community detection), logarithmic (knowledge extraction)
 - **Interactive findings**: REM cycle produces structured findings with selectable options for human-in-the-loop review
 - **Backfill migrations**: Existing lessons and projects get version history records on upgrade (migrations 5-7)
+- **Workflow state management**: `update_workflow_state` tool for tracking active workflow and step progress
+- **Scheduled reminders**: `schedule_reminder` and `reset_reminder_state` tools for self-directed workflow continuity
+- **Global hooks**: `mgcp-init` now deploys hooks globally to `~/.mgcp/hooks/` + `~/.claude/settings.json` by default, so hooks fire in every Claude Code session without per-project deployment. Project-local hooks available via `--local` flag
+- **Portable hook templates**: Hook scripts live in `src/mgcp/hook_templates/` as standalone Python files, deployable via `mgcp-init`
+
+### Changed
+- **Hook system**: Rewritten from 3 regex-based hooks (~380 lines) to 4 intent-based hooks (~130 lines). Legacy hooks archived in `examples/claude-hooks/legacy/`
+- **Default hook deployment**: `mgcp-init` now deploys global hooks by default instead of project-local. Use `--local` for per-project deployment
+- **Tool count**: 38 → 42 MCP tools
 
 ## [1.2.0] - 2026-02-07
 

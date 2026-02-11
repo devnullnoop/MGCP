@@ -24,6 +24,7 @@ class EventType(StrEnum):
     SPIDER = "spider"
     ADD = "add"
     REFINE = "refine"
+    DELETE = "delete"
     BOOTSTRAP = "bootstrap"
     SESSION_START = "session_start"
     SESSION_END = "session_end"
@@ -246,6 +247,16 @@ class TelemetryLogger:
                 "new_version": new_version,
                 "refinement": refinement,
             },
+        ))
+
+    async def log_delete(self, lesson_id: str) -> None:
+        """Log a lesson deletion."""
+        await self._emit(TelemetryEvent(
+            id=str(uuid4()),
+            timestamp=datetime.now(UTC),
+            session_id=self.session_id,
+            event_type=EventType.DELETE,
+            payload={"lesson_id": lesson_id},
         ))
 
     async def _emit(self, event: TelemetryEvent) -> None:

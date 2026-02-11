@@ -612,7 +612,7 @@ async def delete_lesson(lesson_id: str) -> str:
     graph.remove_graph_lesson(lesson_id)
 
     # Log deletion
-    await telemetry.log_event("lesson_deleted", {"lesson_id": lesson_id})
+    await telemetry.log_delete(lesson_id)
 
     return f"Deleted lesson: {lesson_id}"
 
@@ -963,313 +963,167 @@ async def search_catalogue(
 
 
 @mcp.tool()
-async def add_catalogue_arch_note(
-    project_path: str,
-    title: str,
-    description: str,
-    category: str = "architecture",
-    related_files: str = "",
-) -> str:
-    """Add an architectural note to a project's catalogue.
-
-    Args:
-        project_path: Absolute path to the project root directory
-        title: Short title (e.g., 'MCP Server Restart Required')
-        description: Full explanation
-        category: One of: architecture, convention, gotcha, security, performance
-        related_files: Comma-separated list of files this applies to
-    """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
-
-    context = await _get_or_create_project_context(project_path)
-
-    note = ArchitecturalNote(
-        title=title,
-        description=description,
-        category=category,
-        related_files=[f.strip() for f in related_files.split(",") if f.strip()],
-    )
-
-    context.catalogue.architecture_notes.append(note)
-    await store.save_project_context(context)
-    catalogue_vector._add_arch_note(context.project_id, note)
-
-    return f"Added architectural note: {title}"
-
-
-@mcp.tool()
-async def add_catalogue_security_note(
-    project_path: str,
-    title: str,
-    description: str,
-    severity: str = "info",
-    status: str = "open",
-    mitigation: str = "",
-) -> str:
-    """Add a security note to a project's catalogue.
-
-    Args:
-        project_path: Absolute path to the project root directory
-        title: Issue title
-        description: Details about the issue
-        severity: One of: info, low, medium, high, critical
-        status: One of: open, mitigated, accepted, resolved
-        mitigation: How it's being addressed (optional)
-    """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
-
-    context = await _get_or_create_project_context(project_path)
-
-    note = SecurityNote(
-        title=title,
-        description=description,
-        severity=severity,
-        status=status,
-        mitigation=mitigation or None,
-    )
-
-    context.catalogue.security_notes.append(note)
-    await store.save_project_context(context)
-    catalogue_vector._add_security_note(context.project_id, note)
-
-    return f"Added security note: {title} [{severity}]"
-
-
-@mcp.tool()
-async def add_catalogue_dependency(
-    project_path: str,
-    name: str,
-    purpose: str,
-    dep_type: str = "library",
-    version: str = "",
-    docs_url: str = "",
-    notes: str = "",
-) -> str:
-    """Add a dependency (framework, library, or tool) to a project's catalogue.
-
-    Args:
-        project_path: Absolute path to the project root directory
-        name: Package/library name
-        purpose: What it's used for in this project
-        dep_type: One of: framework, library, tool
-        version: Version constraint or exact version
-        docs_url: Link to documentation
-        notes: Project-specific usage notes
-    """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
-
-    context = await _get_or_create_project_context(project_path)
-
-    dep = Dependency(
-        name=name,
-        purpose=purpose,
-        version=version or None,
-        docs_url=docs_url or None,
-        notes=notes or None,
-    )
-
-    if dep_type == "framework":
-        context.catalogue.frameworks.append(dep)
-    elif dep_type == "tool":
-        context.catalogue.tools.append(dep)
-    else:
-        context.catalogue.libraries.append(dep)
-
-    await store.save_project_context(context)
-    catalogue_vector._add_dependency(context.project_id, dep, dep_type)
-
-    return f"Added {dep_type}: {name}"
-
-
-@mcp.tool()
-async def add_catalogue_convention(
-    project_path: str,
-    title: str,
-    rule: str,
-    category: str = "style",
-    examples: str = "",
-) -> str:
-    """Add a coding convention to a project's catalogue.
-
-    Args:
-        project_path: Absolute path to the project root directory
-        title: Short title (e.g., 'Snake case for functions')
-        rule: The actual rule to follow
-        category: One of: naming, style, structure, testing, git
-        examples: Comma-separated examples
-    """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
-
-    context = await _get_or_create_project_context(project_path)
-
-    conv = Convention(
-        title=title,
-        rule=rule,
-        category=category,
-        examples=[e.strip() for e in examples.split(",") if e.strip()],
-    )
-
-    context.catalogue.conventions.append(conv)
-    await store.save_project_context(context)
-    catalogue_vector._add_convention(context.project_id, conv)
-
-    return f"Added convention: {title}"
-
-
-@mcp.tool()
-async def add_catalogue_coupling(
-    project_path: str,
-    files: str,
-    reason: str,
-    direction: str = "bidirectional",
-) -> str:
-    """Add a file coupling to a project's catalogue.
-
-    Args:
-        project_path: Absolute path to the project root directory
-        files: Comma-separated list of coupled files (e.g., 'server.py, models.py')
-        reason: Why these files are coupled
-        direction: One of: bidirectional, a_triggers_b
-    """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
-
-    context = await _get_or_create_project_context(project_path)
-
-    coupling = FileCoupling(
-        files=[f.strip() for f in files.split(",") if f.strip()],
-        reason=reason,
-        direction=direction,
-    )
-
-    context.catalogue.file_couplings.append(coupling)
-    await store.save_project_context(context)
-    catalogue_vector._add_file_coupling(context.project_id, coupling)
-
-    return f"Added file coupling: {' <-> '.join(coupling.files)}"
-
-
-@mcp.tool()
-async def add_catalogue_decision(
-    project_path: str,
-    title: str,
-    decision: str,
-    rationale: str,
-    alternatives: str = "",
-) -> str:
-    """Add an architectural decision to a project's catalogue.
-
-    Args:
-        project_path: Absolute path to the project root directory
-        title: Short title (e.g., 'Chose NetworkX over Neo4j')
-        decision: What was decided
-        rationale: Why this choice was made (prevents re-litigating)
-        alternatives: Comma-separated list of alternatives considered
-    """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
-
-    context = await _get_or_create_project_context(project_path)
-
-    dec = Decision(
-        title=title,
-        decision=decision,
-        rationale=rationale,
-        alternatives=[a.strip() for a in alternatives.split(",") if a.strip()],
-    )
-
-    context.catalogue.decisions.append(dec)
-    await store.save_project_context(context)
-    catalogue_vector._add_decision(context.project_id, dec)
-
-    return f"Added decision: {title}"
-
-
-@mcp.tool()
-async def add_catalogue_error_pattern(
-    project_path: str,
-    error_signature: str,
-    cause: str,
-    solution: str,
-    related_files: str = "",
-) -> str:
-    """Add an error pattern to a project's catalogue.
-
-    Args:
-        project_path: Absolute path to the project root directory
-        error_signature: What the error looks like (text or regex)
-        cause: Root cause of the error
-        solution: How to fix it
-        related_files: Comma-separated list of files where this error occurs
-    """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
-
-    context = await _get_or_create_project_context(project_path)
-
-    err = ErrorPattern(
-        error_signature=error_signature,
-        cause=cause,
-        solution=solution,
-        related_files=[f.strip() for f in related_files.split(",") if f.strip()],
-    )
-
-    context.catalogue.error_patterns.append(err)
-    await store.save_project_context(context)
-    catalogue_vector._add_error_pattern(context.project_id, err)
-
-    return f"Added error pattern: {error_signature[:50]}..."
-
-
-@mcp.tool()
-async def add_catalogue_custom_item(
+async def add_catalogue_item(
     project_path: str,
     item_type: str,
     title: str,
     content: str,
-    metadata: str = "",
+    category: str = "",
+    severity: str = "",
+    status: str = "",
+    related_files: str = "",
+    rationale: str = "",
+    extra: str = "",
     tags: str = "",
 ) -> str:
-    """Add a custom/flexible catalogue item to a project.
+    """Add an item to a project's catalogue.
 
-    Use this for item types not covered by built-in types (arch, security, etc.).
-    Create any item type you need (e.g., 'api_endpoint', 'env_var', 'migration').
+    Supports all catalogue item types through a unified interface.
 
     Args:
         project_path: Absolute path to the project root directory
-        item_type: Custom type name (e.g., 'api_endpoint', 'env_var', 'feature_flag')
-        title: Short title for the item
-        content: Main content/description
-        metadata: Key-value pairs as 'key1=value1,key2=value2' (optional)
-        tags: Comma-separated tags for searchability (optional)
+        item_type: Item type. Built-in types:
+            - arch: Architecture note/gotcha (uses: category, related_files)
+            - security: Security concern (uses: severity, status, rationale as mitigation)
+            - framework/library/tool: Dependency (uses: extra for version, docs_url, notes)
+            - convention: Coding convention (uses: category, extra for examples)
+            - coupling: File coupling (related_files for coupled files, extra for direction)
+            - decision: Architectural decision (uses: rationale, extra for alternatives)
+            - error: Error pattern (content=cause, extra for solution, related_files)
+            Any other value creates a custom catalogue item.
+        title: Short title or name (e.g., 'MCP Server Restart Required', 'pytest')
+        content: Main content - description, rule, purpose, cause, reason, or decision text
+        category: Category (arch: architecture|convention|gotcha|security|performance;
+                  convention: naming|style|structure|testing|git)
+        severity: Security severity (info|low|medium|high|critical)
+        status: Security status (open|mitigated|accepted|resolved)
+        related_files: Comma-separated files (arch notes, error patterns, coupling)
+        rationale: Reasoning (decisions: why this choice; security: mitigation strategy)
+        extra: Additional key=value pairs as 'key1=value1,key2=value2'.
+            Keys by type: dependency(version,docs_url,notes), convention(examples),
+            coupling(direction), decision(alternatives), error(solution)
+        tags: Comma-separated tags (for searchability)
     """
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
 
     context = await _get_or_create_project_context(project_path)
 
-    # Parse metadata
-    metadata_dict = {}
-    if metadata:
-        for pair in metadata.split(","):
+    # Parse extra key-value pairs
+    extra_dict = {}
+    if extra:
+        for pair in extra.split(","):
             if "=" in pair:
                 key, value = pair.split("=", 1)
-                metadata_dict[key.strip()] = value.strip()
+                extra_dict[key.strip()] = value.strip()
 
-    # Parse tags
+    files_list = [f.strip() for f in related_files.split(",") if f.strip()]
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
-    item = GenericCatalogueItem(
-        item_type=item_type,
-        title=title,
-        content=content,
-        metadata=metadata_dict,
-        tags=tag_list,
-    )
+    if item_type == "arch":
+        note = ArchitecturalNote(
+            title=title,
+            description=content,
+            category=category or "architecture",
+            related_files=files_list,
+        )
+        context.catalogue.architecture_notes.append(note)
+        await store.save_project_context(context)
+        catalogue_vector._add_arch_note(context.project_id, note)
+        return f"Added architectural note: {title}"
 
-    context.catalogue.custom_items.append(item)
-    await store.save_project_context(context)
+    elif item_type == "security":
+        note = SecurityNote(
+            title=title,
+            description=content,
+            severity=severity or "info",
+            status=status or "open",
+            mitigation=rationale or None,
+        )
+        context.catalogue.security_notes.append(note)
+        await store.save_project_context(context)
+        catalogue_vector._add_security_note(context.project_id, note)
+        return f"Added security note: {title} [{note.severity}]"
 
-    # Index in vector store for searchability
-    catalogue_vector._add_custom_item(context.project_id, item)
+    elif item_type in ("framework", "library", "tool"):
+        dep = Dependency(
+            name=title,
+            purpose=content,
+            version=extra_dict.get("version") or None,
+            docs_url=extra_dict.get("docs_url") or None,
+            notes=extra_dict.get("notes") or None,
+        )
+        if item_type == "framework":
+            context.catalogue.frameworks.append(dep)
+        elif item_type == "tool":
+            context.catalogue.tools.append(dep)
+        else:
+            context.catalogue.libraries.append(dep)
+        await store.save_project_context(context)
+        catalogue_vector._add_dependency(context.project_id, dep, item_type)
+        return f"Added {item_type}: {title}"
 
-    return f"Added custom item [{item_type}]: {title}"
+    elif item_type == "convention":
+        examples_str = extra_dict.get("examples", "")
+        conv = Convention(
+            title=title,
+            rule=content,
+            category=category or "style",
+            examples=[e.strip() for e in examples_str.split(",") if e.strip()] if examples_str else [],
+        )
+        context.catalogue.conventions.append(conv)
+        await store.save_project_context(context)
+        catalogue_vector._add_convention(context.project_id, conv)
+        return f"Added convention: {title}"
+
+    elif item_type == "coupling":
+        coupling = FileCoupling(
+            files=files_list,
+            reason=content,
+            direction=extra_dict.get("direction", "bidirectional"),
+        )
+        context.catalogue.file_couplings.append(coupling)
+        await store.save_project_context(context)
+        catalogue_vector._add_file_coupling(context.project_id, coupling)
+        return f"Added file coupling: {' <-> '.join(coupling.files)}"
+
+    elif item_type == "decision":
+        alternatives_str = extra_dict.get("alternatives", "")
+        dec = Decision(
+            title=title,
+            decision=content,
+            rationale=rationale,
+            alternatives=[a.strip() for a in alternatives_str.split(",") if a.strip()] if alternatives_str else [],
+        )
+        context.catalogue.decisions.append(dec)
+        await store.save_project_context(context)
+        catalogue_vector._add_decision(context.project_id, dec)
+        return f"Added decision: {title}"
+
+    elif item_type == "error":
+        err = ErrorPattern(
+            error_signature=title,
+            cause=content,
+            solution=extra_dict.get("solution", ""),
+            related_files=files_list,
+        )
+        context.catalogue.error_patterns.append(err)
+        await store.save_project_context(context)
+        catalogue_vector._add_error_pattern(context.project_id, err)
+        return f"Added error pattern: {title[:50]}..."
+
+    else:
+        # Custom item type
+        item = GenericCatalogueItem(
+            item_type=item_type,
+            title=title,
+            content=content,
+            metadata=extra_dict,
+            tags=tag_list,
+        )
+        context.catalogue.custom_items.append(item)
+        await store.save_project_context(context)
+        catalogue_vector._add_custom_item(context.project_id, item)
+        return f"Added custom item [{item_type}]: {title}"
 
 
 @mcp.tool()

@@ -171,7 +171,7 @@ mgcp-bootstrap
 mgcp-dashboard
 ```
 
-## MCP Tools (42 total)
+## MCP Tools (35 total)
 
 ### Lesson Discovery (5)
 | Tool | Purpose |
@@ -199,18 +199,11 @@ mgcp-dashboard
 | `update_project_todo` | Update todo status |
 | `list_projects` | List all projects |
 
-### Project Catalogue (11)
+### Project Catalogue (4)
 | Tool | Purpose |
 |------|---------|
 | `search_catalogue` | Semantic search catalogue |
-| `add_catalogue_arch_note` | Architecture notes/gotchas |
-| `add_catalogue_security_note` | Security concerns |
-| `add_catalogue_dependency` | Track dependencies |
-| `add_catalogue_convention` | Coding conventions |
-| `add_catalogue_coupling` | File dependencies |
-| `add_catalogue_decision` | Decisions with rationale |
-| `add_catalogue_error_pattern` | Error solutions |
-| `add_catalogue_custom_item` | Flexible custom items |
+| `add_catalogue_item` | Add any item (arch, security, library, convention, coupling, decision, error, or custom) |
 | `remove_catalogue_item` | Remove item |
 | `get_catalogue_item` | Get item details |
 

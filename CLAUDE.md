@@ -85,7 +85,7 @@ The system flows from Claude/LLM through MCP Protocol to the MGCP Server, which 
 
 All source files are in `src/mgcp/`:
 
-- `server.py` - MCP server with 42 tools
+- `server.py` - MCP server with 35 tools
 - `models.py` - Pydantic models (Lesson, ProjectContext, ProjectCatalogue, SecurityNote, Convention, etc.)
 - `graph.py` - NetworkX graph operations with typed relationships and Louvain community detection
 - `embedding.py` - Centralized BGE embedding model (`BAAI/bge-base-en-v1.5`)
@@ -125,7 +125,7 @@ All source files are in `src/mgcp/`:
 - Decisions with rationale
 - Error patterns with solutions
 
-### MCP Tools (42 total)
+### MCP Tools (35 total)
 
 **Lesson Discovery & Retrieval (5):**
 - `query_lessons` - Semantic search for relevant lessons
@@ -147,16 +147,9 @@ All source files are in `src/mgcp/`:
 - `update_project_todo` - Update todo status
 - `list_projects` - List all tracked projects
 
-**Project Catalogue (11):**
+**Project Catalogue (4):**
 - `search_catalogue` - Semantic search across catalogue items
-- `add_catalogue_arch_note` - Add architecture note/gotcha
-- `add_catalogue_security_note` - Add security consideration
-- `add_catalogue_dependency` - Track framework/library/tool
-- `add_catalogue_convention` - Document coding conventions
-- `add_catalogue_coupling` - Record file dependencies
-- `add_catalogue_decision` - Document decisions with rationale
-- `add_catalogue_error_pattern` - Record error solutions
-- `add_catalogue_custom_item` - Add flexible custom catalogue item
+- `add_catalogue_item` - Add any catalogue item (arch, security, library, convention, coupling, decision, error, or custom type)
 - `remove_catalogue_item` - Remove a catalogue item
 - `get_catalogue_item` - Get full item details
 

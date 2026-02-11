@@ -92,21 +92,21 @@ lessons:
 
   - id: mgcp-record-decisions
     trigger: "When making an architectural or design decision, choosing between alternatives, or when someone asks why a particular approach was chosen"
-    action: "When making an architectural or design decision, call add_catalogue_decision with title, decision, rationale, and alternatives considered. This prevents re-litigating the same decisions later."
+    action: "When making an architectural or design decision, call add_catalogue_item(item_type='decision', title=..., content=<the decision>, rationale=...) with alternatives in extra='alternatives=X,Y'. This prevents re-litigating the same decisions later."
     rationale: "Decisions without recorded rationale get questioned repeatedly. Recording alternatives considered shows the decision was thoughtful."
     tags: [mgcp, architecture, decisions, documentation]
     parent_id: mgcp-usage
 
   - id: mgcp-record-couplings
     trigger: "When discovering that files must change together, or when modifying one file requires updates to another dependent file"
-    action: "When discovering files that must change together, call add_catalogue_coupling with the files list and reason. This helps future sessions know what else to check when modifying code."
+    action: "When discovering files that must change together, call add_catalogue_item(item_type='coupling', title=<first file>, content=<reason>) with extra='direction=bidirectional' and related_files=<comma-separated files>. This helps future sessions know what else to check when modifying code."
     rationale: "File couplings are tribal knowledge that gets lost. Recording them prevents bugs from partial updates and helps onboarding."
     tags: [mgcp, architecture, couplings, maintenance]
     parent_id: mgcp-usage
 
   - id: mgcp-record-gotchas
     trigger: "When discovering a gotcha, unexpected behavior, or non-obvious quirk that could trip up future developers working in this codebase"
-    action: "When discovering a gotcha or non-obvious behavior, call add_catalogue_arch_note with title, description, and category (gotcha/architecture/convention/performance). These save future debugging time."
+    action: "When discovering a gotcha or non-obvious behavior, call add_catalogue_item(item_type='arch', title=..., content=<description>, category=<gotcha/architecture/convention/performance>). These save future debugging time."
     rationale: "Gotchas are discovered through pain and forgotten quickly. Recording them immediately prevents others from hitting the same issues."
     tags: [mgcp, architecture, gotchas, documentation]
     parent_id: mgcp-usage
@@ -130,7 +130,7 @@ lessons:
 
   - id: lessons-are-generic-knowledge
     trigger: "When about to add a new lesson, deciding if knowledge is generic enough for a lesson or should go in the project catalogue instead"
-    action: "Before calling add_lesson, ask: 'Would this apply to ANY project?' If yes, make it abstract and reusable. If it's project-specific, use the catalogue instead (add_catalogue_arch_note, add_catalogue_decision, add_catalogue_convention, etc.)."
+    action: "Before calling add_lesson, ask: 'Would this apply to ANY project?' If yes, make it abstract and reusable. If it's project-specific, use add_catalogue_item with the appropriate item_type (arch, decision, convention, security, coupling, error, or custom)."
     rationale: "Lessons polluted with project-specific details become noise in other projects. Keep lessons abstract: 'verify API responses' not 'verify the Stripe API response in payment.py'."
     tags: [mgcp, lessons, knowledge-management]
     parent_id: mgcp-knowledge-storage-types
@@ -144,7 +144,7 @@ lessons:
 
   - id: catalogue-for-project-specific
     trigger: "When storing project-specific knowledge like architecture decisions, file couplings, conventions, or gotchas that apply only to this codebase"
-    action: "Use the project catalogue for project-specific knowledge: add_catalogue_arch_note (patterns/gotchas), add_catalogue_decision (choices with rationale), add_catalogue_convention (local rules), add_catalogue_coupling (linked files), add_catalogue_security_note (vulnerabilities). NOT lessons."
+    action: "Use the project catalogue for project-specific knowledge via add_catalogue_item with item_type: arch (patterns/gotchas), decision (choices with rationale), convention (local rules), coupling (linked files), security (vulnerabilities), error (recurring errors), or any custom type. NOT lessons."
     rationale: "The catalogue is scoped to a project_path. It won't pollute other projects. Lessons are global and should only contain universally applicable knowledge."
     tags: [mgcp, catalogue, knowledge-management]
     parent_id: mgcp-knowledge-storage-types
@@ -153,7 +153,7 @@ lessons:
         code: "add_lesson(id='our-auth-pattern', action='Use JWT with Redis sessions')"
         explanation: "Project-specific architecture detail stored as global lesson"
       - label: good
-        code: "add_catalogue_decision(title='Auth approach', decision='JWT with Redis', rationale='Needed stateless + session revocation')"
+        code: "add_catalogue_item(item_type='decision', title='Auth approach', content='JWT with Redis', rationale='Needed stateless + session revocation')"
         explanation: "Project decision stored in catalogue, won't appear in other projects"
 
   - id: workflow-links-for-process-guidance
@@ -332,7 +332,7 @@ lessons:
       - label: good
         code: |
           # After adding a security note
-          add_catalogue_security_note(...)
+          add_catalogue_item(item_type='security', ...)
           # Verify with exact retrieval
           get_catalogue_item(
               project_path='/path/to/project',
@@ -348,46 +348,47 @@ lessons:
   # ===========================================================================
   - id: mgcp-record-security-notes
     trigger: "When discovering a security vulnerability, CVE, exploit risk, or sensitive data exposure that needs to be tracked in the project catalogue"
-    action: "When discovering a security concern, call add_catalogue_security_note with: title, description, severity (info/low/medium/high/critical), status (open/mitigated/accepted/resolved), and mitigation if known. Security knowledge must be project-scoped."
+    action: "When discovering a security concern, call add_catalogue_item(item_type='security', title=..., content=<description>, severity=<info/low/medium/high/critical>, status=<open/mitigated/accepted/resolved>) with extra='mitigation=...' if known. Security knowledge must be project-scoped."
     rationale: "Security issues are critical project-specific knowledge. Recording them ensures they're tracked, not forgotten, and communicated to future sessions working on the same codebase."
     tags: [mgcp, catalogue, security]
     parent_id: mgcp-usage
 
   - id: mgcp-record-conventions
     trigger: "When establishing or discovering a coding convention, naming pattern, style rule, or project-specific standard that should be followed consistently"
-    action: "When establishing or discovering a coding convention, call add_catalogue_convention with: title, rule (the actual convention), category (naming/style/structure/testing/git), and examples. Conventions are project-specific standards."
+    action: "When establishing or discovering a coding convention, call add_catalogue_item(item_type='convention', title=..., content=<the rule>, category=<naming/style/structure/testing/git>) with extra='examples=...' if useful. Conventions are project-specific standards."
     rationale: "Conventions ensure consistency across a codebase. Recording them prevents style drift and helps new contributors (including future LLM sessions) follow established patterns."
     tags: [mgcp, catalogue, conventions, style]
     parent_id: mgcp-usage
 
   - id: mgcp-record-error-patterns
     trigger: "When solving a recurring error, exception, or stack trace and wanting to record the signature, root cause, and solution for future debugging"
-    action: "When solving an error that may recur, call add_catalogue_error_pattern with: error_signature (what the error looks like), cause (root cause), solution (how to fix), and related_files. This creates a project-specific troubleshooting guide."
+    action: "When solving an error that may recur, call add_catalogue_item(item_type='error', title=<error signature>, content=<root cause>) with extra='solution=<how to fix>' and related_files=<comma-separated files>. This creates a project-specific troubleshooting guide."
     rationale: "Errors recur. Recording the signature->cause->solution mapping saves future debugging time. The next session hitting the same error can find the solution instantly."
     tags: [mgcp, catalogue, errors, debugging]
     parent_id: mgcp-usage
     examples:
       - label: good
         code: |
-          add_catalogue_error_pattern(
+          add_catalogue_item(
               project_path='/path/to/project',
-              error_signature='ConnectionRefusedError: [Errno 111] Connection refused',
-              cause='Redis server not running',
-              solution='Start Redis: docker-compose up -d redis',
-              related_files='src/cache.py, docker-compose.yml'
+              item_type='error',
+              title='ConnectionRefusedError: [Errno 111] Connection refused',
+              content='Redis server not running',
+              related_files='src/cache.py, docker-compose.yml',
+              extra='solution=Start Redis: docker-compose up -d redis'
           )
         explanation: "Future sessions seeing this error can find the solution immediately"
 
   - id: mgcp-record-dependencies
     trigger: "When adding or documenting a significant library, framework, or package dependency and how it's used in this project"
-    action: "When adding or noting a significant dependency, call add_catalogue_dependency with: name, purpose (why it's used in this project), dep_type (framework/library/tool), version, docs_url, and notes about project-specific usage patterns."
+    action: "When adding or noting a significant dependency, call add_catalogue_item(item_type=<framework/library/tool>, title=<name>, content=<purpose>) with extra='version=...,docs_url=...' and any project-specific usage notes in content."
     rationale: "Dependencies are project-specific context. Recording why a library was chosen and how it's used helps future sessions understand the codebase and make informed decisions about updates."
     tags: [mgcp, catalogue, dependencies]
     parent_id: mgcp-usage
 
   - id: mgcp-custom-catalogue-items
     trigger: "When the built-in catalogue types don't fit and you need a custom item type like API endpoints, environment variables, or feature flags"
-    action: "Use add_catalogue_custom_item when built-in types (arch, security, convention, coupling, decision, error, dependency) don't fit your needs. You define the item_type (e.g., 'api_endpoint', 'env_var', 'feature_flag', 'migration'). Use metadata for structured key-value pairs and tags for searchability."
+    action: "Use add_catalogue_item with a custom item_type when built-in types (arch, security, convention, coupling, decision, error, library/framework/tool) don't fit. Define any item_type (e.g., 'api_endpoint', 'env_var', 'feature_flag'). Use extra for structured key-value pairs and tags for searchability."
     rationale: "Not all project knowledge fits predefined categories. Custom items allow project-specific ontologies - track API endpoints, environment variables, feature flags, or any domain-specific concepts unique to your project."
     tags: [mgcp, catalogue, custom, flexible]
     parent_id: mgcp-usage
@@ -395,12 +396,12 @@ lessons:
       - label: good
         code: |
           # Track API endpoints with custom metadata
-          add_catalogue_custom_item(
+          add_catalogue_item(
               project_path='/path/to/project',
               item_type='api_endpoint',
               title='POST /api/users',
               content='Creates a new user account. Requires admin role.',
-              metadata='method=POST,auth=admin,rate_limit=100/hour',
+              extra='method=POST,auth=admin,rate_limit=100/hour',
               tags='users,admin,write'
           )
         explanation: "Custom type with structured metadata for domain-specific tracking"
@@ -421,10 +422,11 @@ lessons:
               identifier='Use MySQL for database'  # Now using PostgreSQL
           )
           # Add the new decision
-          add_catalogue_decision(
+          add_catalogue_item(
               project_path='/path/to/project',
+              item_type='decision',
               title='Use PostgreSQL for database',
-              decision='Migrated from MySQL to PostgreSQL',
+              content='Migrated from MySQL to PostgreSQL',
               rationale='Better JSON support, needed for new features'
           )
         explanation: "Remove stale entry, add current one - keeps catalogue accurate"

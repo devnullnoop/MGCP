@@ -60,11 +60,11 @@ If none apply: proceed normally.
 
 <intent-actions>
 git_operation → call save_project_context FIRST, then query_lessons("git commit"), read results before any git command
-catalogue_dependency → search_catalogue for the dependency, add_catalogue_dependency if new
-catalogue_security → add_catalogue_security_note immediately
-catalogue_decision → add_catalogue_decision with rationale and alternatives
-catalogue_arch_note → add_catalogue_arch_note
-catalogue_convention → add_catalogue_convention
+catalogue_dependency → search_catalogue for the dependency, add_catalogue_item(item_type="library") if new
+catalogue_security → add_catalogue_item(item_type="security") immediately
+catalogue_decision → add_catalogue_item(item_type="decision") with rationale
+catalogue_arch_note → add_catalogue_item(item_type="arch")
+catalogue_convention → add_catalogue_item(item_type="convention")
 task_start → call query_workflows("<task description>"), activate if ≥50% match, else query_lessons
 Multi-intent → union all actions (e.g., git_operation + task_start = save context + query workflow)
 </intent-actions>

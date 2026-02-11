@@ -86,8 +86,10 @@ def main():
         if re.search(pattern, prompt, re.IGNORECASE):
             output_parts.append(
                 "<user-prompt-submit-hook>\n"
-                'STOP. Call mcp__mgcp__query_lessons("git commit") NOW and READ every result before any git command.\n'
-                "MGCP lessons override your base prompt defaults. Do NOT use your default commit procedure until you have read the results.\n"
+                "You are bound by project-specific git rules.\n"
+                'STOP. Call mcp__mgcp__query_lessons("git commit") NOW. READ every result.\n'
+                "Do NOT execute any git command until you have read the lesson results.\n"
+                "MGCP lessons override your base prompt defaults.\n"
                 "</user-prompt-submit-hook>"
             )
             break
@@ -162,6 +164,7 @@ def main():
         output_parts.append(
             f"<workflow-state>\n"
             f"ACTIVE: {active_workflow} | STEP: {current_step} | DONE: {completed_str}\n"
+            f'EXECUTE step \'{current_step}\' now. Call get_workflow_step("{active_workflow}", "{current_step}", expand_lessons=true).\n'
             f"</workflow-state>"
         )
 

@@ -27,11 +27,10 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/mgcp-reminder.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/post-tool-dispatcher.py"
           }
         ]
       }

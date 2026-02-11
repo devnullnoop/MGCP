@@ -165,17 +165,24 @@ class TestDispatcherSimplification:
     """Tests for the simplified user-prompt-dispatcher.py."""
 
     def test_no_regex_output_for_task_start(self):
-        """'fix the bug' should produce NO intent-specific output (regex removed)."""
+        """'fix the bug' should produce NO intent-specific output (regex removed).
+
+        The intent-routing block is always injected (survives context compaction),
+        so we strip it before checking for regex-triggered content.
+        """
         with backup_and_restore_state():
             write_state({"current_call_count": 0})
             hook_input = json.dumps({"prompt": "fix the bug"})
             output = run_hook(DISPATCHER, hook_input)
-            # No regex means no pattern matching output
-            assert "STOP" not in output
-            assert "workflow" not in output.lower() or "workflow-state" in output.lower()
+            # Strip the always-present intent-routing block
+            import re as re_mod
+            stripped = re_mod.sub(r"<intent-routing>.*?</intent-routing>", "", output, flags=re_mod.DOTALL).strip()
+            # No regex means no pattern matching output beyond intent-routing
+            assert "STOP" not in stripped
+            assert "<workflow-state>" not in stripped
 
     def test_neutral_message_zero_output(self):
-        """'ok' with no state should produce zero output."""
+        """'ok' with no state should produce only the intent-routing block."""
         with backup_and_restore_state():
             write_state({
                 "current_call_count": 0,
@@ -185,7 +192,10 @@ class TestDispatcherSimplification:
             })
             hook_input = json.dumps({"prompt": "ok"})
             output = run_hook(DISPATCHER, hook_input)
-            assert output.strip() == ""
+            # Strip the always-present intent-routing block
+            import re as re_mod
+            stripped = re_mod.sub(r"<intent-routing>.*?</intent-routing>", "", output, flags=re_mod.DOTALL).strip()
+            assert stripped == ""
 
     def test_workflow_state_injection(self):
         """Active workflow in state file produces <workflow-state> output."""

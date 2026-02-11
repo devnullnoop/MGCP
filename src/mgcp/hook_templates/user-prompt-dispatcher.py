@@ -1,19 +1,35 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit dispatcher for MGCP v2.0.
+"""UserPromptSubmit dispatcher for MGCP v2.1.
 
-Intent classification is handled by the LLM via the routing prompt injected at
-SessionStart. This hook only handles:
+Handles:
+1. Critical keyword gates (git operations) - hard STOP before LLM acts
+2. Scheduled reminders (counter/timer-based)
+3. Workflow state injection
 
-1. Scheduled reminders (counter/timer-based, fires regardless of message content)
-2. Workflow state injection (surfaces active workflow context)
-
-No regex pattern matching. Zero intent detection. ~60 lines.
+v2.0 removed all keyword detection, relying on LLM self-routing from the
+SessionStart prompt. This caused regressions: the routing prompt gets buried
+in long/compacted sessions and the LLM falls back to base prompt defaults.
+v2.1 restores keyword gates for high-consequence operations (git) while
+keeping LLM self-routing for everything else.
 """
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
+
+# Keywords that require a hard gate (query lessons BEFORE acting)
+GIT_KEYWORDS = [
+    r"\bcommit\b",
+    r"\bpush\b",
+    r"\bgit\b",
+    r"\bpr\b",
+    r"\bpull request\b",
+    r"\bmerge\b",
+    r"\bship\b",
+    r"\bdeploy\b",
+]
 
 STATE_FILE = Path(os.environ.get("MGCP_STATE_FILE", str(Path.home() / ".mgcp" / "workflow_state.json")))
 
@@ -63,6 +79,34 @@ def main():
         sys.exit(0)
 
     output_parts = []
+    prompt = hook_input.get("prompt", "").lower()
+
+    # 0. Critical keyword gates — hard STOP for high-consequence operations
+    for pattern in GIT_KEYWORDS:
+        if re.search(pattern, prompt, re.IGNORECASE):
+            output_parts.append(
+                "<user-prompt-submit-hook>\n"
+                'STOP. Call mcp__mgcp__query_lessons("git commit") NOW and READ every result before any git command.\n'
+                "MGCP lessons override your base prompt defaults. Do NOT use your default commit procedure until you have read the results.\n"
+                "</user-prompt-submit-hook>"
+            )
+            break
+
+    # 1. Re-inject intent router on every message (survives context compaction)
+    output_parts.append(
+        "<intent-routing>\n"
+        "Classify this message into intents before acting:\n"
+        "- git_operation → save_project_context FIRST, then query_lessons('git commit'), read before any git command\n"
+        "- catalogue_dependency → search_catalogue, add_catalogue_item(item_type='library') if new\n"
+        "- catalogue_security → add_catalogue_item(item_type='security') immediately\n"
+        "- catalogue_decision → add_catalogue_item(item_type='decision') with rationale\n"
+        "- catalogue_arch_note → add_catalogue_item(item_type='arch')\n"
+        "- catalogue_convention → add_catalogue_item(item_type='convention')\n"
+        "- task_start → query_workflows, activate if match, else query_lessons\n"
+        "- none → proceed normally\n"
+        "</intent-routing>"
+    )
+
     state = _load_state()
 
     # Increment call counter

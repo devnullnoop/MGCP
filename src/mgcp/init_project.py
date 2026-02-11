@@ -187,18 +187,22 @@ LLM_CLIENTS: dict[str, LLMClient] = {
 
 HOOK_TEMPLATES_DIR = Path(__file__).parent / "hook_templates"
 
-# Legacy hook filenames (v1) - removed during --force upgrade
+# Superseded hook filenames - removed during --force upgrade
 LEGACY_HOOK_FILES = [
+    # v1 hooks
     "git-reminder.py",
     "catalogue-reminder.py",
     "task-start-reminder.py",
+    # v2 hooks superseded by post-tool-dispatcher.py
+    "mgcp-reminder.py",
+    "error-detector.py",
 ]
 
 # v2 hook files: filename -> (hook event type, optional matcher)
 V2_HOOK_FILES = {
     "session-init.py": ("SessionStart", None),
     "user-prompt-dispatcher.py": ("UserPromptSubmit", None),
-    "mgcp-reminder.py": ("PostToolUse", "Edit|Write"),
+    "post-tool-dispatcher.py": ("PostToolUse", None),
     "mgcp-precompact.py": ("PreCompact", None),
 }
 
@@ -437,7 +441,7 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False, force: bool = Fa
     Creates:
     - .claude/hooks/session-init.py           (SessionStart hook)
     - .claude/hooks/user-prompt-dispatcher.py  (UserPromptSubmit hook)
-    - .claude/hooks/mgcp-reminder.py           (PostToolUse hook)
+    - .claude/hooks/post-tool-dispatcher.py    (PostToolUse hook - Edit/Write + Bash errors)
     - .claude/hooks/mgcp-precompact.py         (PreCompact hook)
     - .claude/settings.json                    (Hook + permission configuration)
 

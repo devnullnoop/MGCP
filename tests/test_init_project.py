@@ -1617,22 +1617,11 @@ class TestEnsureEmbeddingModel:
         from unittest.mock import MagicMock
 
         mock_st = MagicMock()
-        monkeypatch.setattr("mgcp.init_project.SentenceTransformer", mock_st, raising=False)
+        # Mock at the package level since ensure_embedding_model imports fresh
+        import sentence_transformers
+        monkeypatch.setattr(sentence_transformers, "SentenceTransformer", mock_st)
 
-        # Simulate: local_files_only=True succeeds (model is cached)
-        import mgcp.init_project as mod
-        original = mod.ensure_embedding_model
-
-        def patched():
-            import sentence_transformers
-            monkeypatch.setattr(
-                sentence_transformers, "SentenceTransformer",
-                mock_st,
-            )
-            return original()
-
-        # Just mock at the function level: local_files_only succeeds
-        mock_st.side_effect = None  # No exception = cached
+        # local_files_only=True succeeds (no exception = model is cached)
         result = ensure_embedding_model()
 
         assert result["error"] is None

@@ -495,7 +495,7 @@ class TestClaudeHooks:
         assert len(result["created"]) == 5
         assert any("session-init.py" in f for f in result["created"])
         assert any("user-prompt-dispatcher.py" in f for f in result["created"])
-        assert any("mgcp-reminder.py" in f for f in result["created"])
+        assert any("post-tool-dispatcher.py" in f for f in result["created"])
         assert any("mgcp-precompact.py" in f for f in result["created"])
         assert any("settings.json" in f for f in result["created"])
 
@@ -985,12 +985,11 @@ class TestConfigFormat:
 
         assert any("session-init.py" in c for c in all_commands)
         assert any("user-prompt-dispatcher.py" in c for c in all_commands)
-        assert any("mgcp-reminder.py" in c for c in all_commands)
+        assert any("post-tool-dispatcher.py" in c for c in all_commands)
         assert any("mgcp-precompact.py" in c for c in all_commands)
         # No legacy hooks
-        assert not any("git-reminder.py" in c for c in all_commands)
-        assert not any("catalogue-reminder.py" in c for c in all_commands)
-        assert not any("task-start-reminder.py" in c for c in all_commands)
+        for legacy_name in LEGACY_HOOK_FILES:
+            assert not any(legacy_name in c for c in all_commands), f"Legacy hook {legacy_name} still in settings"
 
 
 # ============================================================================
@@ -1182,7 +1181,7 @@ class TestForceUpgrade:
         assert hook_file.read_text() != "# custom modification"
 
     def test_force_removes_legacy_hooks(self, temp_project):
-        """Force should remove legacy v1 hook files."""
+        """Force should remove all legacy hook files."""
         hooks_dir = temp_project / ".claude" / "hooks"
         hooks_dir.mkdir(parents=True)
 
@@ -1192,7 +1191,7 @@ class TestForceUpgrade:
 
         result = init_claude_hooks(temp_project, force=True)
 
-        assert len(result["removed"]) == 3
+        assert len(result["removed"]) == len(LEGACY_HOOK_FILES)
         for legacy_name in LEGACY_HOOK_FILES:
             assert not (hooks_dir / legacy_name).exists()
 
@@ -1206,7 +1205,7 @@ class TestForceUpgrade:
 
         result = init_claude_hooks(temp_project, force=True, dry_run=True)
 
-        assert len(result["would_remove"]) == 3
+        assert len(result["would_remove"]) == len(LEGACY_HOOK_FILES)
         # Legacy files should still exist (dry run)
         for legacy_name in LEGACY_HOOK_FILES:
             assert (hooks_dir / legacy_name).exists()

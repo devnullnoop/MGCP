@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from mgcp.init_project import (
-    GLOBAL_CLAUDE_JSON_PATH,
     HOOK_SCRIPT,
     HOOK_SETTINGS,
     HOOK_TEMPLATES_DIR,
@@ -22,8 +21,8 @@ from mgcp.init_project import (
     _build_global_hook_settings,
     _get_hook_version,
     _merge_settings,
-    configure_client,
     configure_claude_code_project,
+    configure_client,
     detect_installed_clients,
     ensure_embedding_model,
     get_mcp_server_config,

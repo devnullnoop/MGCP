@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-# Hook paths
-HOOKS_DIR = Path(__file__).parent.parent / ".claude" / "hooks"
+# Hook paths — templates live in the package, not in .claude/hooks/
+HOOKS_DIR = Path(__file__).parent.parent / "src" / "mgcp" / "hook_templates"
 SESSION_INIT = HOOKS_DIR / "session-init.py"
 DISPATCHER = HOOKS_DIR / "user-prompt-dispatcher.py"
 
@@ -455,17 +455,17 @@ class TestLegacyHooksArchived:
         assert (legacy_dir / "catalogue-reminder.py").exists()
         assert (legacy_dir / "task-start-reminder.py").exists()
 
-    def test_settings_json_unchanged(self):
-        """settings.json still references the same 4 hooks."""
+    def test_settings_json_empty(self):
+        """Project settings.json should be empty (hooks are deployed globally)."""
         settings_path = Path(__file__).parent.parent / ".claude" / "settings.json"
         with open(settings_path) as f:
             settings = json.load(f)
+        assert settings == {}
 
-        hooks = settings.get("hooks", {})
-        assert "UserPromptSubmit" in hooks
-        assert "SessionStart" in hooks
-        assert "PostToolUse" in hooks
-        assert "PreCompact" in hooks
-        # Verify specific commands
-        assert "user-prompt-dispatcher.py" in hooks["UserPromptSubmit"][0]["hooks"][0]["command"]
-        assert "session-init.py" in hooks["SessionStart"][0]["hooks"][0]["command"]
+    def test_hook_templates_exist(self):
+        """All 4 hook templates exist in src/mgcp/hook_templates/."""
+        templates_dir = Path(__file__).parent.parent / "src" / "mgcp" / "hook_templates"
+        assert (templates_dir / "session-init.py").exists()
+        assert (templates_dir / "user-prompt-dispatcher.py").exists()
+        assert (templates_dir / "post-tool-dispatcher.py").exists()
+        assert (templates_dir / "mgcp-precompact.py").exists()

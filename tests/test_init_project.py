@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from mgcp.init_project import (
+    GLOBAL_CLAUDE_JSON_PATH,
     HOOK_SCRIPT,
     HOOK_SETTINGS,
     HOOK_TEMPLATES_DIR,
@@ -22,6 +23,7 @@ from mgcp.init_project import (
     _get_hook_version,
     _merge_settings,
     configure_client,
+    configure_claude_code_project,
     detect_installed_clients,
     ensure_embedding_model,
     get_mcp_server_config,
@@ -58,7 +60,7 @@ def temp_project(tmp_path):
 def mock_config_paths(temp_home, monkeypatch):
     """Mock all client config paths to use temp directory."""
     paths = {
-        "claude-code": temp_home / ".config" / "claude-code" / "settings.json",
+        "claude-code": temp_home / ".claude.json",
         "cursor": temp_home / ".cursor" / "mcp.json",
         "windsurf": temp_home / ".codeium" / "windsurf" / "mcp_config.json",
         "continue": temp_home / ".continue" / "config.json",
@@ -896,12 +898,12 @@ class TestCrossPlatformPaths:
         """macOS Claude Code path should be correct."""
         monkeypatch.setattr(sys, "platform", "darwin")
 
-        # Re-import to get fresh path
         from mgcp.init_project import _claude_code_path
         path = _claude_code_path()
 
         # Claude Code uses ~/.claude.json on all platforms
-        assert ".claude.json" in str(path)
+        assert str(path).endswith(".claude.json")
+        assert ".claude/" not in str(path).replace(".claude.json", "")
 
     def test_darwin_cursor_path(self, monkeypatch, temp_home):
         """macOS Cursor path should be correct."""
@@ -912,6 +914,19 @@ class TestCrossPlatformPaths:
 
         assert ".cursor" in str(path)
 
+    def test_windows_claude_code_path(self, monkeypatch, temp_home):
+        """Windows Claude Code path should use USERPROFILE and .claude.json."""
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setenv("USERPROFILE", str(temp_home))
+
+        from mgcp.init_project import _claude_code_path
+        path = _claude_code_path()
+
+        assert str(path).endswith(".claude.json")
+        assert str(path).startswith(str(temp_home))
+        # Should NOT be inside a .claude/ directory
+        assert ".claude/" not in str(path).replace(".claude.json", "")
+
     def test_linux_paths_similar_to_darwin(self, monkeypatch, temp_home):
         """Linux paths should be similar to macOS."""
         monkeypatch.setattr(sys, "platform", "linux")
@@ -920,8 +935,8 @@ class TestCrossPlatformPaths:
         claude_path = _claude_code_path()
         cursor_path = _cursor_path()
 
-        # Claude Code now uses ~/.claude/settings.json on all platforms
-        assert ".claude" in str(claude_path)
+        # Claude Code uses ~/.claude.json on all platforms
+        assert str(claude_path).endswith(".claude.json")
         assert ".cursor" in str(cursor_path)
 
 
@@ -1360,12 +1375,14 @@ def mock_global_paths(tmp_path, monkeypatch):
     """Mock global hooks paths to use temp directories."""
     hooks_dir = tmp_path / ".mgcp" / "hooks"
     settings_path = tmp_path / ".claude" / "settings.json"
+    claude_json_path = tmp_path / ".claude.json"
 
     import mgcp.init_project as mod
     monkeypatch.setattr(mod, "GLOBAL_HOOKS_DIR", hooks_dir)
     monkeypatch.setattr(mod, "GLOBAL_SETTINGS_PATH", settings_path)
+    monkeypatch.setattr(mod, "GLOBAL_CLAUDE_JSON_PATH", claude_json_path)
 
-    return {"hooks_dir": hooks_dir, "settings_path": settings_path}
+    return {"hooks_dir": hooks_dir, "settings_path": settings_path, "claude_json_path": claude_json_path}
 
 
 class TestGlobalHooks:
@@ -1382,18 +1399,25 @@ class TestGlobalHooks:
         assert len(result["created"]) >= 4  # 4 scripts
 
     def test_init_global_hooks_creates_settings(self, mock_global_paths):
-        """Should create ~/.claude/settings.json with hook config and MCP server."""
+        """Should create settings.json with hooks/permissions and claude.json with mcpServers."""
         settings_path = mock_global_paths["settings_path"]
+        claude_json_path = mock_global_paths["claude_json_path"]
 
         init_global_hooks()
 
+        # settings.json: hooks + permissions only
         assert settings_path.exists()
         settings = json.loads(settings_path.read_text())
         assert "hooks" in settings
         assert "permissions" in settings
-        assert "mcpServers" in settings
-        assert "mgcp" in settings["mcpServers"]
+        assert "mcpServers" not in settings
         assert "SessionStart" in settings["hooks"]
+
+        # claude.json: mcpServers only
+        assert claude_json_path.exists()
+        claude_json = json.loads(claude_json_path.read_text())
+        assert "mcpServers" in claude_json
+        assert "mgcp" in claude_json["mcpServers"]
 
     def test_init_global_hooks_uses_absolute_paths(self, mock_global_paths):
         """Global hook commands should use absolute paths, not $CLAUDE_PROJECT_DIR."""
@@ -1418,8 +1442,9 @@ class TestGlobalHooks:
             assert str(hooks_dir) in cmd
 
     def test_init_global_hooks_merges_existing_settings(self, mock_global_paths):
-        """Should preserve existing settings when merging."""
+        """Should preserve existing settings when merging, migrate mcpServers to claude.json."""
         settings_path = mock_global_paths["settings_path"]
+        claude_json_path = mock_global_paths["claude_json_path"]
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(json.dumps({
             "mcpServers": {"other": {"command": "other"}},
@@ -1428,12 +1453,16 @@ class TestGlobalHooks:
 
         init_global_hooks()
 
+        # settings.json: mcpServers migrated out, custom settings preserved
         settings = json.loads(settings_path.read_text())
         assert settings["customSetting"] is True
-        assert "other" in settings["mcpServers"]
-        assert "mgcp" in settings["mcpServers"]
+        assert "mcpServers" not in settings  # migrated to claude.json
         assert "hooks" in settings
         assert "mcp__mgcp__*" in settings["permissions"]["allow"]
+
+        # claude.json: mcpServers written here
+        claude_json = json.loads(claude_json_path.read_text())
+        assert "mgcp" in claude_json["mcpServers"]
 
     def test_init_global_hooks_idempotent(self, mock_global_paths):
         """Second run should skip existing files."""
@@ -1541,52 +1570,39 @@ class TestGlobalHooks:
         assert len(result["errors"]) > 0
         assert "parse" in result["errors"][0].lower()
 
-    def test_global_settings_includes_mcp_server(self, mock_global_paths):
-        """Global settings should include mcpServers.mgcp so tools actually exist."""
-        settings_path = mock_global_paths["settings_path"]
+    def test_global_claude_json_includes_mcp_server(self, mock_global_paths):
+        """claude.json should include mcpServers.mgcp so tools actually exist."""
+        claude_json_path = mock_global_paths["claude_json_path"]
 
         init_global_hooks()
 
-        settings = json.loads(settings_path.read_text())
-        assert "mcpServers" in settings
-        assert "mgcp" in settings["mcpServers"]
-        mgcp_config = settings["mcpServers"]["mgcp"]
+        claude_json = json.loads(claude_json_path.read_text())
+        assert "mcpServers" in claude_json
+        assert "mgcp" in claude_json["mcpServers"]
+        mgcp_config = claude_json["mcpServers"]["mgcp"]
         assert mgcp_config["args"] == ["-m", "mgcp.server"]
         assert "command" in mgcp_config
         assert "cwd" in mgcp_config
 
-    def test_build_global_hook_settings_includes_mcp_server(self):
-        """_build_global_hook_settings should include mcpServers."""
+    def test_build_global_hook_settings_excludes_mcp_server(self):
+        """_build_global_hook_settings should NOT include mcpServers (goes to claude.json)."""
         settings = _build_global_hook_settings()
-        assert "mcpServers" in settings
-        assert "mgcp" in settings["mcpServers"]
-        assert settings["mcpServers"]["mgcp"] == get_mcp_server_config()
+        assert "mcpServers" not in settings
+        assert "hooks" in settings
+        assert "permissions" in settings
 
-    def test_global_deploy_skips_claude_code_configure_client(self, mock_global_paths, mock_config_paths):
-        """Global deployment should NOT call configure_client for claude-code.
-
-        When deploying global hooks, mcpServers.mgcp is included in
-        ~/.claude/settings.json. Writing it to ~/.claude.json too would
-        create a duplicate MCP server definition that fails to start.
-        """
-        # Make claude-code "installed" so it would be detected
-        config_path = mock_config_paths["claude-code"]
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text("{}")
-
-        # Run global hooks deployment
+    def test_global_deploy_writes_mcp_to_claude_json(self, mock_global_paths):
+        """Global deployment should write mcpServers to claude.json, not settings.json."""
         init_global_hooks()
 
-        # claude-code config file should NOT have been modified with mcpServers
-        config = json.loads(config_path.read_text())
-        assert "mcpServers" not in config, (
-            "configure_client should not write to ~/.claude.json during global deployment"
-        )
-
-        # But settings.json SHOULD have mcpServers
+        # settings.json should NOT have mcpServers
         settings = json.loads(mock_global_paths["settings_path"].read_text())
-        assert "mcpServers" in settings
-        assert "mgcp" in settings["mcpServers"]
+        assert "mcpServers" not in settings
+
+        # claude.json SHOULD have mcpServers
+        claude_json = json.loads(mock_global_paths["claude_json_path"].read_text())
+        assert "mcpServers" in claude_json
+        assert "mgcp" in claude_json["mcpServers"]
 
     def test_build_global_hook_settings_uses_absolute_paths(self, mock_global_paths):
         """_build_global_hook_settings should use absolute paths."""
@@ -1602,6 +1618,118 @@ class TestGlobalHooks:
             assert "$CLAUDE_PROJECT_DIR" not in cmd
             # Command should start with python3 followed by an absolute path
             assert cmd.startswith("python3 /") or cmd.startswith("python3 C:"), f"Not absolute: {cmd}"
+
+
+# ============================================================================
+# Tests: Project-Scoped Config
+# ============================================================================
+
+class TestConfigureClaudeCodeProject:
+    """Tests for configure_claude_code_project function."""
+
+    def test_creates_project_entry_in_claude_json(self, mock_global_paths):
+        """Should create project entry with mcpServers in ~/.claude.json."""
+        claude_json_path = mock_global_paths["claude_json_path"]
+
+        result = configure_claude_code_project("/tmp/my-project")
+
+        assert result["status"] == "created"
+        data = json.loads(claude_json_path.read_text())
+        assert "projects" in data
+        assert "/tmp/my-project" in data["projects"]
+        assert "mgcp" in data["projects"]["/tmp/my-project"]["mcpServers"]
+
+    def test_adds_to_existing_claude_json(self, mock_global_paths):
+        """Should add project entry to existing ~/.claude.json without clobbering."""
+        claude_json_path = mock_global_paths["claude_json_path"]
+        claude_json_path.parent.mkdir(parents=True, exist_ok=True)
+        claude_json_path.write_text(json.dumps({
+            "numStartups": 42,
+            "projects": {
+                "/other/project": {"mcpServers": {}}
+            }
+        }))
+
+        result = configure_claude_code_project("/tmp/my-project")
+
+        assert result["status"] == "created"
+        data = json.loads(claude_json_path.read_text())
+        assert data["numStartups"] == 42
+        assert "/other/project" in data["projects"]
+        assert "mgcp" in data["projects"]["/tmp/my-project"]["mcpServers"]
+
+    def test_preserves_existing_project_data(self, mock_global_paths):
+        """Should preserve existing project fields when adding mcpServers."""
+        claude_json_path = mock_global_paths["claude_json_path"]
+        claude_json_path.parent.mkdir(parents=True, exist_ok=True)
+        claude_json_path.write_text(json.dumps({
+            "projects": {
+                "/tmp/my-project": {
+                    "allowedTools": ["Bash"],
+                    "mcpServers": {}
+                }
+            }
+        }))
+
+        configure_claude_code_project("/tmp/my-project")
+
+        data = json.loads(claude_json_path.read_text())
+        project = data["projects"]["/tmp/my-project"]
+        assert project["allowedTools"] == ["Bash"]
+        assert "mgcp" in project["mcpServers"]
+
+    def test_unchanged_when_already_configured(self, mock_global_paths):
+        """Should report unchanged if already configured identically."""
+        claude_json_path = mock_global_paths["claude_json_path"]
+        claude_json_path.parent.mkdir(parents=True, exist_ok=True)
+        claude_json_path.write_text(json.dumps({
+            "projects": {
+                "/tmp/my-project": {
+                    "mcpServers": {"mgcp": get_mcp_server_config()}
+                }
+            }
+        }))
+
+        result = configure_claude_code_project("/tmp/my-project")
+
+        assert result["status"] == "unchanged"
+
+    def test_updates_stale_config(self, mock_global_paths):
+        """Should update if MGCP config differs."""
+        claude_json_path = mock_global_paths["claude_json_path"]
+        claude_json_path.parent.mkdir(parents=True, exist_ok=True)
+        claude_json_path.write_text(json.dumps({
+            "projects": {
+                "/tmp/my-project": {
+                    "mcpServers": {"mgcp": {"command": "old-python"}}
+                }
+            }
+        }))
+
+        result = configure_claude_code_project("/tmp/my-project")
+
+        assert result["status"] == "updated"
+        data = json.loads(claude_json_path.read_text())
+        assert data["projects"]["/tmp/my-project"]["mcpServers"]["mgcp"]["command"] != "old-python"
+
+    def test_dry_run_does_not_write(self, mock_global_paths):
+        """Dry run should not create the file."""
+        claude_json_path = mock_global_paths["claude_json_path"]
+
+        result = configure_claude_code_project("/tmp/my-project", dry_run=True)
+
+        assert result["status"] == "would_create"
+        assert not claude_json_path.exists()
+
+    def test_handles_malformed_json(self, mock_global_paths):
+        """Should return error for malformed ~/.claude.json."""
+        claude_json_path = mock_global_paths["claude_json_path"]
+        claude_json_path.parent.mkdir(parents=True, exist_ok=True)
+        claude_json_path.write_text("not json {{{")
+
+        result = configure_claude_code_project("/tmp/my-project")
+
+        assert result["status"] == "error"
 
 
 # ============================================================================

@@ -45,13 +45,14 @@ class LLMClient:
 
 def _claude_code_path() -> Path:
     """
-    Claude Code stores MCP settings in ~/.claude.json (user scope).
+    Claude Code stores MCP server definitions in ~/.claude.json.
 
     This is the same on all platforms:
     - macOS/Linux: ~/.claude.json
     - Windows: %USERPROFILE%\\.claude.json
 
-    The mcpServers key is at the root level for user-scope (global) config.
+    The mcpServers key is at the root level alongside other Claude Code state
+    (numStartups, projects, tipsHistory, etc.).
     """
     if sys.platform == "win32":
         return Path(os.environ.get("USERPROFILE", Path.home())) / ".claude.json"
@@ -252,6 +253,7 @@ HOOK_SETTINGS = _build_hook_settings()
 # Global hooks: deploy once, fire in every Claude Code session
 GLOBAL_HOOKS_DIR = Path.home() / ".mgcp" / "hooks"
 GLOBAL_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
+GLOBAL_CLAUDE_JSON_PATH = Path.home() / ".claude.json"
 
 
 def _build_global_hook_settings() -> dict:
@@ -260,9 +262,8 @@ def _build_global_hook_settings() -> dict:
     Unlike _build_hook_settings() which uses $CLAUDE_PROJECT_DIR relative paths,
     this uses absolute paths to ~/.mgcp/hooks/ so hooks fire in every project.
 
-    Includes mcpServers so the MCP server, hooks, and permissions are all in one
-    file. Without this, hooks fire and reference tools that don't exist because
-    the server isn't configured.
+    Returns only hooks and permissions (same shape as _build_hook_settings).
+    mcpServers are written separately to ~/.claude.json by init_global_hooks().
     """
     hooks: dict[str, list] = {}
     for filename, (event_type, matcher) in V2_HOOK_FILES.items():
@@ -278,9 +279,6 @@ def _build_global_hook_settings() -> dict:
             hooks[event_type] = []
         hooks[event_type].append(entry)
     return {
-        "mcpServers": {
-            "mgcp": get_mcp_server_config(),
-        },
         "permissions": {
             "allow": ["mcp__mgcp__*"],
         },
@@ -428,9 +426,17 @@ def detect_installed_clients() -> list[str]:
     installed = []
     for name, client in LLM_CLIENTS.items():
         config_path = client.get_config_path()
-        # Check if config exists OR if parent directory exists (client installed but not configured)
-        if config_path.exists() or config_path.parent.exists():
-            installed.append(name)
+        if name == "claude-code":
+            # Claude Code config is ~/.claude.json (parent = home, always exists).
+            # Check for ~/.claude/ directory or the config file itself.
+            claude_dir = config_path.parent / ".claude"
+            if config_path.exists() or claude_dir.is_dir():
+                installed.append(name)
+        else:
+            # Other clients: config lives in a client-specific directory
+            # (e.g. ~/.cursor/mcp.json). Parent existing = client installed.
+            if config_path.exists() or config_path.parent.exists():
+                installed.append(name)
     return installed
 
 
@@ -578,9 +584,12 @@ def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
     """
     Deploy MGCP hooks globally so they fire in every Claude Code session.
 
-    Copies hook scripts to ~/.mgcp/hooks/ and configures ~/.claude/settings.json
-    with absolute paths. This means hooks fire automatically in every project
-    without needing per-project deployment.
+    Copies hook scripts to ~/.mgcp/hooks/ and configures:
+    - ~/.claude/settings.json with hooks and permissions (absolute paths)
+    - ~/.claude.json with mcpServers.mgcp
+
+    This means hooks fire automatically in every project without needing
+    per-project deployment.
 
     Args:
         dry_run: If True, don't write changes, just report what would happen
@@ -602,6 +611,7 @@ def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
 
     hooks_dir = GLOBAL_HOOKS_DIR
     settings_file = GLOBAL_SETTINGS_PATH
+    claude_json_file = GLOBAL_CLAUDE_JSON_PATH
     version_file = hooks_dir / VERSION_MARKER
     current_version = _get_hook_version()
 
@@ -653,10 +663,10 @@ def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
     if not dry_run:
         version_file.write_text(current_version + "\n")
 
-    # Build settings with absolute paths
+    # Build settings with absolute paths (hooks + permissions only)
     global_settings = _build_global_hook_settings()
 
-    # Merge into ~/.claude/settings.json
+    # Merge hooks + permissions into ~/.claude/settings.json
     if settings_file.exists():
         try:
             existing = json.loads(settings_file.read_text())
@@ -681,9 +691,14 @@ def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
                         if not existing["hooks"][hook_type]:
                             del existing["hooks"][hook_type]
 
+            # Migration: remove mcpServers from settings.json (belongs in claude.json)
+            settings_had_mcp = "mcpServers" in existing
+            if settings_had_mcp:
+                del existing["mcpServers"]
+
             needs_update = _merge_settings(existing, global_settings)
 
-            if needs_update or force:
+            if needs_update or force or settings_had_mcp:
                 if dry_run:
                     results["would_update"].append(str(settings_file))
                 else:
@@ -701,6 +716,35 @@ def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
             settings_file.write_text(json.dumps(global_settings, indent=2) + "\n")
             results["created"].append(str(settings_file))
 
+    # Write mcpServers to ~/.claude.json
+    mcp_config = {"mcpServers": {"mgcp": get_mcp_server_config()}}
+
+    if claude_json_file.exists():
+        try:
+            existing_claude = json.loads(claude_json_file.read_text())
+            if not isinstance(existing_claude, dict):
+                existing_claude = {}
+            if "mcpServers" not in existing_claude:
+                existing_claude["mcpServers"] = {}
+            if existing_claude["mcpServers"].get("mgcp") != mcp_config["mcpServers"]["mgcp"]:
+                existing_claude["mcpServers"]["mgcp"] = mcp_config["mcpServers"]["mgcp"]
+                if dry_run:
+                    results["would_update"].append(str(claude_json_file))
+                else:
+                    claude_json_file.write_text(json.dumps(existing_claude, indent=2) + "\n")
+                    results["updated"].append(str(claude_json_file))
+            else:
+                results["skipped"].append(str(claude_json_file))
+        except json.JSONDecodeError:
+            results["errors"].append(f"Could not parse existing {claude_json_file}")
+    else:
+        if dry_run:
+            results["would_create"].append(str(claude_json_file))
+        else:
+            claude_json_file.parent.mkdir(parents=True, exist_ok=True)
+            claude_json_file.write_text(json.dumps(mcp_config, indent=2) + "\n")
+            results["created"].append(str(claude_json_file))
+
     return results
 
 
@@ -709,7 +753,7 @@ def configure_claude_code_project(project_path: str, dry_run: bool = False) -> d
     Configure MGCP for a specific project in Claude Code's project-level config.
 
     Claude Code stores project-specific MCP servers in ~/.claude.json under
-    projects.<path>.mcpServers. This is separate from the global config.
+    projects.<project_path>.mcpServers — NOT in <project>/.claude/claude.json.
 
     Args:
         project_path: Absolute path to the project directory
@@ -723,47 +767,48 @@ def configure_claude_code_project(project_path: str, dry_run: bool = False) -> d
         "message": None,
     }
 
-    config_file = Path.home() / ".claude.json"
+    config_file = GLOBAL_CLAUDE_JSON_PATH
     mcp_config = get_mcp_server_config()
 
-    if not config_file.exists():
-        result["status"] = "skipped"
-        result["message"] = "~/.claude.json not found (Claude Code not used yet?)"
-        return result
+    # Load existing or start fresh
+    if config_file.exists():
+        try:
+            data = json.loads(config_file.read_text())
+            if not isinstance(data, dict):
+                data = {}
+        except json.JSONDecodeError:
+            result["status"] = "error"
+            result["message"] = f"Could not parse {config_file}"
+            return result
+    else:
+        data = {}
 
-    try:
-        data = json.loads(config_file.read_text())
-    except json.JSONDecodeError:
-        result["status"] = "error"
-        result["message"] = "Could not parse ~/.claude.json"
-        return result
-
-    # Ensure projects structure exists
+    # Navigate to projects.<project_path>.mcpServers
     if "projects" not in data:
         data["projects"] = {}
-
     if project_path not in data["projects"]:
         data["projects"][project_path] = {}
-
-    proj = data["projects"][project_path]
-    if "mcpServers" not in proj:
-        proj["mcpServers"] = {}
+    project_entry = data["projects"][project_path]
+    if "mcpServers" not in project_entry:
+        project_entry["mcpServers"] = {}
 
     # Check current state
-    if "mgcp" in proj["mcpServers"]:
-        if proj["mcpServers"]["mgcp"] == mcp_config:
+    if "mgcp" in project_entry["mcpServers"]:
+        if project_entry["mcpServers"]["mgcp"] == mcp_config:
             result["status"] = "unchanged"
             result["message"] = "MGCP already configured for this project"
         else:
             if not dry_run:
-                proj["mcpServers"]["mgcp"] = mcp_config
-                config_file.write_text(json.dumps(data))
+                project_entry["mcpServers"]["mgcp"] = mcp_config
+                config_file.parent.mkdir(parents=True, exist_ok=True)
+                config_file.write_text(json.dumps(data, indent=2) + "\n")
             result["status"] = "would_update" if dry_run else "updated"
             result["message"] = "Would update project MGCP config" if dry_run else "Updated project MGCP config"
     else:
         if not dry_run:
-            proj["mcpServers"]["mgcp"] = mcp_config
-            config_file.write_text(json.dumps(data))
+            project_entry["mcpServers"]["mgcp"] = mcp_config
+            config_file.parent.mkdir(parents=True, exist_ok=True)
+            config_file.write_text(json.dumps(data, indent=2) + "\n")
         result["status"] = "would_create" if dry_run else "created"
         result["message"] = "Would add MGCP to project" if dry_run else "Added MGCP to project"
 
@@ -774,7 +819,7 @@ def diagnose_claude_code() -> dict:
     """
     Diagnose Claude Code MGCP configuration issues.
 
-    Checks ~/.claude.json for user-scope (global) and project-specific configs.
+    Checks ~/.claude.json for MCP server config.
 
     Returns dict with diagnostic results.
     """
@@ -786,7 +831,7 @@ def diagnose_claude_code() -> dict:
     }
 
     # Check user-scope config in ~/.claude.json
-    config_path = _claude_code_path()
+    config_path = GLOBAL_CLAUDE_JSON_PATH
     results["user_config"]["path"] = str(config_path)
 
     if config_path.exists():
@@ -794,7 +839,7 @@ def diagnose_claude_code() -> dict:
             config = json.loads(config_path.read_text())
             results["user_config"]["status"] = "ok"
 
-            # Check root-level mcpServers (user scope)
+            # Check root-level mcpServers
             if "mcpServers" in config and "mgcp" in config["mcpServers"]:
                 results["user_config"]["mgcp_configured"] = True
                 # Validate the config
@@ -803,42 +848,31 @@ def diagnose_claude_code() -> dict:
                     cmd = mgcp_cfg["command"]
                     if not Path(cmd).exists():
                         results["issues"].append(f"User config: Python path does not exist: {cmd}")
-                        results["suggestions"].append("Run 'mgcp-init --client claude-code' to fix")
-
-            # Also check project-specific configs
-            if "projects" in config:
-                for proj_path, proj_data in config["projects"].items():
-                    proj_info = {
-                        "path": proj_path,
-                        "has_mgcp": False,
-                        "config": None,
-                        "issues": [],
-                    }
-
-                    if isinstance(proj_data, dict) and "mcpServers" in proj_data:
-                        servers = proj_data["mcpServers"]
-                        if isinstance(servers, dict) and "mgcp" in servers:
-                            proj_info["has_mgcp"] = True
-                            proj_info["config"] = servers["mgcp"]
-
-                            # Validate
-                            if "command" in servers["mgcp"]:
-                                cmd = servers["mgcp"]["command"]
-                                if not Path(cmd).exists():
-                                    proj_info["issues"].append(f"Python path does not exist: {cmd}")
-
-                    results["project_configs"].append(proj_info)
+                        results["suggestions"].append("Run 'mgcp-init' to fix")
 
         except json.JSONDecodeError:
             results["user_config"]["status"] = "parse_error"
-            results["issues"].append("Could not parse ~/.claude.json")
+            results["issues"].append(f"Could not parse {config_path}")
     else:
         results["user_config"]["status"] = "missing"
-        results["issues"].append("~/.claude.json not found - Claude Code may not have been used yet")
+        results["issues"].append(f"{config_path} not found - run 'mgcp-init' to configure")
+
+    # Check for stale mcpServers in settings.json (migration check)
+    settings_path = GLOBAL_SETTINGS_PATH
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+            if "mcpServers" in settings:
+                results["issues"].append(
+                    f"mcpServers found in {settings_path} (should be in claude.json). "
+                    "Run 'mgcp-init --force' to migrate."
+                )
+        except json.JSONDecodeError:
+            pass
 
     # Generate suggestions
     if not results["user_config"]["mgcp_configured"]:
-        results["suggestions"].append("Run 'mgcp-init --client claude-code' to configure")
+        results["suggestions"].append("Run 'mgcp-init' to configure")
 
     return results
 
@@ -1032,7 +1066,7 @@ Project-local hooks (--local):
     parser.add_argument(
         "--project-config",
         action="store_true",
-        help="Also configure project-specific MCP server in ~/.claude.json (Claude Code only)",
+        help="Also configure project-scoped MCP server in ~/.claude.json projects entry (Claude Code only)",
     )
 
     args = parser.parse_args()
@@ -1053,16 +1087,6 @@ Project-local hooks (--local):
         else:
             print(f"    ! {g['status']}")
         print(f"      {g['path']}")
-
-        # Project configs with MGCP
-        projects_with_mgcp = [p for p in results["project_configs"] if p["has_mgcp"]]
-        if projects_with_mgcp:
-            print(f"\n  Projects with MGCP configured ({len(projects_with_mgcp)}):")
-            for proj in projects_with_mgcp:
-                issues = " [ISSUES]" if proj["issues"] else ""
-                print(f"    • {proj['path']}{issues}")
-                for issue in proj["issues"]:
-                    print(f"      ! {issue}")
 
         # Issues
         if results["issues"]:
@@ -1155,12 +1179,12 @@ Project-local hooks (--local):
 
     for client_name in clients_to_configure:
         # Skip claude-code client config when deploying global hooks.
-        # Global hooks already include mcpServers.mgcp in ~/.claude/settings.json,
-        # so writing it to ~/.claude.json too creates a duplicate server definition.
+        # init_global_hooks() writes mcpServers to ~/.claude.json,
+        # so configure_client() would be redundant.
         if client_name == "claude-code" and not args.local and not args.no_hooks:
             configured_claude_code = True
-            print("    = Claude Code: mcpServers included in global hooks settings")
-            print(f"      {GLOBAL_SETTINGS_PATH}")
+            print("    = Claude Code: mcpServers included in global deployment")
+            print(f"      {GLOBAL_CLAUDE_JSON_PATH}")
             continue
 
         client = LLM_CLIENTS[client_name]
@@ -1212,7 +1236,7 @@ Project-local hooks (--local):
         }.get(proj_result["status"], "?")
 
         print(f"    {status_icon} {proj_result['message']}")
-        print(f"      ~/.claude.json → projects.{project_dir}.mcpServers.mgcp")
+        print(f"      {GLOBAL_CLAUDE_JSON_PATH} → projects.{project_dir}.mcpServers.mgcp")
 
     # Pre-download embedding model so first query doesn't hang
     if not dry_run:

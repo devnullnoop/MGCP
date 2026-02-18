@@ -182,7 +182,7 @@ All source files are in `src/mgcp/`:
 
 ## Claude Code Integration
 
-Add to Claude Code settings (`~/.config/claude-code/settings.json`):
+Add to Claude Code MCP config (`~/.claude.json`):
 
 ```json
 {

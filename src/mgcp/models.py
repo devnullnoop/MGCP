@@ -58,6 +58,7 @@ class Lesson(BaseModel):
     parent_id: str | None = Field(None, description="Parent lesson (deprecated, use relationships)")
     related_ids: list[str] = Field(default_factory=list, description="Cross-links (deprecated, use relationships)")
     relationships: list[Relationship] = Field(default_factory=list, description="Typed relationships to other lessons")
+    graduated_to: str | None = Field(None, description="Skill name this lesson graduated into")
 
     def to_context(self) -> str:
         """Format lesson for inclusion in LLM context."""
@@ -197,6 +198,17 @@ class CommunitySummary(BaseModel):
     member_count: int = Field(default=0, description="Count at creation time")
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class CompiledSkill(BaseModel):
+    """Metadata for a skill compiled from a lesson community."""
+
+    skill_name: str = Field(..., description="Unique skill name (lowercase-with-dashes)")
+    community_id: str = Field(..., description="Source community ID")
+    member_ids: list[str] = Field(default_factory=list, description="Lesson IDs included in compilation")
+    skill_path: str = Field(..., description="Absolute path to the generated SKILL.md file")
+    compiled_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    version: int = Field(default=1, description="Compilation version (incremented on recompile)")
 
 
 # ============================================================================

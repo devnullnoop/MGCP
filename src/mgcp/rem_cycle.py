@@ -147,6 +147,10 @@ class RemEngine:
             findings = await self._context_summary()
         elif operation == "intent_calibration":
             findings = await self._intent_calibration()
+        elif operation == "skill_readiness":
+            findings = await self._skill_readiness()
+        elif operation == "skill_drift_detection":
+            findings = await self._skill_drift_detection()
         else:
             findings = []
 
@@ -401,6 +405,92 @@ class RemEngine:
                 ],
                 recommended=0,
                 metadata={"project_id": project.project_id, "snapshot_count": len(history)},
+            ))
+
+        return findings
+
+    async def _skill_readiness(self) -> list[RemFinding]:
+        """Scan communities for skill compilation readiness."""
+        from .graph import LessonGraph
+        from .skill_compiler import list_compilation_candidates
+
+        graph = LessonGraph()
+        lessons = await self.store.get_all_lessons()
+
+        if len(lessons) < 4:
+            return []
+
+        for lesson in lessons:
+            graph.add_lesson(lesson)
+
+        candidates = await list_compilation_candidates(
+            store=self.store, graph=graph, min_maturity=0.5
+        )
+
+        findings = []
+        for assessment in candidates:
+            findings.append(RemFinding(
+                operation="skill_readiness",
+                title=f"Ready for compilation: {assessment.title}",
+                description=(
+                    f"Community '{assessment.community_id}' ({assessment.member_count} lessons, "
+                    f"{assessment.aggregate_usage} retrievals) scores {assessment.score:.0%} maturity.\n"
+                    f"Reasons: {'; '.join(assessment.reasons)}"
+                ),
+                options=[
+                    {"label": "Compile", "description": "Generate skill and graduate lessons"},
+                    {"label": "Skip", "description": "Not ready yet"},
+                ],
+                recommended=0,
+                metadata={
+                    "community_id": assessment.community_id,
+                    "score": assessment.score,
+                    "member_count": assessment.member_count,
+                },
+            ))
+
+        return findings
+
+    async def _skill_drift_detection(self) -> list[RemFinding]:
+        """Detect drift in compiled skills (lessons refined after compilation)."""
+        from .skill_compiler import detect_drift
+
+        drift_items = await detect_drift(store=self.store)
+        if not drift_items:
+            return []
+
+        # Group by skill
+        by_skill: dict[str, list[dict]] = {}
+        for item in drift_items:
+            by_skill.setdefault(item["skill_name"], []).append(item)
+
+        findings = []
+        for skill_name, items in by_skill.items():
+            reasons = []
+            for item in items:
+                if item["reason"] == "refined_after_compilation":
+                    reasons.append(f"Lesson '{item['lesson_id']}' refined after compilation")
+                elif item["reason"] == "deleted":
+                    reasons.append(f"Lesson '{item['lesson_id']}' was deleted")
+
+            findings.append(RemFinding(
+                operation="skill_drift_detection",
+                title=f"Drift in skill: {skill_name}",
+                description=(
+                    f"Skill '{skill_name}' has {len(items)} drifted member(s):\n"
+                    + "\n".join(f"  - {r}" for r in reasons)
+                ),
+                options=[
+                    {"label": "Recompile", "description": "Recompile the skill with updated lessons"},
+                    {"label": "Ungraduate", "description": "Restore lessons to active search"},
+                    {"label": "Acknowledge", "description": "Accept the drift for now"},
+                ],
+                recommended=0,
+                metadata={
+                    "skill_name": skill_name,
+                    "drift_count": len(items),
+                    "drift_items": items,
+                },
             ))
 
         return findings

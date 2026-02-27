@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-02-27
+
+### Added
+- **Skill Compilation** (Phase 8): Compile mature lesson communities into Claude Code skills
+  - 3 new MCP tools: `compile_skill`, `list_compiled_skills`, `ungraduate_skill`
+  - `skill_compiler.py` module with maturity assessment, community-to-skill compilation, graduation tracking, and drift detection
+  - `mgcp-compile-skills` CLI with compile/list/status/ungraduate subcommands
+  - `CompiledSkill` model for tracking compiled skill metadata
+  - `graduated_to` field on Lesson model — graduated lessons are filtered from `query_lessons` but remain traversable via `spider_lessons`/`get_lesson`
+  - 2 new REM operations: `skill_readiness` (detects compilation-ready communities) and `skill_drift_detection` (tracks post-compilation changes)
+  - Skills written as `user-invocable: false` SKILL.md files to `~/.claude/skills/`
+
+### Changed
+- **Tool count**: 35 → 38 MCP tools
+
 ## [2.0.0] - 2026-02-10
 
 ### Added
@@ -168,3 +183,10 @@ mgcp-migrate --dry-run    # Preview first
 - Versioned context history and lesson version snapshots
 - Workflow state management and scheduled reminders
 - Community detection with Louvain algorithm
+
+### Phase 8: Skill Compilation (Complete)
+- Compile mature lesson communities into Claude Code skills (SKILL.md files)
+- Lesson graduation tracking with `graduated_to` field
+- Drift detection for compiled skills
+- REM integration (skill readiness + drift detection operations)
+- CLI and MCP tools for compilation management

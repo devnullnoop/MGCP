@@ -132,6 +132,7 @@ REST API for managing lessons, projects, and viewing telemetry.
 - **Projects**: Project context management (`/api/projects`)
 - **Catalogue**: Project-specific knowledge (`/api/projects/{id}/catalogue`)
 - **Telemetry**: Session and usage data (`/api/sessions`, `/api/timeline`)
+- **Skills**: Compiled skill management (`/api/compiled-skills`)
 
 ### WebSocket
 
@@ -141,10 +142,11 @@ Real-time events at `/ws/events`
 
 - `/` - Dashboard
 - `/lessons` - Lesson browser
+- `/skills` - Compiled skills
 - `/projects` - Project contexts
 - `/docs` - This API documentation
 """,
-    version="1.1.0",
+    version="2.1.0",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -360,6 +362,41 @@ async def get_graph_data() -> dict[str, Any]:
                     "relation": "step_lesson",
                     "weight": 0.8 if lesson_link.priority == 1 else 0.5,
                 })
+
+    # Add compiled skill nodes and connect to their member lessons
+    skills = await store.get_all_compiled_skills()
+    for skill in skills:
+        skill_node_id = f"skill-{skill.skill_name}"
+        nodes.append({
+            "id": skill_node_id,
+            "label": skill.skill_name.replace("-", " ").title(),
+            "type": "skill",
+            "usage": 60,
+            "action": f"Compiled skill v{skill.version} ({len(skill.member_ids)} lessons)",
+            "version": skill.version,
+            "compiled_at": skill.compiled_at.isoformat(),
+        })
+        # Connect skill to root
+        links.append({
+            "source": "root",
+            "target": skill_node_id,
+            "relation": "skill",
+            "weight": 0.9,
+        })
+        # Connect member lessons to skill
+        for member_id in skill.member_ids:
+            links.append({
+                "source": skill_node_id,
+                "target": member_id,
+                "relation": "graduated",
+                "weight": 0.7,
+            })
+
+    # Annotate graduated_to on lesson nodes
+    for node in nodes:
+        matching_lesson = next((l for l in lessons if l.id == node["id"] and l.graduated_to), None)
+        if matching_lesson:
+            node["graduated_to"] = matching_lesson.graduated_to
 
     # Add community_id to lesson nodes if graph has enough data
     try:
@@ -693,6 +730,65 @@ async def remove_catalogue_item_endpoint(
 
 
 # ============================================================================
+# Compiled Skills API
+# ============================================================================
+
+
+@app.get("/api/compiled-skills")
+async def get_all_compiled_skills() -> list[dict[str, Any]]:
+    """Get all compiled skills with drift detection."""
+    await ensure_initialized()
+    skills = await store.get_all_compiled_skills()
+    result = []
+    for skill in skills:
+        skill_data = skill.model_dump(mode="json")
+        # Compute drift: check if any member lesson was refined after compilation
+        drift_lessons = []
+        for member_id in skill.member_ids:
+            lesson = await store.get_lesson(member_id)
+            if lesson and lesson.last_refined > skill.compiled_at:
+                drift_lessons.append(member_id)
+        skill_data["drift_count"] = len(drift_lessons)
+        skill_data["drift_lessons"] = drift_lessons
+        skill_data["member_count"] = len(skill.member_ids)
+        result.append(skill_data)
+    return result
+
+
+@app.get("/api/compiled-skills/{skill_name}")
+async def get_compiled_skill(skill_name: str) -> dict[str, Any] | None:
+    """Get a specific compiled skill with member lesson details."""
+    await ensure_initialized()
+    skill = await store.get_compiled_skill(skill_name)
+    if not skill:
+        return {"error": "Skill not found"}
+
+    skill_data = skill.model_dump(mode="json")
+    # Enrich with member lesson details
+    members = []
+    drift_lessons = []
+    for member_id in skill.member_ids:
+        lesson = await store.get_lesson(member_id)
+        if lesson:
+            member_info = {
+                "id": lesson.id,
+                "action": lesson.action,
+                "graduated_to": lesson.graduated_to,
+                "version": lesson.version,
+                "last_refined": lesson.last_refined.isoformat(),
+            }
+            members.append(member_info)
+            if lesson.last_refined > skill.compiled_at:
+                drift_lessons.append(member_id)
+
+    skill_data["members"] = members
+    skill_data["drift_count"] = len(drift_lessons)
+    skill_data["drift_lessons"] = drift_lessons
+    skill_data["member_count"] = len(skill.member_ids)
+    return skill_data
+
+
+# ============================================================================
 # Lesson CRUD API
 # ============================================================================
 
@@ -885,6 +981,15 @@ async def serve_lessons():
     if lessons_path.exists():
         return FileResponse(lessons_path)
     return HTMLResponse("<!DOCTYPE html><html><body><h1>Lessons page not found.</h1></body></html>")
+
+
+@app.get("/skills")
+async def serve_skills():
+    """Serve the compiled skills page."""
+    skills_path = STATIC_DIR / "skills.html"
+    if skills_path.exists():
+        return FileResponse(skills_path)
+    return HTMLResponse("<!DOCTYPE html><html><body><h1>Skills page not found.</h1></body></html>")
 
 
 # Mount static files for other assets

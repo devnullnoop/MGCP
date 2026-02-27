@@ -118,6 +118,8 @@ class QdrantVectorStore:
                         "parent_id": lesson.parent_id or "",
                         "usage_count": lesson.usage_count,
                         "text": text,  # Store for similarity search
+                        "is_graduated": bool(lesson.graduated_to),
+                        "graduated_to": lesson.graduated_to or "",
                     },
                 )
             ],
@@ -146,27 +148,49 @@ class QdrantVectorStore:
         limit: int = 5,
         min_score: float = 0.3,
         tags: list[str] | None = None,
+        include_graduated: bool = False,
     ) -> list[tuple[str, float]]:
         """Search for relevant lessons.
+
+        Args:
+            query: Search query text
+            limit: Max results
+            min_score: Minimum similarity score
+            tags: Optional tag filter
+            include_graduated: If False, exclude lessons graduated to skills
 
         Returns:
             List of (lesson_id, score) tuples, sorted by relevance
         """
         query_vector = embed_query(query)
 
-        # Build filter for tag matching
-        query_filter = None
+        # Build filter conditions
+        must_conditions = []
+        should_conditions = []
+        must_not_conditions = []
+
+        # Exclude graduated lessons by default
+        if not include_graduated:
+            must_not_conditions.append(
+                FieldCondition(key="is_graduated", match=MatchValue(value=True))
+            )
+
+        # Tag filter
         if tags:
-            # Match if any of the tags are contained in the tags field
-            # Qdrant doesn't have $contains, so we use keyword matching
-            conditions = [
+            tag_conditions = [
                 FieldCondition(key="tags", match=MatchValue(value=tag))
                 for tag in tags
             ]
-            if len(conditions) == 1:
-                query_filter = Filter(must=conditions)
-            else:
-                query_filter = Filter(should=conditions)
+            should_conditions.extend(tag_conditions)
+
+        # Build the combined filter
+        query_filter = None
+        if must_conditions or should_conditions or must_not_conditions:
+            query_filter = Filter(
+                must=must_conditions or None,
+                should=should_conditions or None,
+                must_not=must_not_conditions or None,
+            )
 
         results = self.client.query_points(
             collection_name=self.collection_name,
@@ -294,6 +318,8 @@ class QdrantVectorStore:
                     "parent_id": lesson.parent_id or "",
                     "usage_count": lesson.usage_count,
                     "text": texts[i],
+                    "is_graduated": bool(lesson.graduated_to),
+                    "graduated_to": lesson.graduated_to or "",
                 },
             )
             for i, (lesson, vector) in enumerate(zip(lessons, vectors))

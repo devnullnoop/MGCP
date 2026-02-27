@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **MGCP** (Memory Graph Core Primitives) is a Python MCP server providing persistent, graph-based memory for LLM interactions. The system stores lessons learned during LLM sessions in a graph structure, allowing semantic querying without loading full context histories.
 
-**Status**: v2.0.0 - Alpha/Research project. Phases 1-7 complete, actively dogfooding.
+**Status**: v2.1.0 - Alpha/Research project. Phases 1-8 complete, actively dogfooding.
 
 ## Documentation Preferences
 
@@ -75,6 +75,13 @@ mgcp-bootstrap --update-triggers     # Update trigger fields on existing lessons
 mgcp-migrate                         # Migrate data to Qdrant
 mgcp-migrate --dry-run               # Preview what would be migrated
 mgcp-migrate --force                 # Overwrite existing Qdrant data
+
+# Skill compilation
+mgcp-compile-skills status           # Show compilation candidates and drift
+mgcp-compile-skills compile -c ID    # Compile a community into a skill
+mgcp-compile-skills compile --all    # Compile all ready candidates
+mgcp-compile-skills list             # List compiled skills
+mgcp-compile-skills ungraduate NAME  # Reverse graduation, restore lessons
 ```
 
 ## Architecture
@@ -85,7 +92,7 @@ The system flows from Claude/LLM through MCP Protocol to the MGCP Server, which 
 
 All source files are in `src/mgcp/`:
 
-- `server.py` - MCP server with 35 tools
+- `server.py` - MCP server with 38 tools
 - `models.py` - Pydantic models (Lesson, ProjectContext, ProjectCatalogue, SecurityNote, Convention, etc.)
 - `graph.py` - NetworkX graph operations with typed relationships and Louvain community detection
 - `embedding.py` - Centralized BGE embedding model (`BAAI/bge-base-en-v1.5`)
@@ -103,6 +110,8 @@ All source files are in `src/mgcp/`:
 - `rem_cycle.py` - REM (Recalibrate Everything in Memory) cycle engine
 - `rem_config.py` - REM scheduling strategies (linear, fibonacci, logarithmic)
 - `backup.py` - Backup and restore functionality
+- `skill_compiler.py` - Compile mature lesson communities into Claude Code skills
+- `skill_cli.py` - CLI for skill compilation (`mgcp-compile-skills`)
 
 ### Data Model
 
@@ -110,6 +119,7 @@ All source files are in `src/mgcp/`:
 - `trigger`: When the lesson applies (keywords/patterns)
 - `action`: What to do (imperative)
 - `tags`: Categorization for retrieval
+- `graduated_to`: Skill name if compiled into a skill (graduated lessons are filtered from `query_lessons` but remain traversable via `spider_lessons`/`get_lesson`)
 
 **Project Contexts** persist across sessions with:
 - Todos with status tracking
@@ -125,7 +135,7 @@ All source files are in `src/mgcp/`:
 - Decisions with rationale
 - Error patterns with solutions
 
-### MCP Tools (35 total)
+### MCP Tools (38 total)
 
 **Lesson Discovery & Retrieval (5):**
 - `query_lessons` - Semantic search for relevant lessons
@@ -180,6 +190,11 @@ All source files are in `src/mgcp/`:
 - `schedule_reminder` - Schedule self-directed reminders for workflow continuity
 - `reset_reminder_state` - Reset reminder state to defaults
 
+**Skill Compilation (3):**
+- `compile_skill` - Compile a mature lesson community into a Claude Code skill
+- `list_compiled_skills` - Show all compiled skills with drift status
+- `ungraduate_skill` - Reverse graduation, restore lessons to active search
+
 ## Claude Code Integration
 
 Add to Claude Code MCP config (`~/.claude.json`):
@@ -222,3 +237,4 @@ The key insight: LLM self-routing (87% accuracy) outperforms regex (58%), is sim
 5. ~~Phase 5: Quality of Life~~ Complete - Multi-client support, export/import, backup/restore, proactive hooks
 6. ~~Phase 6: Proactive Intelligence~~ Complete - Intent-based LLM self-routing, REM intent calibration, workflow state management
 7. ~~Phase 7: Feedback Loops~~ Complete - REM cycle engine (staleness scan, duplicate detection, community detection, knowledge extraction), versioned context history, lesson version snapshots, scheduled reminders
+8. ~~Phase 8: Skill Compilation~~ Complete - Compile mature lesson communities into Claude Code skills, graduation tracking, drift detection, REM integration

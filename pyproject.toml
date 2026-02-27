@@ -1,6 +1,6 @@
 [project]
 name = "mgcp"
-version = "2.0.0"
+version = "2.1.0"
 description = "Memory Graph Core Primitives - Persistent graph-based memory for LLM interactions via MCP"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -35,6 +35,8 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "ruff>=0.1.9",
     "build>=1.0.0",
+    "playwright>=1.40.0",
+    "aiohttp>=3.9.0",
 ]
 
 [project.scripts]
@@ -48,6 +50,7 @@ mgcp-import = "mgcp.data_ops:main_import"
 mgcp-duplicates = "mgcp.data_ops:main_duplicates"
 mgcp-backup = "mgcp.backup:main"
 mgcp-migrate = "mgcp.migration:main"
+mgcp-compile-skills = "mgcp.skill_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/devnullnoop/MGCP"
@@ -76,6 +79,7 @@ ignore = ["E741"]  # Allow single-letter variables in comprehensions
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501", "N806"]  # Tests can have long lines and mock variable names
 "src/mgcp/hook_templates/*" = ["N999", "E501", "UP024", "F841"]  # Standalone scripts: hyphenated names, long strings, legacy compat
+"scripts/*" = ["E501"]  # Demo data scripts have long string literals
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -130,6 +130,10 @@ Interactive visualization with usage heatmaps and real-time updates.
 Browse, search, and manage lessons with relationship tracking.
 ![Lessons](docs/screenshots/lessons.png)
 
+### Skill Compilation
+Compile mature lesson communities into reusable skills with drift detection.
+![Skills](docs/screenshots/skills.png)
+
 ### Project Catalogue
 Architecture notes, security concerns, conventions, decisions.
 ![Projects](docs/screenshots/projects.png)
@@ -171,7 +175,7 @@ mgcp-bootstrap
 mgcp-dashboard
 ```
 
-## MCP Tools (35 total)
+## MCP Tools (38 total)
 
 ### Lesson Discovery (5)
 | Tool | Purpose |
@@ -249,6 +253,13 @@ Each operation runs on its own schedule — staleness scans every 5 sessions, du
 | `schedule_reminder` | Schedule self-reminder |
 | `reset_reminder_state` | Clear reminders |
 
+### Skill Compilation (3)
+| Tool | Purpose |
+|------|---------|
+| `compile_skill` | Compile a mature lesson community into a reusable skill |
+| `list_compiled_skills` | Show compiled skills with drift detection status |
+| `ungraduate_skill` | Reverse graduation, restore lessons to active search |
+
 ## Claude Code Hooks
 
 ### The problem with regex routing
@@ -287,6 +298,7 @@ Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-remi
 | `mgcp-duplicates` | Find semantically similar lessons |
 | `mgcp-backup` | Backup/restore all MGCP data |
 | `mgcp-migrate` | Migrate from ChromaDB to Qdrant (legacy installs) |
+| `mgcp-compile-skills` | Compile lesson communities into skills, check drift, manage graduations |
 
 ## API & Dashboard
 
@@ -354,6 +366,7 @@ If someone tries this, we'd be interested to hear how it goes.
 | Quality of Life | Complete |
 | Proactive Intelligence | Complete |
 | Feedback Loops (REM) | Complete |
+| Skill Compilation | Complete |
 
 ## Contributing
 

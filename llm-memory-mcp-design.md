@@ -4,7 +4,7 @@
 
 A persistent, queryable memory system for LLM interactions that stores learned lessons in a graph structure. Instead of loading all context upfront (crushing token counts) or losing lessons to compression, the LLM queries for relevant lessons based on current task context.
 
-> **Status**: v2.0.0 - Alpha/Research project. Phases 1-7 complete, actively dogfooding.
+> **Status**: v2.1.0 - Alpha/Research project. Phases 1-8 complete, actively dogfooding.
 
 ### Core Problem Solved
 
@@ -64,6 +64,7 @@ class Lesson(BaseModel):
     tags: list[str] = []                       # For categorization
     parent_id: str | None = None               # Hierarchy (deprecated)
     relationships: list[LessonRelationship]    # Typed cross-links
+    graduated_to: str | None = None            # Skill name if compiled (graduated from active search)
 
 class LessonRelationship(BaseModel):
     target_id: str                             # Related lesson ID
@@ -145,7 +146,7 @@ Lesson(
 
 ## MCP Server Interface
 
-### Tools Exposed to LLM (23+ total)
+### Tools Exposed to LLM (38 total)
 
 #### Lesson Discovery & Retrieval
 ```python
@@ -311,6 +312,16 @@ dependencies = [
 - [ ] Cross-project global lessons (future)
 - [ ] Lesson quality scoring (future)
 
+### Phase 8: Skill Compilation ✅ Complete
+
+- [x] Compile mature lesson communities into Claude Code skills (SKILL.md files)
+- [x] Maturity assessment scoring (community size, usage, summary, stability)
+- [x] Lesson graduation tracking (`graduated_to` field, filtered from `query_lessons`)
+- [x] Drift detection for compiled skills (refined lessons, deleted members)
+- [x] `skill_readiness` and `skill_drift_detection` REM operations
+- [x] CLI tool (`mgcp-compile-skills`) with compile/list/status/ungraduate subcommands
+- [x] 3 new MCP tools: `compile_skill`, `list_compiled_skills`, `ungraduate_skill`
+
 ---
 
 ## File Structure
@@ -325,7 +336,7 @@ MGCP/
 ├── src/
 │   └── mgcp/
 │       ├── __init__.py
-│       ├── server.py            # MCP server (42 tools)
+│       ├── server.py            # MCP server (38 tools)
 │       ├── models.py            # Pydantic models
 │       ├── graph.py             # NetworkX graph operations
 │       ├── qdrant_vector_store.py     # Qdrant for lessons
@@ -338,7 +349,9 @@ MGCP/
 │       ├── migrations.py        # Database migrations
 │       ├── init_project.py      # Multi-client setup + hooks
 │       ├── data_ops.py          # Export, import, duplicates
-│       └── backup.py            # Backup and restore
+│       ├── backup.py            # Backup and restore
+│       ├── skill_compiler.py    # Compile lesson communities into skills
+│       └── skill_cli.py         # CLI for skill compilation
 ├── .claude/
 │   ├── hooks/
 │   │   ├── session-init.py      # SessionStart hook
@@ -498,6 +511,11 @@ User: "Implement memory estimation for a cache"
 | `mgcp-duplicates` | Find similar lessons |
 | `mgcp-backup` | Backup all data |
 | `mgcp-backup --restore FILE` | Restore from backup |
+| `mgcp-compile-skills` | Compile lesson communities into skills |
+| `mgcp-compile-skills compile -c ID` | Compile a specific community |
+| `mgcp-compile-skills list` | List compiled skills |
+| `mgcp-compile-skills status` | Show candidates and drift |
+| `mgcp-compile-skills ungraduate NAME` | Reverse graduation |
 
 ---
 

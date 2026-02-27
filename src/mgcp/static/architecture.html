@@ -129,7 +129,7 @@
 <body class="dark">
     <div class="container">
         <header>
-            <h1>MGCP Architecture <span class="version">v1.2.0</span></h1>
+            <h1>MGCP Architecture <span class="version">v2.1.0</span></h1>
             <button class="theme-toggle" onclick="toggleTheme()">Toggle theme</button>
         </header>
 
@@ -161,6 +161,7 @@ flowchart TB
             CD["Community Detection"]
             RM["Reminders"]
             TL["Telemetry"]
+            SC["Skill Compiler"]
         end
     end
 
@@ -187,6 +188,9 @@ flowchart TB
     CD --> GS
     CD --> VS
     TL --> DB
+    SC --> GS
+    SC --> VS
+    SC --> DB
 
     style LLM fill:#58a6ff,stroke:#388bfd,color:#000
     style MCP fill:#58a6ff,stroke:#388bfd,color:#000
@@ -199,6 +203,7 @@ flowchart TB
     style CD fill:#f778ba,stroke:#db61a2,color:#000
     style RM fill:#f778ba,stroke:#db61a2,color:#000
     style TL fill:#f778ba,stroke:#db61a2,color:#000
+    style SC fill:#f778ba,stroke:#db61a2,color:#000
     style GS fill:#ffa657,stroke:#d29922,color:#000
     style VS fill:#ffa657,stroke:#d29922,color:#000
     style DB fill:#ffa657,stroke:#d29922,color:#000
@@ -256,6 +261,12 @@ sequenceDiagram
     MCP->>G: Update lesson (version++)
     MCP->>V: Re-embed updated text
     MCP-->>LLM: Lesson refined
+
+    Note over LLM: Mature lessons graduate to skills
+    LLM->>MCP: compile_skill(community_id)
+    MCP->>G: Extract community lessons
+    MCP->>MCP: Generate SKILL.md
+    MCP-->>LLM: Skill compiled, lessons graduated
             </div>
         </div>
 
@@ -272,6 +283,7 @@ classDiagram
         +int version
         +str parent_id
         +dict relationships
+        +str graduated_to
     }
 
     class ProjectContext {
@@ -298,8 +310,18 @@ classDiagram
         +str trigger
     }
 
+    class CompiledSkill {
+        +str skill_name
+        +str community_id
+        +list member_ids
+        +str skill_path
+        +int version
+        +datetime compiled_at
+    }
+
     Lesson "1" --> "*" Lesson : parent/child
     Lesson "*" --> "*" Lesson : typed relationships
+    Lesson "*" --> "?" CompiledSkill : graduated_to
     ProjectContext "1" --> "1" Catalogue
     Workflow "*" --> "*" Lesson : linked at steps
             </div>

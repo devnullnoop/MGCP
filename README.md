@@ -280,7 +280,7 @@ We benchmarked all three approaches against a ground-truth corpus covering direc
 |------|-------|---------|
 | `session-init.py` | SessionStart | Inject routing prompt, intent-action map, workflow instructions |
 | `user-prompt-dispatcher.py` | UserPromptSubmit | Scheduled reminders and workflow state injection (no regex) |
-| `mgcp-reminder.py` | PostToolUse (Edit/Write) | Prompt to capture patterns and gotchas after code changes |
+| `post-tool-dispatcher.py` | PostToolUse | Routes by tool: Edit/Write triggers knowledge-capture; Bash triggers error detection |
 | `mgcp-precompact.py` | PreCompact | Save context before compression |
 
 Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.

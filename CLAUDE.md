@@ -110,6 +110,9 @@ All source files are in `src/mgcp/`:
 - `rem_cycle.py` - REM (Recalibrate Everything in Memory) cycle engine
 - `rem_config.py` - REM scheduling strategies (linear, fibonacci, logarithmic)
 - `backup.py` - Backup and restore functionality
+- `bootstrap_loader.py` - Load bootstrap lessons, workflows, and relationships from YAML files
+- `logging_config.py` - Centralized logging with rotation (10MB max, 5 backups)
+- `reminder_state.py` - Self-directed reminder system for LLM workflow continuity
 - `skill_compiler.py` - Compile mature lesson communities into Claude Code skills
 - `skill_cli.py` - CLI for skill compilation (`mgcp-compile-skills`)
 
@@ -221,7 +224,7 @@ MGCP v2.0 uses intent-based LLM self-routing instead of regex pattern matching. 
 |------|-------|---------|
 | `session-init.py` | SessionStart | Inject routing prompt, intent-action map, workflow instructions (~800 tokens) |
 | `user-prompt-dispatcher.py` | UserPromptSubmit | Scheduled reminders + workflow state injection (zero regex, ~60 lines) |
-| `mgcp-reminder.py` | PostToolUse (Edit/Write) | Prompt to capture patterns and gotchas after code changes |
+| `post-tool-dispatcher.py` | PostToolUse | Routes by tool: Edit/Write triggers knowledge-capture checkpoint; Bash triggers error detection with cooldown |
 | `mgcp-precompact.py` | PreCompact | Critical reminder to save before context compression |
 
 Legacy hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.

@@ -578,10 +578,13 @@ class RemEngine:
             elif action.target_type == "community" and action.action_type == "skill_compile":
                 # Check for query holes: test if graduated lesson triggers still resolve
                 member_ids = baseline.get("member_ids", [])
+                member_baselines = baseline.get("member_baselines", {})
                 holes = []
                 for mid in member_ids[:5]:  # Sample up to 5
                     lesson = await self.store.get_lesson(mid)
-                    if lesson and lesson.graduated_to and lesson.usage_count == baseline.get(f"usage_{mid}", 0):
+                    mb = member_baselines.get(mid, {})
+                    baseline_usage = mb.get("usage_count", 0)
+                    if lesson and lesson.graduated_to and lesson.usage_count == baseline_usage:
                         holes.append(mid)
 
                 verdict = "degraded" if holes else "improved"

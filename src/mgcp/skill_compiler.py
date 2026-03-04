@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .models import CompiledSkill, Lesson
+from .models import CompiledSkill, Lesson, RemAction
 from .persistence import LessonStore
 from .qdrant_vector_store import QdrantVectorStore
 
@@ -353,6 +353,15 @@ async def compile_community(
     existing = await store.get_compiled_skill(skill_name)
     new_version = (existing.version + 1) if existing else 1
 
+    # Capture baselines BEFORE graduation changes anything
+    baselines = {}
+    for lesson in lessons:
+        baselines[lesson.id] = {
+            "usage_count": lesson.usage_count,
+            "version": lesson.version,
+            "last_used": lesson.last_used.isoformat() if lesson.last_used else None,
+        }
+
     # Write skill file
     skill_dir.mkdir(parents=True, exist_ok=True)
     skill_path.write_text(skill_body, encoding="utf-8")
@@ -376,6 +385,26 @@ async def compile_community(
         store=store,
         vector_store=vector_store,
     )
+
+    # Record REM action for effectiveness tracking
+    action = RemAction(
+        action_type="skill_compile",
+        target_id=community_id,
+        target_type="community",
+        action_detail={
+            "skill_name": skill_name,
+            "skill_path": str(skill_path),
+            "version": new_version,
+            "member_ids": [l.id for l in lessons],
+        },
+        baseline_snapshot={
+            "member_count": len(lessons),
+            "member_ids": [l.id for l in lessons],
+            "member_baselines": baselines,
+        },
+    )
+    await store.record_rem_action(action)
+    logger.info(f"Recorded REM action for skill compilation: {skill_name}")
 
     return {
         "skill_name": skill_name,

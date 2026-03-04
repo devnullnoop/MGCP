@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from mgcp.models import Lesson, ProjectContext, ProjectTodo
+from mgcp.models import Lesson, ProjectContext, ProjectTodo, RemAction
 from mgcp.persistence import LessonStore
 from mgcp.rem_config import OperationSchedule
 from mgcp.rem_cycle import RemEngine, RemFinding
@@ -202,3 +202,148 @@ class TestRemFinding:
         )
         assert len(f.options) == 2
         assert f.options[f.recommended]["label"] == "Option A"
+
+
+class TestRemActionTracking:
+    """Test REM action tracking and effectiveness measurement."""
+
+    @pytest.mark.asyncio
+    async def test_record_and_retrieve_action(self, store):
+        """Recording an action returns an ID and can be retrieved."""
+        action = RemAction(
+            action_type="trigger_update",
+            target_id="test-lesson",
+            target_type="lesson",
+            action_detail={"old_trigger": "old", "new_trigger": "new"},
+            baseline_snapshot={"usage_count": 0, "version": 1},
+        )
+        row_id = await store.record_rem_action(action)
+        assert row_id is not None
+        assert row_id > 0
+
+        history = await store.get_rem_action_history(target_id="test-lesson")
+        assert len(history) == 1
+        assert history[0].action_type == "trigger_update"
+        assert history[0].target_id == "test-lesson"
+        assert history[0].baseline_snapshot["usage_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_unmeasured_actions_age_filter(self, store):
+        """Only actions older than min_age_days are returned as unmeasured."""
+        # Recent action (should NOT be returned with default 7-day filter)
+        recent = RemAction(
+            action_type="keep",
+            target_id="recent-lesson",
+            target_type="lesson",
+            baseline_snapshot={"usage_count": 5},
+        )
+        await store.record_rem_action(recent)
+
+        # Old action (should be returned)
+        old = RemAction(
+            action_type="trigger_update",
+            target_id="old-lesson",
+            target_type="lesson",
+            baseline_snapshot={"usage_count": 0},
+            created_at=datetime.now(UTC) - timedelta(days=10),
+        )
+        await store.record_rem_action(old)
+
+        unmeasured = await store.get_unmeasured_actions(min_age_days=7)
+        assert len(unmeasured) == 1
+        assert unmeasured[0].target_id == "old-lesson"
+
+    @pytest.mark.asyncio
+    async def test_measure_action_stores_outcome(self, store):
+        """Measuring an action stores the outcome and timestamp."""
+        action = RemAction(
+            action_type="delete",
+            target_id="deleted-lesson",
+            target_type="lesson",
+            baseline_snapshot={"usage_count": 0},
+            created_at=datetime.now(UTC) - timedelta(days=14),
+        )
+        row_id = await store.record_rem_action(action)
+
+        outcome = {"verdict": "improved", "reason": "lesson was redundant"}
+        await store.measure_action(row_id, outcome)
+
+        history = await store.get_rem_action_history(target_id="deleted-lesson")
+        assert len(history) == 1
+        assert history[0].outcome is not None
+        assert history[0].outcome["verdict"] == "improved"
+        assert history[0].measured_at is not None
+
+    @pytest.mark.asyncio
+    async def test_action_effectiveness_operation(self, store):
+        """The action_effectiveness operation measures old unmeasured actions."""
+        # Create a lesson and record a trigger_update action for it
+        lesson = Lesson(
+            id="eff-test",
+            trigger="original trigger",
+            action="Some action",
+            tags=["test"],
+            usage_count=0,
+            created_at=datetime.now(UTC) - timedelta(days=60),
+        )
+        await store.add_lesson(lesson)
+
+        action = RemAction(
+            action_type="trigger_update",
+            target_id="eff-test",
+            target_type="lesson",
+            action_detail={"old_trigger": "original trigger", "new_trigger": "better trigger"},
+            baseline_snapshot={"usage_count": 0, "version": 1},
+            created_at=datetime.now(UTC) - timedelta(days=10),
+        )
+        await store.record_rem_action(action)
+
+        # Simulate some usage on the lesson
+        lesson.usage_count = 3
+        await store.update_lesson(lesson)
+
+        # Run the action_effectiveness operation
+        schedules = {
+            "action_effectiveness": OperationSchedule(strategy="linear", interval=1),
+        }
+        engine = RemEngine(store=store, schedules=schedules)
+        report = await engine.run(session_number=1, operations=["action_effectiveness"])
+
+        assert len(report.findings) == 1
+        assert "Measured 1 past actions" in report.findings[0].title
+        assert report.findings[0].metadata["verdicts"]["improved"] == 1
+
+        # Verify the action was measured in the DB
+        history = await store.get_rem_action_history(target_id="eff-test")
+        assert history[0].outcome is not None
+        assert history[0].outcome["verdict"] == "improved"
+        assert history[0].outcome["delta"] == 3
+
+    @pytest.mark.asyncio
+    async def test_capture_lesson_baseline(self, store):
+        """Baseline snapshot captures current lesson metrics."""
+        lesson = Lesson(
+            id="baseline-test",
+            trigger="test trigger",
+            action="test action",
+            tags=["a", "b"],
+            usage_count=7,
+            version=2,
+        )
+        await store.add_lesson(lesson)
+
+        engine = RemEngine(store=store, schedules={})
+        baseline = await engine.capture_lesson_baseline("baseline-test")
+
+        assert baseline["lesson_id"] == "baseline-test"
+        assert baseline["usage_count"] == 7
+        assert baseline["version"] == 2
+        assert baseline["tags"] == ["a", "b"]
+        assert "captured_at" in baseline
+
+    @pytest.mark.asyncio
+    async def test_capture_baseline_missing_lesson(self, store):
+        """Baseline for nonexistent lesson returns error dict."""
+        engine = RemEngine(store=store, schedules={})
+        baseline = await engine.capture_lesson_baseline("nonexistent")
+        assert baseline["error"] == "not_found"

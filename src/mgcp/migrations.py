@@ -471,6 +471,46 @@ async def seed_context_history(db_path: str = DEFAULT_DB_PATH) -> int:
     return inserted
 
 
+async def ensure_rem_actions_table(db_path: str = DEFAULT_DB_PATH) -> bool:
+    """
+    Ensure rem_actions table exists for REM action tracking.
+
+    CREATE TABLE IF NOT EXISTS is safe to run repeatedly.
+    Returns True if the table was created.
+    """
+    db_full_path = Path(os.path.expanduser(db_path))
+    if not db_full_path.exists():
+        return False
+
+    async with aiosqlite.connect(db_full_path) as conn:
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='rem_actions'"
+        )
+        if await cursor.fetchone():
+            logger.info("rem_actions table already exists")
+            return False
+
+        await conn.executescript("""
+            CREATE TABLE IF NOT EXISTS rem_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action_type TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                action_detail JSON DEFAULT '{}',
+                baseline_snapshot JSON NOT NULL,
+                created_at TEXT NOT NULL,
+                measured_at TEXT,
+                outcome JSON
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_rem_actions_target ON rem_actions(target_id);
+            CREATE INDEX IF NOT EXISTS idx_rem_actions_unmeasured ON rem_actions(measured_at) WHERE measured_at IS NULL;
+        """)
+        await conn.commit()
+        logger.info("Created rem_actions table")
+        return True
+
+
 async def run_all_migrations(db_path: str = DEFAULT_DB_PATH) -> dict:
     """Run all pending migrations."""
     results = {}
@@ -497,6 +537,9 @@ async def run_all_migrations(db_path: str = DEFAULT_DB_PATH) -> dict:
 
     # Migration 7: Seed context history from existing projects
     results["context_history_seeded"] = await seed_context_history(db_path)
+
+    # Migration 8: Create rem_actions table for action tracking
+    results["rem_actions_created"] = await ensure_rem_actions_table(db_path)
 
     logger.info(f"Migrations complete: {results}")
     return results

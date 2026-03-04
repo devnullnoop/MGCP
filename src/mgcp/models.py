@@ -216,6 +216,20 @@ class CompiledSkill(BaseModel):
 # ============================================================================
 
 
+class RemAction(BaseModel):
+    """A tracked REM remediation action with before/after measurement."""
+
+    id: int | None = Field(None, description="Auto-assigned database ID")
+    action_type: str = Field(..., description="trigger_update | delete | skill_compile | intent_map | keep")
+    target_id: str = Field(..., description="Lesson ID, community ID, or tag name")
+    target_type: str = Field(..., description="lesson | community | intent_tag")
+    action_detail: dict = Field(default_factory=dict, description="What changed (old_trigger, new_trigger, etc.)")
+    baseline_snapshot: dict = Field(default_factory=dict, description="Metrics at time of action")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    measured_at: datetime | None = Field(None, description="When outcome was measured")
+    outcome: dict | None = Field(None, description="usage_after, delta, verdict")
+
+
 class LessonVersion(BaseModel):
     """A snapshot of a lesson at a specific version."""
 

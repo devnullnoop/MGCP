@@ -84,7 +84,7 @@ class TestDefaultSchedules:
         expected = {
             "staleness_scan", "duplicate_detection", "community_detection",
             "knowledge_extraction", "context_summary", "intent_calibration",
-            "skill_readiness", "skill_drift_detection",
+            "skill_readiness", "skill_drift_detection", "action_effectiveness",
         }
         assert set(DEFAULT_SCHEDULES.keys()) == expected
 

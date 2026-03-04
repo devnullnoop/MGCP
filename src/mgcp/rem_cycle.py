@@ -151,6 +151,8 @@ class RemEngine:
             findings = await self._skill_readiness()
         elif operation == "skill_drift_detection":
             findings = await self._skill_drift_detection()
+        elif operation == "action_effectiveness":
+            findings = await self._action_effectiveness()
         else:
             findings = []
 
@@ -495,6 +497,133 @@ class RemEngine:
 
         return findings
 
+    async def capture_lesson_baseline(self, lesson_id: str) -> dict:
+        """Capture a snapshot of lesson metrics for before/after comparison."""
+        lesson = await self.store.get_lesson(lesson_id)
+        if not lesson:
+            return {"lesson_id": lesson_id, "error": "not_found"}
+        return {
+            "lesson_id": lesson_id,
+            "usage_count": lesson.usage_count,
+            "version": lesson.version,
+            "trigger": lesson.trigger,
+            "tags": lesson.tags,
+            "last_used": lesson.last_used.isoformat() if lesson.last_used else None,
+            "captured_at": datetime.now(UTC).isoformat(),
+        }
+
+    async def _action_effectiveness(self) -> list[RemFinding]:
+        """Measure outcomes of past REM actions.
+
+        Compares current lesson metrics against baseline snapshots
+        to determine if remediation actions improved, maintained, or
+        degraded lesson effectiveness.
+        """
+        unmeasured = await self.store.get_unmeasured_actions(min_age_days=7)
+        if not unmeasured:
+            return []
+
+        findings = []
+        measured_count = 0
+        verdicts = {"improved": 0, "unchanged": 0, "degraded": 0, "target_gone": 0}
+
+        for action in unmeasured:
+            if action.id is None:
+                continue
+
+            baseline = action.baseline_snapshot
+            target_id = action.target_id
+
+            if action.target_type == "lesson":
+                lesson = await self.store.get_lesson(target_id)
+                if lesson is None:
+                    # Lesson was deleted — expected for delete actions
+                    if action.action_type == "delete":
+                        verdict = "improved"
+                    else:
+                        verdict = "target_gone"
+                    outcome = {
+                        "verdict": verdict,
+                        "reason": "lesson no longer exists",
+                    }
+                else:
+                    baseline_usage = baseline.get("usage_count", 0)
+                    current_usage = lesson.usage_count
+                    delta = current_usage - baseline_usage
+
+                    if delta > 0:
+                        verdict = "improved"
+                    elif delta == 0:
+                        # Check if trigger was updated and lesson still isn't used
+                        if action.action_type == "trigger_update":
+                            verdict = "unchanged"
+                        else:
+                            verdict = "unchanged"
+                    else:
+                        verdict = "degraded"
+
+                    outcome = {
+                        "verdict": verdict,
+                        "usage_before": baseline_usage,
+                        "usage_after": current_usage,
+                        "delta": delta,
+                        "version_before": baseline.get("version", 1),
+                        "version_after": lesson.version,
+                    }
+
+                verdicts[verdict] = verdicts.get(verdict, 0) + 1
+                await self.store.measure_action(action.id, outcome)
+                measured_count += 1
+
+            elif action.target_type == "community" and action.action_type == "skill_compile":
+                # Check for query holes: test if graduated lesson triggers still resolve
+                member_ids = baseline.get("member_ids", [])
+                holes = []
+                for mid in member_ids[:5]:  # Sample up to 5
+                    lesson = await self.store.get_lesson(mid)
+                    if lesson and lesson.graduated_to and lesson.usage_count == baseline.get(f"usage_{mid}", 0):
+                        holes.append(mid)
+
+                verdict = "degraded" if holes else "improved"
+                outcome = {
+                    "verdict": verdict,
+                    "query_holes": holes,
+                    "members_checked": len(member_ids[:5]),
+                }
+                verdicts[verdict] = verdicts.get(verdict, 0) + 1
+                await self.store.measure_action(action.id, outcome)
+                measured_count += 1
+
+            elif action.target_type == "intent_tag":
+                # Intent mappings: just mark as measured (hard to measure directly)
+                outcome = {"verdict": "unchanged", "reason": "intent mappings measured indirectly"}
+                verdicts["unchanged"] += 1
+                await self.store.measure_action(action.id, outcome)
+                measured_count += 1
+
+        if measured_count > 0:
+            findings.append(RemFinding(
+                operation="action_effectiveness",
+                title=f"Measured {measured_count} past actions",
+                description=(
+                    f"Results: {verdicts['improved']} improved, "
+                    f"{verdicts['unchanged']} unchanged, "
+                    f"{verdicts['degraded']} degraded, "
+                    f"{verdicts['target_gone']} targets gone."
+                ),
+                options=[
+                    {"label": "Review details", "description": "Inspect individual action outcomes"},
+                    {"label": "Acknowledge", "description": "Results noted"},
+                ],
+                recommended=1,
+                metadata={
+                    "measured_count": measured_count,
+                    "verdicts": verdicts,
+                },
+            ))
+
+        return findings
+
     async def _intent_calibration(self) -> list[RemFinding]:
         """Compare community structure against intent categories.
 
@@ -504,14 +633,19 @@ class RemEngine:
         from .graph import LessonGraph
 
         tag_to_intent = {
+            # git_operation
             "git": "git_operation",
             "version-control": "git_operation",
             "branching": "git_operation",
             "commits": "git_operation",
             "deployment": "git_operation",
+            "pre-commit": "git_operation",
+            "review": "git_operation",
+            # catalogue_dependency
             "dependencies": "catalogue_dependency",
             "supply-chain": "catalogue_dependency",
             "package-management": "catalogue_dependency",
+            # catalogue_security
             "security": "catalogue_security",
             "owasp": "catalogue_security",
             "authentication": "catalogue_security",
@@ -524,15 +658,30 @@ class RemEngine:
             "session-management": "catalogue_security",
             "crypto": "catalogue_security",
             "data-protection": "catalogue_security",
+            "access-control": "catalogue_security",
+            "brute-force": "catalogue_security",
+            "cryptography": "catalogue_security",
+            "enumeration": "catalogue_security",
+            "exposure": "catalogue_security",
+            "secrets": "catalogue_security",
+            # catalogue_arch_note
             "architecture": "catalogue_arch_note",
             "gotcha": "catalogue_arch_note",
             "performance": "catalogue_arch_note",
             "caching": "catalogue_arch_note",
             "error-handling": "catalogue_arch_note",
+            "database": "catalogue_arch_note",
+            "files": "catalogue_arch_note",
+            # catalogue_convention
             "naming": "catalogue_convention",
             "style": "catalogue_convention",
             "code-quality": "catalogue_convention",
             "linting": "catalogue_convention",
+            "best-practices": "catalogue_convention",
+            "consistency": "catalogue_convention",
+            "documentation": "catalogue_convention",
+            "code-review": "catalogue_convention",
+            # task_start
             "debugging": "task_start",
             "testing": "task_start",
             "implementation": "task_start",
@@ -541,6 +690,43 @@ class RemEngine:
             "feature": "task_start",
             "bug": "task_start",
             "fix": "task_start",
+            "catalogue": "task_start",
+            "knowledge-management": "task_start",
+            "lessons": "task_start",
+            "maintenance": "task_start",
+            "meta": "task_start",
+            "mgcp": "task_start",
+            "quality": "task_start",
+            "workflow": "task_start",
+            "workflows": "task_start",
+            "feedback": "task_start",
+            "critical": "task_start",
+            "discipline": "task_start",
+            "hooks": "task_start",
+            "planning": "task_start",
+            "session": "task_start",
+            "apis": "task_start",
+            "api": "task_start",
+            "ci": "task_start",
+            "errors": "task_start",
+            "verification": "task_start",
+            "background-tasks": "task_start",
+            "cleanup": "task_start",
+            "hygiene": "task_start",
+            "learning": "task_start",
+            "mistakes": "task_start",
+            "process-management": "task_start",
+            "success": "task_start",
+            "customization": "task_start",
+            "proactive": "task_start",
+            "process": "task_start",
+            "refinement": "task_start",
+            "bug-prevention": "task_start",
+            "integration": "task_start",
+            "manual-testing": "task_start",
+            "persistence": "task_start",
+            "self-improvement": "task_start",
+            "ui": "task_start",
         }
 
         graph = LessonGraph()

@@ -7,7 +7,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import aiosqlite
@@ -21,6 +21,7 @@ from .models import (
     ProjectContext,
     ProjectTodo,
     Relationship,
+    RemAction,
     Workflow,
     WorkflowStep,
 )
@@ -170,6 +171,21 @@ CREATE TABLE IF NOT EXISTS compiled_skills (
     compiled_at TEXT NOT NULL,
     version INTEGER NOT NULL DEFAULT 1
 );
+
+CREATE TABLE IF NOT EXISTS rem_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    action_detail JSON DEFAULT '{}',
+    baseline_snapshot JSON NOT NULL,
+    created_at TEXT NOT NULL,
+    measured_at TEXT,
+    outcome JSON
+);
+
+CREATE INDEX IF NOT EXISTS idx_rem_actions_target ON rem_actions(target_id);
+CREATE INDEX IF NOT EXISTS idx_rem_actions_unmeasured ON rem_actions(measured_at) WHERE measured_at IS NULL;
 """
 
 
@@ -887,6 +903,108 @@ class LessonStore:
             skill_path=row["skill_path"],
             compiled_at=datetime.fromisoformat(row["compiled_at"]),
             version=row["version"],
+        )
+
+    # =========================================================================
+    # REM Action Tracking Methods
+    # =========================================================================
+
+    async def record_rem_action(self, action: RemAction) -> int:
+        """Record a REM remediation action. Returns the auto-assigned row ID."""
+        async with self._connection(commit=True) as conn:
+            cursor = await conn.execute(
+                """
+                INSERT INTO rem_actions (
+                    action_type, target_id, target_type, action_detail,
+                    baseline_snapshot, created_at, measured_at, outcome
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    action.action_type,
+                    action.target_id,
+                    action.target_type,
+                    json.dumps(action.action_detail),
+                    json.dumps(action.baseline_snapshot),
+                    action.created_at.isoformat(),
+                    action.measured_at.isoformat() if action.measured_at else None,
+                    json.dumps(action.outcome) if action.outcome else None,
+                ),
+            )
+            row_id = cursor.lastrowid
+            logger.debug(f"Recorded REM action {action.action_type} for {action.target_id} (id={row_id})")
+            return row_id
+
+    async def get_unmeasured_actions(self, min_age_days: int = 7) -> list[RemAction]:
+        """Get actions that haven't been measured yet and are old enough."""
+        cutoff = (datetime.now(UTC) - timedelta(days=min_age_days)).isoformat()
+        async with self._connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT * FROM rem_actions
+                WHERE measured_at IS NULL AND created_at <= ?
+                ORDER BY created_at ASC
+                """,
+                (cutoff,),
+            )
+            rows = await cursor.fetchall()
+            return [self._row_to_rem_action(row) for row in rows]
+
+    async def measure_action(self, action_id: int, outcome: dict) -> None:
+        """Record the measured outcome for a REM action."""
+        async with self._connection(commit=True) as conn:
+            await conn.execute(
+                """
+                UPDATE rem_actions
+                SET measured_at = ?, outcome = ?
+                WHERE id = ?
+                """,
+                (
+                    datetime.now(UTC).isoformat(),
+                    json.dumps(outcome),
+                    action_id,
+                ),
+            )
+            logger.debug(f"Measured REM action {action_id}: {outcome.get('verdict', 'unknown')}")
+
+    async def get_rem_action_history(
+        self, target_id: str | None = None, limit: int = 50
+    ) -> list[RemAction]:
+        """Query REM action history, optionally filtered by target."""
+        async with self._connection() as conn:
+            if target_id:
+                cursor = await conn.execute(
+                    """
+                    SELECT * FROM rem_actions
+                    WHERE target_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (target_id, limit),
+                )
+            else:
+                cursor = await conn.execute(
+                    """
+                    SELECT * FROM rem_actions
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                )
+            rows = await cursor.fetchall()
+            return [self._row_to_rem_action(row) for row in rows]
+
+    def _row_to_rem_action(self, row: aiosqlite.Row) -> RemAction:
+        """Convert database row to RemAction model."""
+        return RemAction(
+            id=row["id"],
+            action_type=row["action_type"],
+            target_id=row["target_id"],
+            target_type=row["target_type"],
+            action_detail=json.loads(row["action_detail"]) if row["action_detail"] else {},
+            baseline_snapshot=json.loads(row["baseline_snapshot"]) if row["baseline_snapshot"] else {},
+            created_at=datetime.fromisoformat(row["created_at"]),
+            measured_at=datetime.fromisoformat(row["measured_at"]) if row["measured_at"] else None,
+            outcome=json.loads(row["outcome"]) if row["outcome"] else None,
         )
 
     # =========================================================================

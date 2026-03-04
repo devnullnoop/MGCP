@@ -506,6 +506,15 @@ class TestCompilePipeline:
         content = open(skill_path).read()
         assert "user-invocable: false" in content
 
+        # Verify REM action was recorded for effectiveness tracking
+        actions = await store.get_rem_action_history(target_id=community_id)
+        assert len(actions) == 1
+        assert actions[0].action_type == "skill_compile"
+        assert actions[0].target_type == "community"
+        assert actions[0].action_detail["skill_name"] == "test-compile"
+        assert "member_baselines" in actions[0].baseline_snapshot
+        assert actions[0].measured_at is None  # Not measured yet
+
     @pytest.mark.asyncio
     async def test_dry_run_no_side_effects(self, store, vector_store, temp_skills_dir):
         """Dry run should not write files or graduate lessons."""
@@ -539,6 +548,10 @@ class TestCompilePipeline:
         for l in lessons:
             lesson = await store.get_lesson(l.id)
             assert lesson.graduated_to is None
+
+        # No REM action recorded for dry run
+        all_actions = await store.get_rem_action_history()
+        assert len(all_actions) == 0
 
     @pytest.mark.asyncio
     async def test_recompile_increments_version(self, store, vector_store, temp_skills_dir):
@@ -581,6 +594,11 @@ class TestCompilePipeline:
             force=True,
         )
         assert result2["version"] == 2
+
+        # Verify two REM actions recorded (one per compile)
+        actions = await store.get_rem_action_history(target_id=community_id)
+        assert len(actions) == 2
+        assert all(a.action_type == "skill_compile" for a in actions)
 
 
 # ===========================================================================

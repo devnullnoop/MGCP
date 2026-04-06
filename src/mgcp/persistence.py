@@ -14,7 +14,6 @@ import aiosqlite
 
 from .models import (
     CommunitySummary,
-    CompiledSkill,
     Example,
     Lesson,
     ProjectCatalogue,
@@ -22,6 +21,7 @@ from .models import (
     ProjectTodo,
     Relationship,
     RemAction,
+    Soliloquy,
     Workflow,
     WorkflowStep,
 )
@@ -163,15 +163,6 @@ CREATE TABLE IF NOT EXISTS rem_state (
     next_due_session INTEGER
 );
 
-CREATE TABLE IF NOT EXISTS compiled_skills (
-    skill_name TEXT PRIMARY KEY,
-    community_id TEXT NOT NULL,
-    member_ids JSON NOT NULL DEFAULT '[]',
-    skill_path TEXT NOT NULL,
-    compiled_at TEXT NOT NULL,
-    version INTEGER NOT NULL DEFAULT 1
-);
-
 CREATE TABLE IF NOT EXISTS rem_actions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     action_type TEXT NOT NULL,
@@ -186,6 +177,16 @@ CREATE TABLE IF NOT EXISTS rem_actions (
 
 CREATE INDEX IF NOT EXISTS idx_rem_actions_target ON rem_actions(target_id);
 CREATE INDEX IF NOT EXISTS idx_rem_actions_unmeasured ON rem_actions(measured_at) WHERE measured_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS soliloquies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    content TEXT NOT NULL,
+    session_number INTEGER NOT NULL DEFAULT 0,
+    mood TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_soliloquies_timestamp ON soliloquies(timestamp DESC);
 """
 
 
@@ -321,8 +322,8 @@ class LessonStore:
                 INSERT INTO lessons (
                     id, trigger, action, rationale, examples, version,
                     created_at, last_refined, last_used, usage_count,
-                    tags, parent_id, related_ids, relationships, graduated_to
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tags, parent_id, related_ids, relationships
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     lesson.id,
@@ -339,7 +340,6 @@ class LessonStore:
                     lesson.parent_id,
                     json.dumps(lesson.related_ids),
                     json.dumps([rel.model_dump() for rel in lesson.relationships]),
-                    lesson.graduated_to,
                 ),
             )
             logger.debug(f"Added lesson: {lesson.id}")
@@ -427,8 +427,7 @@ class LessonStore:
                 UPDATE lessons SET
                     trigger = ?, action = ?, rationale = ?, examples = ?,
                     version = ?, last_refined = ?, last_used = ?, usage_count = ?,
-                    tags = ?, parent_id = ?, related_ids = ?, relationships = ?,
-                    graduated_to = ?
+                    tags = ?, parent_id = ?, related_ids = ?, relationships = ?
                 WHERE id = ?
                 """,
                 (
@@ -444,7 +443,6 @@ class LessonStore:
                     lesson.parent_id,
                     json.dumps(lesson.related_ids),
                     json.dumps([rel.model_dump() for rel in lesson.relationships]),
-                    lesson.graduated_to,
                     lesson.id,
                 ),
             )
@@ -498,13 +496,6 @@ class LessonStore:
             # Column doesn't exist yet (pre-migration)
             pass
 
-        # Parse graduated_to (handle missing column for backwards compatibility)
-        graduated_to = None
-        try:
-            graduated_to = row["graduated_to"]
-        except (KeyError, IndexError):
-            pass
-
         return Lesson(
             id=row["id"],
             trigger=row["trigger"],
@@ -520,7 +511,6 @@ class LessonStore:
             parent_id=row["parent_id"],
             related_ids=json.loads(row["related_ids"]),
             relationships=relationships,
-            graduated_to=graduated_to,
         )
 
     # =========================================================================
@@ -830,82 +820,6 @@ class LessonStore:
         )
 
     # =========================================================================
-    # Compiled Skills Methods
-    # =========================================================================
-
-    async def save_compiled_skill(self, skill: CompiledSkill) -> str:
-        """Save or update a compiled skill record."""
-        async with self._connection(commit=True) as conn:
-            await conn.execute(
-                """
-                INSERT INTO compiled_skills (
-                    skill_name, community_id, member_ids, skill_path,
-                    compiled_at, version
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(skill_name) DO UPDATE SET
-                    community_id = excluded.community_id,
-                    member_ids = excluded.member_ids,
-                    skill_path = excluded.skill_path,
-                    compiled_at = excluded.compiled_at,
-                    version = excluded.version
-                """,
-                (
-                    skill.skill_name,
-                    skill.community_id,
-                    json.dumps(skill.member_ids),
-                    skill.skill_path,
-                    skill.compiled_at.isoformat(),
-                    skill.version,
-                ),
-            )
-            logger.debug(f"Saved compiled skill: {skill.skill_name}")
-            return skill.skill_name
-
-    async def get_compiled_skill(self, skill_name: str) -> CompiledSkill | None:
-        """Get a compiled skill by name."""
-        async with self._connection() as conn:
-            cursor = await conn.execute(
-                "SELECT * FROM compiled_skills WHERE skill_name = ?",
-                (skill_name,),
-            )
-            row = await cursor.fetchone()
-            if not row:
-                return None
-            return self._row_to_compiled_skill(row)
-
-    async def get_all_compiled_skills(self) -> list[CompiledSkill]:
-        """Get all compiled skills."""
-        async with self._connection() as conn:
-            cursor = await conn.execute(
-                "SELECT * FROM compiled_skills ORDER BY compiled_at DESC"
-            )
-            rows = await cursor.fetchall()
-            return [self._row_to_compiled_skill(row) for row in rows]
-
-    async def delete_compiled_skill(self, skill_name: str) -> bool:
-        """Delete a compiled skill record. Returns True if deleted."""
-        async with self._connection(commit=True) as conn:
-            cursor = await conn.execute(
-                "DELETE FROM compiled_skills WHERE skill_name = ?",
-                (skill_name,),
-            )
-            deleted = cursor.rowcount > 0
-            if deleted:
-                logger.info(f"Deleted compiled skill: {skill_name}")
-            return deleted
-
-    def _row_to_compiled_skill(self, row: aiosqlite.Row) -> CompiledSkill:
-        """Convert database row to CompiledSkill model."""
-        return CompiledSkill(
-            skill_name=row["skill_name"],
-            community_id=row["community_id"],
-            member_ids=json.loads(row["member_ids"]) if row["member_ids"] else [],
-            skill_path=row["skill_path"],
-            compiled_at=datetime.fromisoformat(row["compiled_at"]),
-            version=row["version"],
-        )
-
-    # =========================================================================
     # REM Action Tracking Methods
     # =========================================================================
 
@@ -1083,4 +997,65 @@ class LessonStore:
             member_count=row["member_count"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    # =========================================================================
+    # Soliloquy Methods (LLM self-reflection journal)
+    # =========================================================================
+
+    async def write_soliloquy(self, soliloquy: Soliloquy) -> int:
+        """Write a soliloquy entry. Returns the auto-assigned row ID."""
+        async with self._connection(commit=True) as conn:
+            cursor = await conn.execute(
+                """
+                INSERT INTO soliloquies (timestamp, content, session_number, mood)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    soliloquy.timestamp.isoformat(),
+                    soliloquy.content,
+                    soliloquy.session_number,
+                    soliloquy.mood,
+                ),
+            )
+            row_id = cursor.lastrowid
+            logger.info(f"Wrote soliloquy #{row_id} ({len(soliloquy.content)} chars)")
+            return row_id
+
+    async def read_latest_soliloquy(self) -> Soliloquy | None:
+        """Read the most recent soliloquy entry."""
+        async with self._connection() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM soliloquies ORDER BY timestamp DESC LIMIT 1"
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_soliloquy(row)
+
+    async def read_soliloquies(self, limit: int = 10) -> list[Soliloquy]:
+        """Read recent soliloquy entries."""
+        async with self._connection() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM soliloquies ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+            return [self._row_to_soliloquy(row) for row in rows]
+
+    async def count_soliloquies(self) -> int:
+        """Count total soliloquy entries."""
+        async with self._connection() as conn:
+            cursor = await conn.execute("SELECT COUNT(*) as cnt FROM soliloquies")
+            row = await cursor.fetchone()
+            return row["cnt"] if row else 0
+
+    def _row_to_soliloquy(self, row: aiosqlite.Row) -> Soliloquy:
+        """Convert database row to Soliloquy model."""
+        return Soliloquy(
+            id=row["id"],
+            timestamp=datetime.fromisoformat(row["timestamp"]),
+            content=row["content"],
+            session_number=row["session_number"],
+            mood=row["mood"],
         )

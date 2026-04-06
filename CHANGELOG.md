@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **Skill Compilation** (Phase 8): Removed entirely — skill compilation degraded reliability by hiding lessons from active querying via graduation filtering. Hook-based knowledge injection outperforms skill files.
+  - Removed 3 MCP tools: `compile_skill`, `list_compiled_skills`, `ungraduate_skill`
+  - Deleted `skill_compiler.py`, `skill_cli.py`, `skills.html`
+  - Removed `graduated_to` filtering from Qdrant vector search and community bridge queries
+  - Removed `skill_readiness` and `skill_drift_detection` REM operations
+  - Removed `mgcp-compile-skills` CLI entry point
+  - Database columns (`graduated_to`, `compiled_skills` table) left in place for backwards compatibility
+
+### Changed
+- **Tool count**: 40 → 37 MCP tools
+
 ## [2.1.0] - 2026-02-27
 
 ### Added

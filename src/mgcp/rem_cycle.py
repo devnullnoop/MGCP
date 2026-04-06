@@ -147,10 +147,6 @@ class RemEngine:
             findings = await self._context_summary()
         elif operation == "intent_calibration":
             findings = await self._intent_calibration()
-        elif operation == "skill_readiness":
-            findings = await self._skill_readiness()
-        elif operation == "skill_drift_detection":
-            findings = await self._skill_drift_detection()
         elif operation == "action_effectiveness":
             findings = await self._action_effectiveness()
         else:
@@ -411,92 +407,6 @@ class RemEngine:
 
         return findings
 
-    async def _skill_readiness(self) -> list[RemFinding]:
-        """Scan communities for skill compilation readiness."""
-        from .graph import LessonGraph
-        from .skill_compiler import list_compilation_candidates
-
-        graph = LessonGraph()
-        lessons = await self.store.get_all_lessons()
-
-        if len(lessons) < 4:
-            return []
-
-        for lesson in lessons:
-            graph.add_lesson(lesson)
-
-        candidates = await list_compilation_candidates(
-            store=self.store, graph=graph, min_maturity=0.5
-        )
-
-        findings = []
-        for assessment in candidates:
-            findings.append(RemFinding(
-                operation="skill_readiness",
-                title=f"Ready for compilation: {assessment.title}",
-                description=(
-                    f"Community '{assessment.community_id}' ({assessment.member_count} lessons, "
-                    f"{assessment.aggregate_usage} retrievals) scores {assessment.score:.0%} maturity.\n"
-                    f"Reasons: {'; '.join(assessment.reasons)}"
-                ),
-                options=[
-                    {"label": "Compile", "description": "Generate skill and graduate lessons"},
-                    {"label": "Skip", "description": "Not ready yet"},
-                ],
-                recommended=0,
-                metadata={
-                    "community_id": assessment.community_id,
-                    "score": assessment.score,
-                    "member_count": assessment.member_count,
-                },
-            ))
-
-        return findings
-
-    async def _skill_drift_detection(self) -> list[RemFinding]:
-        """Detect drift in compiled skills (lessons refined after compilation)."""
-        from .skill_compiler import detect_drift
-
-        drift_items = await detect_drift(store=self.store)
-        if not drift_items:
-            return []
-
-        # Group by skill
-        by_skill: dict[str, list[dict]] = {}
-        for item in drift_items:
-            by_skill.setdefault(item["skill_name"], []).append(item)
-
-        findings = []
-        for skill_name, items in by_skill.items():
-            reasons = []
-            for item in items:
-                if item["reason"] == "refined_after_compilation":
-                    reasons.append(f"Lesson '{item['lesson_id']}' refined after compilation")
-                elif item["reason"] == "deleted":
-                    reasons.append(f"Lesson '{item['lesson_id']}' was deleted")
-
-            findings.append(RemFinding(
-                operation="skill_drift_detection",
-                title=f"Drift in skill: {skill_name}",
-                description=(
-                    f"Skill '{skill_name}' has {len(items)} drifted member(s):\n"
-                    + "\n".join(f"  - {r}" for r in reasons)
-                ),
-                options=[
-                    {"label": "Recompile", "description": "Recompile the skill with updated lessons"},
-                    {"label": "Ungraduate", "description": "Restore lessons to active search"},
-                    {"label": "Acknowledge", "description": "Accept the drift for now"},
-                ],
-                recommended=0,
-                metadata={
-                    "skill_name": skill_name,
-                    "drift_count": len(items),
-                    "drift_items": items,
-                },
-            ))
-
-        return findings
-
     async def capture_lesson_baseline(self, lesson_id: str) -> dict:
         """Capture a snapshot of lesson metrics for before/after comparison."""
         lesson = await self.store.get_lesson(lesson_id)
@@ -571,28 +481,6 @@ class RemEngine:
                         "version_after": lesson.version,
                     }
 
-                verdicts[verdict] = verdicts.get(verdict, 0) + 1
-                await self.store.measure_action(action.id, outcome)
-                measured_count += 1
-
-            elif action.target_type == "community" and action.action_type == "skill_compile":
-                # Check for query holes: test if graduated lesson triggers still resolve
-                member_ids = baseline.get("member_ids", [])
-                member_baselines = baseline.get("member_baselines", {})
-                holes = []
-                for mid in member_ids[:5]:  # Sample up to 5
-                    lesson = await self.store.get_lesson(mid)
-                    mb = member_baselines.get(mid, {})
-                    baseline_usage = mb.get("usage_count", 0)
-                    if lesson and lesson.graduated_to and lesson.usage_count == baseline_usage:
-                        holes.append(mid)
-
-                verdict = "degraded" if holes else "improved"
-                outcome = {
-                    "verdict": verdict,
-                    "query_holes": holes,
-                    "members_checked": len(member_ids[:5]),
-                }
                 verdicts[verdict] = verdicts.get(verdict, 0) + 1
                 await self.store.measure_action(action.id, outcome)
                 measured_count += 1

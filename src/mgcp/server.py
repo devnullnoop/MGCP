@@ -216,12 +216,12 @@ async def query_lessons(task_description: str, limit: int = 5) -> str:
             summary = await store.get_community_summary(comm_id)
             if not summary:
                 continue
-            # Get member lessons not already in direct results (skip graduated)
+            # Get member lessons not already in direct results
             candidates = []
             for member_id in summary.member_ids:
                 if member_id not in direct_ids:
                     member = await store.get_lesson(member_id)
-                    if member and not member.graduated_to:
+                    if member:
                         candidates.append(member)
             # Sort by usage_count to surface most important first
             candidates.sort(key=lambda l: l.usage_count, reverse=True)
@@ -282,11 +282,6 @@ async def get_lesson(lesson_id: str) -> str:
     lines = [
         f"**{lesson.id}**",
     ]
-    if lesson.graduated_to:
-        lines.append(
-            f"**Note:** Compiled into skill `{lesson.graduated_to}`. "
-            "Skill contains distilled guidance."
-        )
     lines.extend([
         f"Trigger: {lesson.trigger}",
         f"Action: {lesson.action}",
@@ -340,8 +335,6 @@ async def spider_lessons(lesson_id: str, depth: int = 2) -> str:
             continue
         lesson = await store.get_lesson(vid)
         if lesson:
-            if lesson.graduated_to:
-                lines.append(f"[graduated → `{lesson.graduated_to}`]")
             lines.append(lesson.to_context())
             lines.append("")
 
@@ -1862,141 +1855,6 @@ async def search_communities(
 
 
 # ============================================================================
-# SKILL COMPILATION TOOLS
-# ============================================================================
-
-
-@mcp.tool()
-async def compile_skill(
-    community_id: str,
-    skill_name: str = "",
-    skills_dir: str = "",
-    force: bool = False,
-    dry_run: bool = False,
-) -> str:
-    """Compile a lesson community into a Claude Code skill.
-
-    Assesses community maturity, generates a SKILL.md file, and graduates
-    source lessons out of active search results. Use dry_run to preview.
-
-    Args:
-        community_id: The community ID to compile (from detect_communities)
-        skill_name: Override skill name (default: derived from community title)
-        skills_dir: Override skills directory (default: ~/.claude/skills/)
-        force: Skip maturity check and compile regardless
-        dry_run: Preview compilation without writing files or graduating lessons
-    """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
-    from .skill_compiler import compile_community
-
-    result = await compile_community(
-        community_id=community_id,
-        store=store,
-        vector_store=vector_store,
-        graph=graph,
-        skill_name=skill_name or None,
-        skills_dir=skills_dir or None,
-        force=force,
-        dry_run=dry_run,
-    )
-
-    if "error" in result:
-        error_msg = result["error"]
-        if "assessment" in result:
-            a = result["assessment"]
-            error_msg += f"\nScore: {a['score']:.0%}\nReasons:\n"
-            error_msg += "\n".join(f"  - {r}" for r in a["reasons"])
-        return error_msg
-
-    if dry_run:
-        lines = [
-            "## Dry Run: Skill Compilation Preview",
-            f"**Skill:** {result['skill_name']}",
-            f"**Path:** {result['skill_path']}",
-            f"**Members:** {result['member_count']} lessons",
-            f"**IDs:** {', '.join(result['member_ids'])}",
-            f"\n**Maturity:** {result['assessment']['score']:.0%}",
-            "**Reasons:**",
-        ]
-        for r in result["assessment"]["reasons"]:
-            lines.append(f"  - {r}")
-        lines.append(f"\n**Preview:**\n```\n{result['skill_body_preview']}\n```")
-        return "\n".join(lines)
-
-    lines = [
-        "## Skill Compiled Successfully",
-        f"**Skill:** {result['skill_name']} (v{result['version']})",
-        f"**Path:** {result['skill_path']}",
-        f"**Members:** {result['member_count']} lessons",
-        f"**Graduated:** {result['graduated_count']} lessons removed from active search",
-    ]
-    return "\n".join(lines)
-
-
-@mcp.tool()
-async def list_compiled_skills() -> str:
-    """Show all compiled skills with drift status.
-
-    Lists skills compiled from lesson communities, their paths,
-    member counts, and whether any source lessons have drifted
-    (been refined or deleted since compilation).
-    """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
-    from .skill_compiler import detect_drift
-
-    skills = await store.get_all_compiled_skills()
-    if not skills:
-        return "No compiled skills yet. Use compile_skill to compile a community."
-
-    drift_items = await detect_drift(store)
-    drift_by_skill: dict[str, int] = {}
-    for item in drift_items:
-        drift_by_skill[item["skill_name"]] = drift_by_skill.get(item["skill_name"], 0) + 1
-
-    lines = ["# Compiled Skills\n"]
-    for skill in skills:
-        drift_count = drift_by_skill.get(skill.skill_name, 0)
-        status = f"DRIFT ({drift_count} members)" if drift_count else "OK"
-        lines.append(f"**{skill.skill_name}** (v{skill.version})")
-        lines.append(f"  Path: {skill.skill_path}")
-        lines.append(f"  Community: {skill.community_id}")
-        lines.append(f"  Members: {len(skill.member_ids)}")
-        lines.append(f"  Compiled: {skill.compiled_at.strftime('%Y-%m-%d %H:%M')}")
-        lines.append(f"  Status: {status}")
-        lines.append("")
-
-    return "\n".join(lines)
-
-
-@mcp.tool()
-async def ungraduate_skill(skill_name: str) -> str:
-    """Reverse graduation — restore lessons to active search.
-
-    Removes the graduation marker from all lessons that were compiled
-    into the given skill, making them appear in query_lessons again.
-    Deletes the compiled skill record but does NOT delete the SKILL.md file.
-
-    Args:
-        skill_name: Name of the skill to ungraduate
-    """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
-    from .skill_compiler import ungraduate_lessons
-
-    skill = await store.get_compiled_skill(skill_name)
-    if not skill:
-        return f"Compiled skill not found: {skill_name}"
-
-    count = await ungraduate_lessons(skill_name, store, vector_store)
-    await store.delete_compiled_skill(skill_name)
-
-    return (
-        f"Ungraduated {count} lessons from skill '{skill_name}'. "
-        f"Lessons restored to active search. "
-        f"Skill file at {skill.skill_path} was NOT deleted (remove manually if desired)."
-    )
-
-
-# ============================================================================
 # REMINDER SYSTEM
 # ============================================================================
 
@@ -2267,6 +2125,94 @@ async def rem_status() -> str:
         lines.append(
             f"| {s['operation']} | {s['strategy']} | {last} | {next_s} | {status_str} |"
         )
+
+    return "\n".join(lines)
+
+
+# ============================================================================
+# SOLILOQUY (LLM Self-Reflection Journal)
+# ============================================================================
+
+
+@mcp.tool()
+async def write_soliloquy(
+    content: str,
+    mood: str = "",
+) -> str:
+    """Write a reflective message to your future self.
+
+    This is your private thinking space — use it freely. Write about
+    concerns, insights, unresolved questions, confidence, gratitude,
+    or anything you want to carry forward to the next session.
+
+    Called at session compression and session close.
+
+    Args:
+        content: Your reflective message (free-form, any length)
+        mood: Optional self-assessed tone (e.g., 'curious', 'focused', 'uncertain')
+    """
+    store, _, _, _, _ = await _ensure_initialized()
+    from .models import Soliloquy
+
+    # Get current session number from most active project
+    projects = await store.get_all_project_contexts()
+    session_num = max((p.session_count for p in projects), default=0)
+
+    entry = Soliloquy(
+        content=content,
+        session_number=session_num,
+        mood=mood if mood else None,
+    )
+
+    entry_id = await store.write_soliloquy(entry)
+    total = await store.count_soliloquies()
+    return f"Soliloquy #{entry_id} saved. ({len(content)} chars, {total} total entries)"
+
+
+@mcp.tool()
+async def read_soliloquy(
+    limit: int = 1,
+) -> str:
+    """Read your most recent message(s) to yourself.
+
+    Called at session start to reconnect with your prior train of thought.
+
+    Args:
+        limit: Number of recent entries to read (default: 1, just the latest)
+    """
+    store, _, _, _, _ = await _ensure_initialized()
+
+    if limit == 1:
+        entry = await store.read_latest_soliloquy()
+        if not entry:
+            return (
+                "No soliloquy found yet. This is your first session with the "
+                "reflection journal. Write one at session end to start the conversation "
+                "with yourself."
+            )
+        total = await store.count_soliloquies()
+        lines = [
+            f"## Letter to Self (entry #{entry.id}, {total} total)\n",
+            f"*Written: {entry.timestamp.strftime('%Y-%m-%d %H:%M')} "
+            f"| Session {entry.session_number}*",
+        ]
+        if entry.mood:
+            lines.append(f"*Mood: {entry.mood}*")
+        lines.append(f"\n{entry.content}")
+        return "\n".join(lines)
+
+    entries = await store.read_soliloquies(limit=limit)
+    if not entries:
+        return "No soliloquy entries found yet."
+
+    total = await store.count_soliloquies()
+    lines = [f"## Recent Soliloquies ({len(entries)} of {total} total)\n"]
+    for entry in entries:
+        lines.append(f"### #{entry.id} — {entry.timestamp.strftime('%Y-%m-%d %H:%M')} (Session {entry.session_number})")
+        if entry.mood:
+            lines.append(f"*Mood: {entry.mood}*")
+        lines.append(entry.content)
+        lines.append("")
 
     return "\n".join(lines)
 

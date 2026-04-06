@@ -58,7 +58,6 @@ class Lesson(BaseModel):
     parent_id: str | None = Field(None, description="Parent lesson (deprecated, use relationships)")
     related_ids: list[str] = Field(default_factory=list, description="Cross-links (deprecated, use relationships)")
     relationships: list[Relationship] = Field(default_factory=list, description="Typed relationships to other lessons")
-    graduated_to: str | None = Field(None, description="Skill name this lesson graduated into")
 
     def to_context(self) -> str:
         """Format lesson for inclusion in LLM context."""
@@ -188,6 +187,28 @@ class GenericCatalogueItem(BaseModel):
 # ============================================================================
 
 
+class Soliloquy(BaseModel):
+    """A reflective message from the LLM to its future self.
+
+    Free-form introspection space: concerns, confidence, insights,
+    unresolved questions, or anything the model wants to carry forward.
+    Read at session start, written at compression/close.
+    """
+
+    id: int | None = Field(None, description="Auto-assigned database ID")
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    content: str = Field(..., description="The reflective message")
+    session_number: int = Field(default=0, description="Session when written")
+    mood: str | None = Field(None, description="Optional self-assessed mood/tone tag")
+
+    def to_context(self) -> str:
+        """Format for LLM consumption."""
+        header = f"[{self.timestamp.strftime('%Y-%m-%d %H:%M')}]"
+        if self.mood:
+            header += f" ({self.mood})"
+        return f"{header}\n{self.content}"
+
+
 class CommunitySummary(BaseModel):
     """Summary of an auto-detected lesson community (cluster)."""
 
@@ -198,17 +219,6 @@ class CommunitySummary(BaseModel):
     member_count: int = Field(default=0, description="Count at creation time")
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-
-class CompiledSkill(BaseModel):
-    """Metadata for a skill compiled from a lesson community."""
-
-    skill_name: str = Field(..., description="Unique skill name (lowercase-with-dashes)")
-    community_id: str = Field(..., description="Source community ID")
-    member_ids: list[str] = Field(default_factory=list, description="Lesson IDs included in compilation")
-    skill_path: str = Field(..., description="Absolute path to the generated SKILL.md file")
-    compiled_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    version: int = Field(default=1, description="Compilation version (incremented on recompile)")
 
 
 # ============================================================================

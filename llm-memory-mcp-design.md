@@ -312,15 +312,9 @@ dependencies = [
 - [ ] Cross-project global lessons (future)
 - [ ] Lesson quality scoring (future)
 
-### Phase 8: Skill Compilation ✅ Complete
+### Phase 8: Skill Compilation — REMOVED
 
-- [x] Compile mature lesson communities into Claude Code skills (SKILL.md files)
-- [x] Maturity assessment scoring (community size, usage, summary, stability)
-- [x] Lesson graduation tracking (`graduated_to` field, filtered from `query_lessons`)
-- [x] Drift detection for compiled skills (refined lessons, deleted members)
-- [x] `skill_readiness` and `skill_drift_detection` REM operations
-- [x] CLI tool (`mgcp-compile-skills`) with compile/list/status/ungraduate subcommands
-- [x] 3 new MCP tools: `compile_skill`, `list_compiled_skills`, `ungraduate_skill`
+Removed after dogfooding revealed skill compilation degraded reliability by hiding lessons from active querying. Hook-based knowledge injection is more reliable than skill files.
 
 ---
 
@@ -511,11 +505,6 @@ User: "Implement memory estimation for a cache"
 | `mgcp-duplicates` | Find similar lessons |
 | `mgcp-backup` | Backup all data |
 | `mgcp-backup --restore FILE` | Restore from backup |
-| `mgcp-compile-skills` | Compile lesson communities into skills |
-| `mgcp-compile-skills compile -c ID` | Compile a specific community |
-| `mgcp-compile-skills list` | List compiled skills |
-| `mgcp-compile-skills status` | Show candidates and drift |
-| `mgcp-compile-skills ungraduate NAME` | Reverse graduation |
 
 ---
 

@@ -50,7 +50,6 @@ mgcp-import = "mgcp.data_ops:main_import"
 mgcp-duplicates = "mgcp.data_ops:main_duplicates"
 mgcp-backup = "mgcp.backup:main"
 mgcp-migrate = "mgcp.migration:main"
-mgcp-compile-skills = "mgcp.skill_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/devnullnoop/MGCP"

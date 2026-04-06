@@ -118,8 +118,6 @@ class QdrantVectorStore:
                         "parent_id": lesson.parent_id or "",
                         "usage_count": lesson.usage_count,
                         "text": text,  # Store for similarity search
-                        "is_graduated": bool(lesson.graduated_to),
-                        "graduated_to": lesson.graduated_to or "",
                     },
                 )
             ],
@@ -148,7 +146,6 @@ class QdrantVectorStore:
         limit: int = 5,
         min_score: float = 0.3,
         tags: list[str] | None = None,
-        include_graduated: bool = False,
     ) -> list[tuple[str, float]]:
         """Search for relevant lessons.
 
@@ -157,7 +154,6 @@ class QdrantVectorStore:
             limit: Max results
             min_score: Minimum similarity score
             tags: Optional tag filter
-            include_graduated: If False, exclude lessons graduated to skills
 
         Returns:
             List of (lesson_id, score) tuples, sorted by relevance
@@ -168,12 +164,6 @@ class QdrantVectorStore:
         must_conditions = []
         should_conditions = []
         must_not_conditions = []
-
-        # Exclude graduated lessons by default
-        if not include_graduated:
-            must_not_conditions.append(
-                FieldCondition(key="is_graduated", match=MatchValue(value=True))
-            )
 
         # Tag filter
         if tags:
@@ -318,8 +308,6 @@ class QdrantVectorStore:
                     "parent_id": lesson.parent_id or "",
                     "usage_count": lesson.usage_count,
                     "text": texts[i],
-                    "is_graduated": bool(lesson.graduated_to),
-                    "graduated_to": lesson.graduated_to or "",
                 },
             )
             for i, (lesson, vector) in enumerate(zip(lessons, vectors))

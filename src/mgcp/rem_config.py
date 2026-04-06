@@ -110,7 +110,5 @@ DEFAULT_SCHEDULES: dict[str, OperationSchedule] = {
     ),
     "context_summary": OperationSchedule(strategy="linear", interval=20),
     "intent_calibration": OperationSchedule(strategy="linear", interval=10),
-    "skill_readiness": OperationSchedule(strategy="linear", interval=15),
-    "skill_drift_detection": OperationSchedule(strategy="linear", interval=5),
     "action_effectiveness": OperationSchedule(strategy="linear", interval=10),
 }

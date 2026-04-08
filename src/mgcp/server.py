@@ -2434,6 +2434,78 @@ async def remove_intent(name: str) -> str:
     )
 
 
+@mcp.tool()
+async def compile_intent_to_skill(
+    name: str,
+    scope: str = "user",
+    project_path: str | None = None,
+) -> str:
+    """Compile an MGCP intent into an Anthropic-format SKILL.md file.
+
+    Walks intent → linked_workflow → ordered steps → lessons-per-step and
+    renders all four layers into a single SKILL.md compatible with
+    ~/.claude/skills/. The compiled skill is invocable as a slash command
+    (/{intent_name}) and auto-discoverable by Claude via description matching.
+
+    Important: this is NOT the deleted Phase 8 skill compilation. Compiling a
+    skill does NOT remove the intent from the routing config, does NOT remove
+    lessons from the active query pool, and does NOT change MGCP behavior.
+    The skill is purely additive — the intent stays the source of truth, and
+    the skill is a downstream artifact you can recompile any time.
+
+    Args:
+        name: Intent name to compile (must exist in intent_config.json)
+        scope: 'user' writes to ~/.claude/skills/, 'project' writes to
+            <project_path>/.claude/skills/ (defaults to cwd if scope=project
+            and project_path is omitted)
+        project_path: Required for project scope; absolute path to the
+            project root whose .claude/skills/ directory should receive the file
+    """
+    from .skill_compiler import compile_intent_to_skill as _compile
+
+    store, _, _, _, _ = await _ensure_initialized()
+
+    try:
+        result = await _compile(
+            intent_name=name,
+            store=store,
+            scope=scope,
+            project_path=Path(project_path) if project_path else None,
+        )
+    except ValueError as e:
+        return f"Error: {e}"
+
+    lines = [
+        f"## Compiled skill: `{result.intent_name}`",
+        "",
+        f"**Path:** `{result.skill_path}`",
+        f"**Bytes written:** {result.bytes_written}",
+        f"**Scope:** {scope}",
+        "",
+        "### Sources",
+        f"- Intent: `{result.intent_name}` (from `~/.mgcp/intent_config.json`)",
+    ]
+    if result.has_gate:
+        lines.append("- Hard keyword gate from intent.gate_message → rendered as STOP preamble")
+    if result.workflow_id:
+        lines.append(
+            f"- Linked workflow: `{result.workflow_id}` "
+            f"({result.step_count} steps, {result.lesson_count} lessons inlined)"
+        )
+    else:
+        lines.append("- No linked workflow — skill contains action template only")
+
+    lines.extend([
+        "",
+        "### Next steps",
+        f"- Invoke as a slash command: `/{result.intent_name}`",
+        "- Or let Claude auto-discover via the skill's description matching",
+        "- The intent in `intent_config.json` remains the source of truth — "
+        "edit it and re-run this tool to refresh the skill",
+    ])
+    return "\n".join(lines)
+
+
 # ============================================================================
 # ENTRY POINT
 # ============================================================================

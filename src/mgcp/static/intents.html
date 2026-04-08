@@ -102,6 +102,10 @@
                     <input type="text" id="intent-tags" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-sm text-white focus:border-brand-cyan focus:outline-none" placeholder="phishing, social-engineering">
                 </div>
                 <div>
+                    <label class="block text-xs uppercase text-gray-500 font-medium mb-1">Linked workflow ID (optional — inlines workflow steps + lessons when compiling to skill)</label>
+                    <input type="text" id="intent-linked-workflow" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-sm text-white focus:border-brand-cyan focus:outline-none font-mono" placeholder="pre-commit-discipline">
+                </div>
+                <div>
                     <label class="block text-xs uppercase text-gray-500 font-medium mb-1">Keyword patterns (one per line, regex — optional, hard-stop gate in dispatcher)</label>
                     <textarea id="intent-keywords" rows="4" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-sm text-white focus:border-brand-cyan focus:outline-none resize-y font-mono" placeholder="\bphishing\b&#10;\blure\b"></textarea>
                 </div>
@@ -152,26 +156,82 @@
 
             list.innerHTML = allIntents.map(intent => {
                 const hasGate = (intent.keyword_patterns || []).length > 0;
+                const hasWorkflow = !!intent.linked_workflow;
                 const tagPreview = (intent.tags || []).slice(0, 6).join(', ');
                 const moreTagsCount = Math.max(0, (intent.tags || []).length - 6);
                 return `
-                    <div class="bg-brand-panel border border-gray-700 rounded-lg p-5 hover:border-brand-cyan/50 transition-colors cursor-pointer" onclick="openEditModal('${intent.name}')">
+                    <div class="bg-brand-panel border border-gray-700 rounded-lg p-5 hover:border-brand-cyan/50 transition-colors">
                         <div class="flex justify-between items-start mb-2">
-                            <h3 class="text-base font-mono font-semibold text-brand-cyan">${intent.name}</h3>
-                            ${hasGate ? `<span class="text-xs px-2 py-1 rounded bg-amber-900/40 text-amber-300 border border-amber-800">${intent.keyword_patterns.length} keyword gate${intent.keyword_patterns.length === 1 ? '' : 's'}</span>` : ''}
+                            <h3 class="text-base font-mono font-semibold text-brand-cyan cursor-pointer" onclick="openEditModal('${intent.name}')">${intent.name}</h3>
+                            <div class="flex gap-2 items-center">
+                                <span id="skill-badge-${intent.name}" class="text-xs px-2 py-1 rounded hidden"></span>
+                                ${hasGate ? `<span class="text-xs px-2 py-1 rounded bg-amber-900/40 text-amber-300 border border-amber-800">${intent.keyword_patterns.length} keyword gate${intent.keyword_patterns.length === 1 ? '' : 's'}</span>` : ''}
+                                <button onclick="compileIntent('${intent.name}')" class="text-xs px-3 py-1 rounded bg-brand-cyan/20 border border-brand-cyan text-brand-cyan hover:bg-brand-cyan/40 transition-colors">Compile to skill</button>
+                            </div>
                         </div>
-                        <p class="text-sm text-gray-300 mb-3">${escapeHtml(intent.description)}</p>
+                        <p class="text-sm text-gray-300 mb-3 cursor-pointer" onclick="openEditModal('${intent.name}')">${escapeHtml(intent.description)}</p>
                         <div class="text-xs text-gray-500 mb-2">
                             <span class="text-gray-400">Action:</span> ${escapeHtml(intent.action)}
                         </div>
-                        <div class="text-xs text-gray-500">
+                        <div class="text-xs text-gray-500 mb-2">
                             <span class="text-gray-400">Tags (${(intent.tags || []).length}):</span>
                             ${tagPreview ? `<span class="font-mono">${escapeHtml(tagPreview)}</span>` : '<span class="italic">none</span>'}
                             ${moreTagsCount > 0 ? `<span class="text-gray-600"> +${moreTagsCount} more</span>` : ''}
                         </div>
+                        ${hasWorkflow ? `<div class="text-xs text-gray-500"><span class="text-gray-400">Linked workflow:</span> <code class="text-brand-cyan">${escapeHtml(intent.linked_workflow)}</code></div>` : ''}
                     </div>
                 `;
             }).join('');
+
+            // Fire-and-forget skill status checks per intent (populates the badge)
+            allIntents.forEach(intent => refreshSkillBadge(intent.name));
+        }
+
+        async function refreshSkillBadge(name) {
+            try {
+                const res = await fetch(`/api/intent-config/intents/${encodeURIComponent(name)}/skill-status?scope=user`);
+                const data = await res.json();
+                const el = document.getElementById(`skill-badge-${name}`);
+                if (!el) return;
+                if (!data.compiled) {
+                    el.classList.add('hidden');
+                    return;
+                }
+                el.classList.remove('hidden');
+                if (data.stale) {
+                    el.className = 'text-xs px-2 py-1 rounded bg-orange-900/40 text-orange-300 border border-orange-800';
+                    el.textContent = 'skill: stale';
+                    el.title = 'A backing lesson or the intent itself has been edited since this skill was last compiled. Recompile to refresh.';
+                } else {
+                    el.className = 'text-xs px-2 py-1 rounded bg-green-900/40 text-green-300 border border-green-800';
+                    el.textContent = 'skill: fresh';
+                    el.title = 'A compiled SKILL.md exists at ~/.claude/skills/ and is up to date with its sources.';
+                }
+            } catch (e) {
+                // Silently ignore — badge just stays hidden
+            }
+        }
+
+        async function compileIntent(name) {
+            try {
+                const res = await fetch(`/api/intent-config/intents/${encodeURIComponent(name)}/compile`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({scope: 'user'}),
+                });
+                const data = await res.json();
+                if (data.error) {
+                    alert(`Compile failed: ${data.error}`);
+                    return;
+                }
+                const wfNote = data.workflow_id
+                    ? `${data.step_count} step${data.step_count === 1 ? '' : 's'}, ${data.lesson_count} lesson${data.lesson_count === 1 ? '' : 's'} inlined`
+                    : 'no linked workflow — action template only';
+                alert(`Compiled '${data.intent_name}' (${data.bytes_written} bytes)\n\nPath: ${data.skill_path}\nSources: ${wfNote}\n\nInvoke as /${data.intent_name} or let Claude auto-discover.`);
+                refreshSkillBadge(name);
+            } catch (e) {
+                alert(`Compile failed: ${e}`);
+            }
         }
 
         function escapeHtml(str) {
@@ -189,6 +249,7 @@
             document.getElementById('intent-description').value = intent.description || '';
             document.getElementById('intent-action').value = intent.action || '';
             document.getElementById('intent-tags').value = (intent.tags || []).join(', ');
+            document.getElementById('intent-linked-workflow').value = intent.linked_workflow || '';
             document.getElementById('intent-keywords').value = (intent.keyword_patterns || []).join('\n');
             document.getElementById('intent-gate-message').value = intent.gate_message || '';
             document.getElementById('delete-btn').classList.remove('hidden');
@@ -204,6 +265,7 @@
             document.getElementById('intent-description').value = '';
             document.getElementById('intent-action').value = '';
             document.getElementById('intent-tags').value = '';
+            document.getElementById('intent-linked-workflow').value = '';
             document.getElementById('intent-keywords').value = '';
             document.getElementById('intent-gate-message').value = '';
             document.getElementById('delete-btn').classList.add('hidden');
@@ -229,10 +291,12 @@
 
             const tagsRaw = document.getElementById('intent-tags').value;
             const keywordsRaw = document.getElementById('intent-keywords').value;
+            const linkedWorkflow = document.getElementById('intent-linked-workflow').value.trim();
             const payload = {
                 description: document.getElementById('intent-description').value.trim(),
                 action: document.getElementById('intent-action').value.trim(),
                 tags: tagsRaw.split(',').map(t => t.trim()).filter(Boolean),
+                linked_workflow: linkedWorkflow || null,
                 keyword_patterns: keywordsRaw.split('\n').map(t => t.trim()).filter(Boolean),
                 gate_message: document.getElementById('intent-gate-message').value.trim() || null,
             };

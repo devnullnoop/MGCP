@@ -1,12 +1,82 @@
 """Data models for MGCP (Memory Graph Core Primitives)."""
 
+import re
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+# Neutralize literal tool-call XML in any user-provided string before it lands
+# in the database. A previous Claude session leaked
+# `</parameter></invoke><invoke name="Bash">...` into a project_context decision
+# string; when the record was loaded back into a later session's context window,
+# the XML rendered as a fresh tool call. Sanitize at the model boundary so every
+# persistence path (lessons, project context, catalogue items, workflows, etc.)
+# is covered without per-call-site discipline.
+_TOOL_CALL_TAG_RE = re.compile(
+    r"<(/?(?:invoke|parameter|function_calls)\b[^>]*)>",
+    re.IGNORECASE,
+)
 
 
-class Example(BaseModel):
+def sanitize_tool_call_xml(text: str) -> str:
+    """Replace tool-call angle brackets with U+2039/U+203A lookalikes.
+
+    Idempotent — re-applying to already-sanitized text is a no-op since the
+    replacement characters don't match the regex. Preserves human readability;
+    only the bracket characters change so the body still reads naturally.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    return _TOOL_CALL_TAG_RE.sub(lambda m: f"\u2039{m.group(1)}\u203a", text)
+
+
+def _sanitize_value(value: Any) -> Any:
+    """Recursively sanitize strings inside dicts and lists.
+
+    BaseModel instances are passed through unchanged — they have already been
+    sanitized by their own validator when they were constructed. Non-string
+    leaves (int, float, datetime, enum, etc.) are returned as-is.
+    """
+    if isinstance(value, str):
+        return sanitize_tool_call_xml(value)
+    if isinstance(value, list):
+        return [_sanitize_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_value(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _sanitize_value(item) for key, item in value.items()}
+    return value
+
+
+class SanitizedModel(BaseModel):
+    """BaseModel that strips tool-call XML from any string field on the model.
+
+    Two enforcement paths:
+
+    1. Construction — `model_validator(mode="before")` walks the input dict
+       and sanitizes every string value (recursing into lists/dicts). Nested
+       BaseModel instances handle themselves via their own validators.
+    2. Direct attribute assignment — `__setattr__` is overridden so that
+       `obj.field = "<invoke ...>"` is sanitized before storage.
+
+    Note: Python list mutations like `obj.list_field.append(s)` cannot be
+    intercepted here. Call sites that mutate list fields directly should
+    sanitize the value first using `sanitize_tool_call_xml`.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sanitize_input(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            return {key: _sanitize_value(value) for key, value in data.items()}
+        return data
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, _sanitize_value(value))
+
+
+class Example(SanitizedModel):
     """A good or bad example demonstrating a lesson."""
 
     label: Literal["good", "bad"]
@@ -28,7 +98,7 @@ RelationshipType = Literal[
 ]
 
 
-class Relationship(BaseModel):
+class Relationship(SanitizedModel):
     """A typed, weighted relationship to another lesson."""
 
     target: str = Field(..., description="ID of the related lesson")
@@ -41,7 +111,7 @@ class Relationship(BaseModel):
     bidirectional: bool = Field(default=True, description="Whether this relationship goes both ways")
 
 
-class Lesson(BaseModel):
+class Lesson(SanitizedModel):
     """A lesson learned from past LLM interactions."""
 
     id: str = Field(..., description="Unique identifier")
@@ -73,7 +143,7 @@ class Lesson(BaseModel):
         return "\n".join(lines)
 
 
-class LessonSummary(BaseModel):
+class LessonSummary(SanitizedModel):
     """Lightweight lesson summary for listings."""
 
     id: str
@@ -83,7 +153,7 @@ class LessonSummary(BaseModel):
     usage_count: int
 
 
-class QueryResult(BaseModel):
+class QueryResult(SanitizedModel):
     """Result from a lesson query."""
 
     lesson: Lesson
@@ -91,7 +161,7 @@ class QueryResult(BaseModel):
     source: Literal["semantic", "keyword", "graph"] = "semantic"
 
 
-class ProjectTodo(BaseModel):
+class ProjectTodo(SanitizedModel):
     """A todo item for a specific project."""
 
     content: str = Field(..., description="What needs to be done")
@@ -101,7 +171,7 @@ class ProjectTodo(BaseModel):
     notes: str | None = Field(None, description="Additional context or blockers")
 
 
-class Dependency(BaseModel):
+class Dependency(SanitizedModel):
     """A library, framework, or tool used by the project."""
 
     name: str = Field(..., description="Package/library name")
@@ -111,7 +181,7 @@ class Dependency(BaseModel):
     notes: str | None = Field(None, description="Project-specific usage notes")
 
 
-class ArchitecturalNote(BaseModel):
+class ArchitecturalNote(SanitizedModel):
     """A project-specific architectural decision or concept."""
 
     title: str = Field(..., description="Short title (e.g., 'MCP Server Restart Required')")
@@ -121,7 +191,7 @@ class ArchitecturalNote(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-class SecurityNote(BaseModel):
+class SecurityNote(SanitizedModel):
     """A known security issue or consideration."""
 
     title: str = Field(..., description="Issue title")
@@ -131,7 +201,7 @@ class SecurityNote(BaseModel):
     mitigation: str | None = Field(None, description="How it's being addressed")
 
 
-class Convention(BaseModel):
+class Convention(SanitizedModel):
     """A project coding convention or style rule."""
 
     title: str = Field(..., description="Short title (e.g., 'Snake case for functions')")
@@ -140,7 +210,7 @@ class Convention(BaseModel):
     examples: list[str] = Field(default_factory=list, description="Quick examples")
 
 
-class FileCoupling(BaseModel):
+class FileCoupling(SanitizedModel):
     """Files that must change together."""
 
     files: list[str] = Field(..., description="Files that are coupled (e.g., ['server.py', 'models.py'])")
@@ -148,7 +218,7 @@ class FileCoupling(BaseModel):
     direction: Literal["bidirectional", "a_triggers_b"] = "bidirectional"
 
 
-class Decision(BaseModel):
+class Decision(SanitizedModel):
     """An architectural or design decision with rationale."""
 
     title: str = Field(..., description="Short title (e.g., 'Chose NetworkX over Neo4j')")
@@ -158,7 +228,7 @@ class Decision(BaseModel):
     date: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-class ErrorPattern(BaseModel):
+class ErrorPattern(SanitizedModel):
     """A common error and its solution."""
 
     error_signature: str = Field(..., description="What the error looks like (regex or text)")
@@ -167,7 +237,7 @@ class ErrorPattern(BaseModel):
     related_files: list[str] = Field(default_factory=list, description="Files where this error occurs")
 
 
-class GenericCatalogueItem(BaseModel):
+class GenericCatalogueItem(SanitizedModel):
     """A flexible catalogue item for custom item types.
 
     Allows users to create new catalogue item types without modifying the schema.
@@ -187,7 +257,7 @@ class GenericCatalogueItem(BaseModel):
 # ============================================================================
 
 
-class Soliloquy(BaseModel):
+class Soliloquy(SanitizedModel):
     """A reflective message from the LLM to its future self.
 
     Free-form introspection space: concerns, confidence, insights,
@@ -209,7 +279,7 @@ class Soliloquy(BaseModel):
         return f"{header}\n{self.content}"
 
 
-class CommunitySummary(BaseModel):
+class CommunitySummary(SanitizedModel):
     """Summary of an auto-detected lesson community (cluster)."""
 
     community_id: str = Field(..., description="Deterministic hash of sorted member IDs")
@@ -226,7 +296,7 @@ class CommunitySummary(BaseModel):
 # ============================================================================
 
 
-class RemAction(BaseModel):
+class RemAction(SanitizedModel):
     """A tracked REM remediation action with before/after measurement."""
 
     id: int | None = Field(None, description="Auto-assigned database ID")
@@ -240,7 +310,7 @@ class RemAction(BaseModel):
     outcome: dict | None = Field(None, description="usage_after, delta, verdict")
 
 
-class LessonVersion(BaseModel):
+class LessonVersion(SanitizedModel):
     """A snapshot of a lesson at a specific version."""
 
     lesson_id: str
@@ -254,7 +324,7 @@ class LessonVersion(BaseModel):
     session_id: str | None = None
 
 
-class ContextSnapshot(BaseModel):
+class ContextSnapshot(SanitizedModel):
     """A snapshot of project context at a point in time."""
 
     id: int | None = None
@@ -274,7 +344,7 @@ class ContextSnapshot(BaseModel):
 # ============================================================================
 
 
-class WorkflowStepLesson(BaseModel):
+class WorkflowStepLesson(SanitizedModel):
     """A lesson attached to a workflow step with context."""
 
     lesson_id: str = Field(..., description="ID of the linked lesson")
@@ -282,7 +352,7 @@ class WorkflowStepLesson(BaseModel):
     priority: int = Field(default=1, ge=1, le=3, description="1=critical, 2=important, 3=helpful")
 
 
-class WorkflowStep(BaseModel):
+class WorkflowStep(SanitizedModel):
     """A single step in a development workflow.
 
     Steps are sequential (ordered) but lessons can be attached to multiple steps,
@@ -299,7 +369,7 @@ class WorkflowStep(BaseModel):
     outputs: list[str] = Field(default_factory=list, description="Expected outputs/artifacts from this step")
 
 
-class Workflow(BaseModel):
+class Workflow(SanitizedModel):
     """A development workflow defining a process with linked lessons.
 
     Workflows provide process structure (sequential steps) while lessons
@@ -360,7 +430,7 @@ class Workflow(BaseModel):
         return "\n".join(lines)
 
 
-class ProjectCatalogue(BaseModel):
+class ProjectCatalogue(SanitizedModel):
     """Structured knowledge base for a project - the bootstrap guide."""
 
     # Technology stack
@@ -395,7 +465,7 @@ class ProjectCatalogue(BaseModel):
     custom_items: list["GenericCatalogueItem"] = Field(default_factory=list, description="Custom items")
 
 
-class ProjectContext(BaseModel):
+class ProjectContext(SanitizedModel):
     """Project-specific context for session continuity.
 
     Stores working state between sessions so Claude can resume work

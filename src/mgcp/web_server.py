@@ -942,6 +942,7 @@ async def add_intent_api(data: dict[str, Any]) -> dict[str, Any]:
             description=data.get("description", ""),
             action=data.get("action", ""),
             tags=data.get("tags") or [],
+            linked_workflow=data.get("linked_workflow") or None,
             keyword_patterns=keyword_patterns,
             gate_message=gate_message,
         )
@@ -969,6 +970,8 @@ async def update_intent_api(name: str, data: dict[str, Any]) -> dict[str, Any]:
         intent.action = data["action"]
     if "tags" in data:
         intent.tags = data["tags"] or []
+    if "linked_workflow" in data:
+        intent.linked_workflow = data["linked_workflow"] or None
     if "keyword_patterns" in data:
         intent.keyword_patterns = data["keyword_patterns"] or []
     if "gate_message" in data:
@@ -990,6 +993,66 @@ async def remove_intent_api(name: str) -> dict[str, Any]:
         return {"error": f"intent '{name}' not found"}
     save_config(config)
     return {"status": "removed", "name": name, "total_intents": len(config.intents)}
+
+
+@app.post("/api/intent-config/intents/{name}/compile")
+async def compile_intent_api(name: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Compile an intent to a SKILL.md file at ~/.claude/skills/ or .claude/skills/.
+
+    Body (optional): {scope?: 'user'|'project', project_path?: str}
+    """
+    from .skill_compiler import compile_intent_to_skill
+
+    data = data or {}
+    scope = data.get("scope", "user")
+    project_path = data.get("project_path")
+
+    await ensure_initialized()
+    try:
+        result = await compile_intent_to_skill(
+            intent_name=name,
+            store=store,
+            scope=scope,
+            project_path=Path(project_path) if project_path else None,
+        )
+    except ValueError as e:
+        return {"error": str(e)}
+
+    return {
+        "status": "compiled",
+        "intent_name": result.intent_name,
+        "skill_path": str(result.skill_path),
+        "bytes_written": result.bytes_written,
+        "scope": scope,
+        "workflow_id": result.workflow_id,
+        "step_count": result.step_count,
+        "lesson_count": result.lesson_count,
+        "has_gate": result.has_gate,
+    }
+
+
+@app.get("/api/intent-config/intents/{name}/skill-status")
+async def intent_skill_status_api(name: str, scope: str = "user") -> dict[str, Any]:
+    """Return whether a compiled skill exists for this intent and whether it's stale.
+
+    Used by the /intents page to badge intents that have a compiled skill
+    and to flag when one of the backing lessons has been refined since the
+    skill was generated.
+    """
+    from .skill_compiler import find_skill_path, is_skill_stale
+
+    await ensure_initialized()
+    path = find_skill_path(name, scope=scope)
+    if path is None:
+        return {"name": name, "scope": scope, "compiled": False, "stale": None}
+    stale = await is_skill_stale(name, store, scope=scope)
+    return {
+        "name": name,
+        "scope": scope,
+        "compiled": True,
+        "skill_path": str(path),
+        "stale": stale,
+    }
 
 
 # Mount static files for other assets

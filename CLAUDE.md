@@ -128,7 +128,7 @@ All source files are in `src/mgcp/`:
 - Decisions with rationale
 - Error patterns with solutions
 
-### MCP Tools (42 total)
+### MCP Tools (43 total)
 
 **Lesson Discovery & Retrieval (5):**
 - `query_lessons` - Semantic search for relevant lessons
@@ -187,12 +187,13 @@ All source files are in `src/mgcp/`:
 - `write_soliloquy` - Write a reflective message to your future self (at session close/compression)
 - `read_soliloquy` - Read your most recent message(s) to yourself (at session start)
 
-**Intent Config (5):**
+**Intent Config (6):**
 - `list_intents` - List all configured intents (name, description, action, tag/keyword counts)
 - `get_intent` - Get full definition of one intent by name
 - `add_intent` - Add a new intent to the routing config (closes the REM growth loop)
-- `update_intent` - Update an existing intent's description/action/tags/keyword_patterns
+- `update_intent` - Update an existing intent's description/action/tags/linked_workflow/keyword_patterns
 - `remove_intent` - Delete an intent from the routing config
+- `compile_intent_to_skill` - Compile an intent (+ linked workflow + lessons) into a SKILL.md file at `~/.claude/skills/` or `<project>/.claude/skills/`. Walks intent → workflow → ordered steps → lessons-per-step. Skill is a downstream artifact; the intent stays the source of truth.
 
 ## Claude Code Integration
 
@@ -226,6 +227,10 @@ MGCP v2.2 makes the routing prompt **data, not code**. The intent classification
 Both hooks fall back to a minimal hard-coded intent set if the JSON file is missing or corrupt, so a fresh install never crashes. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
 
 **Growth loop:** REM intent_calibration runs community detection on the lesson graph and surfaces findings when (a) a community has unmapped tags or (b) a community spans multiple intents with no clear dominant (< 60% share) — the latter check catches misfit clusters that the v2.1 hand-coded `tag_to_intent` map silenced via defensive over-mapping. Findings include structured `proposed_patch` metadata so the LLM (or a future automated writeback path) can call `add_intent`/`update_intent` directly. Lesson community → REM finding → intent_config update → next session's hook injection picks up the new intent. No code commit required.
+
+**Intent → Skill compilation (v2.3):** An intent + its linked workflow + the workflow's per-step lessons can be compiled into an Anthropic-format SKILL.md file at `~/.claude/skills/{intent_name}/SKILL.md` (user scope) or `<project>/.claude/skills/{intent_name}/SKILL.md` (project scope). The compiler walks intent → workflow → ordered steps → lessons-per-step and inlines all four layers into a single self-contained document. Compiled skills give intents two new firing channels — slash commands (`/git_operation`) and Claude's auto-discovery via description matching — on top of MGCP's hook-level keyword gates and LLM intent classification.
+
+**Critical anti-Phase-8 invariant:** compiling a skill is purely additive. It does NOT remove the source intent from `intent_config.json`, it does NOT remove backing lessons from the active query pool, and it does NOT change any MGCP behavior. The intent stays the source of truth and the skill is a downstream artifact you can recompile any time. This is the inverse of Phase 8's failure mode, where graduated lessons were hidden from `query_lessons` (degrading reliability). The web UI badges compiled skills as "fresh" or "stale" by comparing the skill file mtime against the intent_config.json mtime and the backing lessons' `last_refined` timestamps, so users know when to recompile.
 
 ## Implementation Roadmap
 

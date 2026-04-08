@@ -273,6 +273,14 @@ LLM self-routing was a leap, but it was still hard-coded — three places had to
 
 A new `session_end` intent was added to fix a real failure mode that v2.1 silently ignored: messages like "bye bye now" had no intent classification, no keyword gate, and no calibration finding flagging the gap. v2.2 also adds a coherence check to REM intent_calibration — when a community spans multiple intents with no clear dominant (< 60% share), it surfaces a finding suggesting a new intent or tag remap. This catches misfit clusters that defensive over-mapping in v2.1 silenced.
 
+### v2.3: compile intents to portable skills
+
+Anthropic's plugin system distributes prompt-only "skills" as `SKILL.md` files in `~/.claude/skills/`. Once installed, a skill is invocable as a slash command (`/skill_name`) and auto-discoverable by Claude via its frontmatter description. v2.3 adds a compiler that takes any MGCP intent + its linked workflow + the workflow's per-step lessons and renders all four layers into a single SKILL.md — turning MGCP's accumulated discipline into a portable artifact you can use even in Claude surfaces that don't have MGCP installed.
+
+The compiled skill is **purely additive**. The intent stays in `intent_config.json` and continues to drive the hook keyword gates and LLM intent classification. Backing lessons stay in the active query pool. Compiling does not remove, hide, or graduate anything. This is the inverse of the Phase 8 skill compilation that was removed for degrading reliability — Phase 8 graduated lessons out of `query_lessons`, which hid knowledge from the LLM. v2.3 keeps the source of truth in MGCP and treats the SKILL.md as a downstream export format that can be recompiled at any time.
+
+A new `compile_intent_to_skill` MCP tool, a `POST /api/intent-config/intents/{name}/compile` web endpoint, and a "Compile to skill" button on the `/intents` page all converge on the same `compile_intent_to_skill()` function. The web UI badges compiled skills as **fresh** (green) or **stale** (orange) by comparing the SKILL.md mtime against the backing lessons' `last_refined` timestamps and the `intent_config.json` mtime, so users know when to recompile.
+
 ### Current hooks
 
 | Hook | Event | Purpose |

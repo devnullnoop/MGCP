@@ -85,6 +85,20 @@ class IntentDefinition(BaseModel):
     finding suggesting a new/modified intent.
     """
 
+    linked_workflow: str | None = None
+    """Optional workflow ID whose steps inline into a compiled skill.
+
+    When `compile_intent_to_skill` runs, it walks intent → linked_workflow →
+    ordered steps → lessons-per-step and renders all four layers into a
+    single SKILL.md. Without this field set, the compiled skill contains
+    only the intent's action template (still useful, just less procedural).
+
+    Kept optional and explicit (rather than discovered at compile time via
+    semantic match) so compilation is reproducible: the same intent always
+    produces the same skill, regardless of embedding model updates or new
+    workflows being added later.
+    """
+
 
 class IntentConfig(BaseModel):
     """Top-level intent routing config."""

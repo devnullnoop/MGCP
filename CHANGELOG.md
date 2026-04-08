@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (v2.3 — intent → skill compiler)
+- **`src/mgcp/skill_compiler.py`**: Compiles MGCP intents into Anthropic-format SKILL.md files at `~/.claude/skills/{name}/SKILL.md` (user scope) or `<project>/.claude/skills/{name}/SKILL.md` (project scope). Walks `intent → linked_workflow → ordered steps → lessons-per-step` and inlines all four layers into a single self-contained document. Includes a generation header marking the file as machine-generated, gate_message rendered as a STOP preamble, action template, full workflow with checklists and lesson actions/rationales inlined per step, and a categorization tags footer.
+- **`linked_workflow: str | None`** field on `IntentDefinition` so intents can declare which workflow's steps should be inlined when compiling. Optional and explicit (rather than discovered at compile time via semantic match) so compilation is reproducible across embedding model updates.
+- **`compile_intent_to_skill` MCP tool**: New tool wrapping the compiler with a markdown response summary (path, byte count, source intent, linked workflow, step/lesson counts). Tool count 42 → 43.
+- **Web API**: `POST /api/intent-config/intents/{name}/compile` (compile + return CompileResult), `GET /api/intent-config/intents/{name}/skill-status` (returns whether a skill exists and whether it's stale relative to backing lessons or the intent config).
+- **`/intents` page**: New "Compile to skill" button on each intent row. Skill status badges — green "skill: fresh" when up to date, orange "skill: stale" when a backing lesson or the intent itself has been refined since the last compile. Linked workflow ID field added to the edit modal.
+- **`tests/test_skill_compiler.py`**: 17 tests covering compilation without/with linked workflow, missing workflow degradation, missing lesson degradation, scope handling (user/project/invalid), unknown intent error, find_skill_path, is_skill_stale, recompile overwrite, and the critical immutability invariant — compiling does NOT remove the source intent from `intent_config.json` or remove backing lessons from the active query pool.
+- **`is_skill_stale` helper** that compares the SKILL.md mtime against the `intent_config.json` mtime and the `last_refined` timestamp of every lesson reachable through the linked workflow.
+
+### Changed (v2.3)
+- **Tool count**: 42 → 43 MCP tools (`compile_intent_to_skill` added).
+- **`IntentDefinition` model**: gained the optional `linked_workflow` field. Existing `intent_config.json` files without this field still load (backward compatible — defaults to `None`).
+- **`/intents` page**: card layout now reserves space for the skill status badge between the keyword gate badge and the new Compile button. Edit modal adds a Linked workflow ID input.
+
+### Notes (v2.3)
+- v2.3 explicitly avoids the Phase 8 failure mode. Compiling a skill is purely additive: the intent stays in `intent_config.json`, the lessons stay in the active query pool, and MGCP behavior is unchanged. The skill is a downstream artifact you can recompile or delete at any time. This is enforced by the `TestImmutability` test class in `test_skill_compiler.py`.
+- A future automated writeback path can call `compile_intent_to_skill` from REM (e.g. as a "promote stable intent to skill" finding) without risking the kind of silent knowledge hiding that broke Phase 8.
+
 ### Added
 - **Routing prompt as data** (v2.2): The intent classification system is no longer hard-coded across hooks and `rem_cycle._intent_calibration`. New `src/mgcp/intent_config.py` is the single source of truth — Pydantic models, default intents, load/save for `~/.mgcp/intent_config.json`. Save writes a pre-rendered cache (`session_init_routing`, `session_init_actions`, `dispatcher_routing`, `keyword_gates`) so the standalone hook scripts can read strings without importing the mgcp package. Editing the JSON (or calling the new MCP tools below) changes routing behavior on the next user message — no code change, no release.
 - **`session_end` intent**: New intent with both a tag mapping (`session-discipline`, `farewell`, `save-context`, etc.) and a hard keyword gate (`bye bye`, `goodbye`, `signing off`, `wrapping up`, `gotta go`, etc.). Fires the dispatcher gate to force `save_project_context` + `write_soliloquy` BEFORE the LLM responds with a farewell. Fixes the v2.1 failure mode where farewells were silently classified as `none` and the LLM waved back without saving anything.

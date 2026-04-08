@@ -128,7 +128,7 @@ All source files are in `src/mgcp/`:
 - Decisions with rationale
 - Error patterns with solutions
 
-### MCP Tools (37 total)
+### MCP Tools (42 total)
 
 **Lesson Discovery & Retrieval (5):**
 - `query_lessons` - Semantic search for relevant lessons
@@ -187,6 +187,13 @@ All source files are in `src/mgcp/`:
 - `write_soliloquy` - Write a reflective message to your future self (at session close/compression)
 - `read_soliloquy` - Read your most recent message(s) to yourself (at session start)
 
+**Intent Config (5):**
+- `list_intents` - List all configured intents (name, description, action, tag/keyword counts)
+- `get_intent` - Get full definition of one intent by name
+- `add_intent` - Add a new intent to the routing config (closes the REM growth loop)
+- `update_intent` - Update an existing intent's description/action/tags/keyword_patterns
+- `remove_intent` - Delete an intent from the routing config
+
 ## Claude Code Integration
 
 Add to Claude Code MCP config (`~/.claude.json`):
@@ -207,18 +214,18 @@ Data is stored in `~/.mgcp/` by default.
 
 ## Claude Code Hooks
 
-MGCP v2.0 uses intent-based LLM self-routing instead of regex pattern matching. The LLM classifies each user message into 7 intent categories and follows an intent-action map to call the right tools.
+MGCP v2.2 makes the routing prompt **data, not code**. The intent classification system has 8 intent categories (`git_operation`, `catalogue_dependency`, `catalogue_security`, `catalogue_decision`, `catalogue_arch_note`, `catalogue_convention`, `task_start`, `session_end`) defined in `~/.mgcp/intent_config.json`. Both Claude Code hooks and the REM intent_calibration operation read from this file. Adding or modifying an intent no longer requires editing hook code or shipping a release — you edit the JSON (or call `add_intent` / `update_intent` MCP tools, or let REM propose the change) and the next session picks it up automatically.
 
 | Hook | Event | Purpose |
 |------|-------|---------|
-| `session-init.py` | SessionStart | Inject routing prompt, intent-action map, workflow instructions (~800 tokens) |
-| `user-prompt-dispatcher.py` | UserPromptSubmit | Scheduled reminders + workflow state injection (zero regex, ~60 lines) |
+| `session-init.py` | SessionStart | Inject routing prompt + intent-action map (loaded from `intent_config.json`) plus workflow instructions |
+| `user-prompt-dispatcher.py` | UserPromptSubmit | Hard keyword gates (loaded from `intent_config.json` — both git AND session_end fire from one loop), terse routing re-injection, scheduled reminders, workflow state |
 | `post-tool-dispatcher.py` | PostToolUse | Routes by tool: Edit/Write triggers knowledge-capture checkpoint; Bash triggers error detection with cooldown |
-| `mgcp-precompact.py` | PreCompact | Critical reminder to save before context compression |
+| `mgcp-precompact.py` | PreCompact | Critical reminder to save context (and write_soliloquy) before context compression |
 
-Legacy hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
+Both hooks fall back to a minimal hard-coded intent set if the JSON file is missing or corrupt, so a fresh install never crashes. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
 
-The key insight: LLM self-routing (87% accuracy) outperforms regex (58%), is simpler (~130 lines vs ~380), and injects fewer tokens (~800 vs ~2000). Intent calibration via the REM cycle continuously refines the routing prompt using community detection.
+**Growth loop:** REM intent_calibration runs community detection on the lesson graph and surfaces findings when (a) a community has unmapped tags or (b) a community spans multiple intents with no clear dominant (< 60% share) — the latter check catches misfit clusters that the v2.1 hand-coded `tag_to_intent` map silenced via defensive over-mapping. Findings include structured `proposed_patch` metadata so the LLM (or a future automated writeback path) can call `add_intent`/`update_intent` directly. Lesson community → REM finding → intent_config update → next session's hook injection picks up the new intent. No code commit required.
 
 ## Implementation Roadmap
 

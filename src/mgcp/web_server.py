@@ -889,13 +889,107 @@ async def serve_lessons():
     return HTMLResponse("<!DOCTYPE html><html><body><h1>Lessons page not found.</h1></body></html>")
 
 
-@app.get("/skills")
-async def serve_skills():
-    """Serve the compiled skills page."""
-    skills_path = STATIC_DIR / "skills.html"
-    if skills_path.exists():
-        return FileResponse(skills_path)
-    return HTMLResponse("<!DOCTYPE html><html><body><h1>Skills page not found.</h1></body></html>")
+@app.get("/intents")
+async def serve_intents():
+    """Serve the intent routing config management page."""
+    intents_path = STATIC_DIR / "intents.html"
+    if intents_path.exists():
+        return FileResponse(intents_path)
+    return HTMLResponse("<!DOCTYPE html><html><body><h1>Intents page not found.</h1></body></html>")
+
+
+# ============================================================================
+# Intent Config API (routing prompt as data)
+# ============================================================================
+
+@app.get("/api/intent-config")
+async def get_intent_config_api() -> dict[str, Any]:
+    """Return the current intent routing config.
+
+    Reads from ~/.mgcp/intent_config.json (or MGCP_DATA_DIR override). This
+    is the same file the Claude Code hooks and REM intent_calibration read.
+    """
+    from .intent_config import load_config
+
+    config = load_config()
+    return config.to_disk_dict()
+
+
+@app.post("/api/intent-config/intents")
+async def add_intent_api(data: dict[str, Any]) -> dict[str, Any]:
+    """Add a new intent to the routing config.
+
+    Body: {name, description, action, tags?, keyword_patterns?, gate_message?}
+    """
+    from .intent_config import IntentDefinition, load_config, save_config
+
+    name = data.get("name")
+    if not name:
+        return {"error": "name is required"}
+
+    config = load_config()
+    if any(i.name == name for i in config.intents):
+        return {"error": f"intent '{name}' already exists"}
+
+    keyword_patterns = data.get("keyword_patterns") or []
+    gate_message = data.get("gate_message")
+    if keyword_patterns and not gate_message:
+        return {"error": "keyword_patterns require a gate_message"}
+
+    try:
+        intent = IntentDefinition(
+            name=name,
+            description=data.get("description", ""),
+            action=data.get("action", ""),
+            tags=data.get("tags") or [],
+            keyword_patterns=keyword_patterns,
+            gate_message=gate_message,
+        )
+    except Exception as e:
+        return {"error": f"validation failed: {e}"}
+
+    config.intents.append(intent)
+    save_config(config)
+    return {"status": "added", "name": name, "total_intents": len(config.intents)}
+
+
+@app.put("/api/intent-config/intents/{name}")
+async def update_intent_api(name: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Update an existing intent. Only fields present in the body are changed."""
+    from .intent_config import load_config, save_config
+
+    config = load_config()
+    intent = next((i for i in config.intents if i.name == name), None)
+    if not intent:
+        return {"error": f"intent '{name}' not found"}
+
+    if "description" in data:
+        intent.description = data["description"]
+    if "action" in data:
+        intent.action = data["action"]
+    if "tags" in data:
+        intent.tags = data["tags"] or []
+    if "keyword_patterns" in data:
+        intent.keyword_patterns = data["keyword_patterns"] or []
+    if "gate_message" in data:
+        intent.gate_message = data["gate_message"]
+
+    save_config(config)
+    return {"status": "updated", "name": name}
+
+
+@app.delete("/api/intent-config/intents/{name}")
+async def remove_intent_api(name: str) -> dict[str, Any]:
+    """Remove an intent from the routing config."""
+    from .intent_config import load_config, save_config
+
+    config = load_config()
+    before = len(config.intents)
+    config.intents = [i for i in config.intents if i.name != name]
+    if len(config.intents) == before:
+        return {"error": f"intent '{name}' not found"}
+    save_config(config)
+    return {"status": "removed", "name": name, "total_intents": len(config.intents)}
 
 
 # Mount static files for other assets

@@ -2218,6 +2218,223 @@ async def read_soliloquy(
 
 
 # ============================================================================
+# INTENT CONFIG (routing prompt as data)
+# ============================================================================
+#
+# These tools manage ~/.mgcp/intent_config.json — the single source of truth
+# for the intent classification system. Both Claude Code hooks and the REM
+# intent_calibration operation read from the same file. Adding or modifying
+# an intent here changes routing behavior on the next user message: no code
+# change, no release.
+
+
+@mcp.tool()
+async def list_intents() -> str:
+    """List all configured intents in the routing system.
+
+    Returns name, description, action, and counts of keyword patterns and
+    tags for each intent. Use this to see the current routing prompt before
+    making changes.
+    """
+    from .intent_config import load_config
+
+    config = load_config()
+    if not config.intents:
+        return "No intents configured."
+
+    lines = [f"## Intent Config (version {config.version})\n"]
+    lines.append(f"**{len(config.intents)} intents configured.** Source: `~/.mgcp/intent_config.json`\n")
+    for intent in config.intents:
+        lines.append(f"### `{intent.name}`")
+        lines.append(f"- **Description:** {intent.description}")
+        lines.append(f"- **Action:** {intent.action}")
+        lines.append(
+            f"- **Tags:** {len(intent.tags)} ({', '.join(intent.tags[:8])}"
+            f"{'…' if len(intent.tags) > 8 else ''})"
+        )
+        if intent.keyword_patterns:
+            lines.append(
+                f"- **Keyword gate:** {len(intent.keyword_patterns)} patterns "
+                "(hard-stop in dispatcher hook)"
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_intent(name: str) -> str:
+    """Get the full definition of one intent by name.
+
+    Args:
+        name: Intent name (e.g. "session_end", "git_operation")
+    """
+    from .intent_config import load_config
+
+    config = load_config()
+    intent = next((i for i in config.intents if i.name == name), None)
+    if not intent:
+        available = ", ".join(i.name for i in config.intents)
+        return f"Intent '{name}' not found. Available: {available}"
+
+    lines = [
+        f"## Intent: `{intent.name}`",
+        "",
+        f"**Description:** {intent.description}",
+        "",
+        f"**Action:** {intent.action}",
+        "",
+        f"**Tags ({len(intent.tags)}):** {', '.join(intent.tags) if intent.tags else '(none)'}",
+        "",
+    ]
+    if intent.keyword_patterns:
+        lines.append(f"**Keyword patterns ({len(intent.keyword_patterns)}):**")
+        for p in intent.keyword_patterns:
+            lines.append(f"  - `{p}`")
+        lines.append("")
+        if intent.gate_message:
+            lines.append("**Gate message:**")
+            lines.append("```")
+            lines.append(intent.gate_message)
+            lines.append("```")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def add_intent(
+    name: str,
+    description: str,
+    action: str,
+    tags: list[str] | None = None,
+    keyword_patterns: list[str] | None = None,
+    gate_message: str | None = None,
+) -> str:
+    """Add a new intent to the routing config.
+
+    The next time the SessionStart or UserPromptSubmit hook fires, the new
+    intent will be in the injected routing prompt. If you also pass
+    `keyword_patterns` and `gate_message`, the dispatcher hook will fire a
+    hard-stop gate when one of the patterns matches a user message.
+
+    This is the writeback path REM intent_calibration's findings are
+    designed for: when REM surfaces an "incoherent community" or
+    "unmapped tags" finding, call this tool to apply the proposed_patch.
+
+    Args:
+        name: Stable snake_case identifier (e.g. "phishing_research")
+        description: Short trigger description shown in the routing prompt
+        action: Imperative action template the LLM follows when this intent fires
+        tags: Lesson tags that map to this intent (used by REM intent_calibration)
+        keyword_patterns: Regex patterns that trip a hard keyword gate (optional)
+        gate_message: Message injected when a keyword gate fires (required if patterns set)
+    """
+    from .intent_config import IntentDefinition, load_config, save_config
+
+    config = load_config()
+    if any(i.name == name for i in config.intents):
+        return f"Intent '{name}' already exists. Use update_intent to modify it."
+
+    if keyword_patterns and not gate_message:
+        return (
+            "Error: keyword_patterns require a gate_message. Either provide both "
+            "or omit both (intent will rely on LLM classification only)."
+        )
+
+    new_intent = IntentDefinition(
+        name=name,
+        description=description,
+        action=action,
+        tags=tags or [],
+        keyword_patterns=keyword_patterns or [],
+        gate_message=gate_message,
+    )
+    config.intents.append(new_intent)
+    save_config(config)
+    return (
+        f"Intent '{name}' added. {len(config.intents)} total intents now configured. "
+        f"Hooks will pick up the change on the next user message."
+    )
+
+
+@mcp.tool()
+async def update_intent(
+    name: str,
+    description: str | None = None,
+    action: str | None = None,
+    tags: list[str] | None = None,
+    keyword_patterns: list[str] | None = None,
+    gate_message: str | None = None,
+) -> str:
+    """Update an existing intent in the routing config.
+
+    Only fields you pass are updated; omitted fields are preserved. To clear
+    a field, pass an empty list/string.
+
+    Args:
+        name: Intent name to update (must already exist)
+        description: New description (optional)
+        action: New action template (optional)
+        tags: Replace the tag list (optional)
+        keyword_patterns: Replace the keyword pattern list (optional)
+        gate_message: New gate message (optional)
+    """
+    from .intent_config import load_config, save_config
+
+    config = load_config()
+    intent = next((i for i in config.intents if i.name == name), None)
+    if not intent:
+        available = ", ".join(i.name for i in config.intents)
+        return f"Intent '{name}' not found. Available: {available}"
+
+    changed = []
+    if description is not None:
+        intent.description = description
+        changed.append("description")
+    if action is not None:
+        intent.action = action
+        changed.append("action")
+    if tags is not None:
+        intent.tags = tags
+        changed.append(f"tags ({len(tags)})")
+    if keyword_patterns is not None:
+        intent.keyword_patterns = keyword_patterns
+        changed.append(f"keyword_patterns ({len(keyword_patterns)})")
+    if gate_message is not None:
+        intent.gate_message = gate_message
+        changed.append("gate_message")
+
+    if not changed:
+        return f"No fields provided to update on intent '{name}'."
+
+    save_config(config)
+    return f"Intent '{name}' updated: {', '.join(changed)}."
+
+
+@mcp.tool()
+async def remove_intent(name: str) -> str:
+    """Remove an intent from the routing config.
+
+    Use sparingly — removing a built-in intent (git_operation, session_end,
+    task_start, etc.) will degrade the safety gates and routing accuracy.
+    Prefer update_intent to modify behavior instead.
+
+    Args:
+        name: Intent name to remove
+    """
+    from .intent_config import load_config, save_config
+
+    config = load_config()
+    before = len(config.intents)
+    config.intents = [i for i in config.intents if i.name != name]
+    if len(config.intents) == before:
+        return f"Intent '{name}' not found."
+    save_config(config)
+    return (
+        f"Intent '{name}' removed. {len(config.intents)} intents remaining. "
+        f"Hooks will reflect the change on the next user message."
+    )
+
+
+# ============================================================================
 # ENTRY POINT
 # ============================================================================
 

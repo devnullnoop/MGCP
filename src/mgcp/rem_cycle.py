@@ -516,109 +516,36 @@ class RemEngine:
         return findings
 
     async def _intent_calibration(self) -> list[RemFinding]:
-        """Compare community structure against intent categories.
+        """Compare community structure against the configured intent set.
 
-        Detects when lesson graph communities don't map to any known intent,
-        suggesting the routing prompt may need new or modified intents.
+        Surfaces two failure modes that indicate the intent config needs
+        updating:
+
+        1. **Unmapped tags** — a community contains tags that don't map to
+           any intent at all. Means the config needs new tag entries or a
+           new intent.
+
+        2. **Incoherent community** — the community's tags map across
+           multiple intents and the dominant intent has < 60% share. Means
+           either (a) the community is semantically distinct and deserves
+           its own intent, or (b) tags were mis-assigned and need to be
+           moved between intents.
+
+        The previous implementation only had check #1, and worse, the tag
+        map was hand-maintained. Defensive over-mapping (e.g. shoving
+        ``session-discipline`` and ``session`` into ``task_start``) silenced
+        check #1 even when the community was semantically a misfit. Adding
+        coherence as a separate signal catches that case.
+
+        Both findings include a structured ``proposed_patch`` in metadata so
+        a future writeback path (CLI tool or MCP tool) can apply REM's
+        recommendation directly to ``intent_config.json``.
         """
         from .graph import LessonGraph
+        from .intent_config import load_config
 
-        tag_to_intent = {
-            # git_operation
-            "git": "git_operation",
-            "version-control": "git_operation",
-            "branching": "git_operation",
-            "commits": "git_operation",
-            "deployment": "git_operation",
-            "pre-commit": "git_operation",
-            "review": "git_operation",
-            # catalogue_dependency
-            "dependencies": "catalogue_dependency",
-            "supply-chain": "catalogue_dependency",
-            "package-management": "catalogue_dependency",
-            # catalogue_security
-            "security": "catalogue_security",
-            "owasp": "catalogue_security",
-            "authentication": "catalogue_security",
-            "authorization": "catalogue_security",
-            "encryption": "catalogue_security",
-            "input-validation": "catalogue_security",
-            "xss": "catalogue_security",
-            "sql-injection": "catalogue_security",
-            "csrf": "catalogue_security",
-            "session-management": "catalogue_security",
-            "crypto": "catalogue_security",
-            "data-protection": "catalogue_security",
-            "access-control": "catalogue_security",
-            "brute-force": "catalogue_security",
-            "cryptography": "catalogue_security",
-            "enumeration": "catalogue_security",
-            "exposure": "catalogue_security",
-            "secrets": "catalogue_security",
-            # catalogue_arch_note
-            "architecture": "catalogue_arch_note",
-            "gotcha": "catalogue_arch_note",
-            "performance": "catalogue_arch_note",
-            "caching": "catalogue_arch_note",
-            "error-handling": "catalogue_arch_note",
-            "database": "catalogue_arch_note",
-            "files": "catalogue_arch_note",
-            # catalogue_convention
-            "naming": "catalogue_convention",
-            "style": "catalogue_convention",
-            "code-quality": "catalogue_convention",
-            "linting": "catalogue_convention",
-            "best-practices": "catalogue_convention",
-            "consistency": "catalogue_convention",
-            "documentation": "catalogue_convention",
-            "code-review": "catalogue_convention",
-            # task_start
-            "debugging": "task_start",
-            "testing": "task_start",
-            "implementation": "task_start",
-            "refactoring": "task_start",
-            "development": "task_start",
-            "feature": "task_start",
-            "bug": "task_start",
-            "fix": "task_start",
-            "catalogue": "task_start",
-            "knowledge-management": "task_start",
-            "lessons": "task_start",
-            "maintenance": "task_start",
-            "meta": "task_start",
-            "mgcp": "task_start",
-            "quality": "task_start",
-            "workflow": "task_start",
-            "workflows": "task_start",
-            "feedback": "task_start",
-            "critical": "task_start",
-            "discipline": "task_start",
-            "hooks": "task_start",
-            "planning": "task_start",
-            "session": "task_start",
-            "apis": "task_start",
-            "api": "task_start",
-            "ci": "task_start",
-            "errors": "task_start",
-            "verification": "task_start",
-            "background-tasks": "task_start",
-            "cleanup": "task_start",
-            "hygiene": "task_start",
-            "learning": "task_start",
-            "mistakes": "task_start",
-            "process-management": "task_start",
-            "success": "task_start",
-            "customization": "task_start",
-            "proactive": "task_start",
-            "process": "task_start",
-            "refinement": "task_start",
-            "bug-prevention": "task_start",
-            "integration": "task_start",
-            "manual-testing": "task_start",
-            "persistence": "task_start",
-            "self-improvement": "task_start",
-            "ui": "task_start",
-        }
+        config = load_config()
+        tag_to_intent = config.tag_to_intent()
 
         graph = LessonGraph()
         lessons = await self.store.get_all_lessons()
@@ -630,38 +557,146 @@ class RemEngine:
             graph.add_lesson(lesson)
 
         communities = graph.detect_communities()
-        findings = []
+        findings: list[RemFinding] = []
 
         for comm in communities:
-            tags = set(comm.get("aggregate_tags", {}).keys())
+            tags = list(comm.get("aggregate_tags", {}).keys())
             if not tags:
                 continue
+            size = comm.get("size", 0)
+            if size < 3:
+                continue
 
-            # Map tags to known intents
-            matched_intents = {tag_to_intent.get(t.lower()) for t in tags} - {None}
-            unmatched_tags = {t for t in tags if t.lower() not in tag_to_intent}
+            # Compute intent distribution for this community
+            intent_counts: dict[str, int] = {}
+            unmapped: list[str] = []
+            for t in tags:
+                intent = tag_to_intent.get(t.lower())
+                if intent is None:
+                    unmapped.append(t)
+                else:
+                    intent_counts[intent] = intent_counts.get(intent, 0) + 1
 
-            if unmatched_tags and comm.get("size", 0) >= 3:
+            total_mapped = sum(intent_counts.values())
+            dominant_intent = (
+                max(intent_counts, key=intent_counts.get) if intent_counts else None
+            )
+            dominant_share = (
+                intent_counts[dominant_intent] / total_mapped
+                if dominant_intent and total_mapped
+                else 0.0
+            )
+
+            comm_label = comm.get("label") or comm["community_id"]
+            top_members = comm.get("top_members", [])
+
+            # --- Finding 1: unmapped tags ---
+            if unmapped:
                 findings.append(RemFinding(
                     operation="intent_calibration",
-                    title=f"Unmapped community tags: {', '.join(sorted(unmatched_tags))}",
+                    title=f"Unmapped tags in community '{comm_label}': {', '.join(sorted(unmapped))}",
                     description=(
-                        f"Community with {comm['size']} members has tags not mapped to any "
-                        f"intent: {sorted(unmatched_tags)}. "
-                        f"Mapped intents: {sorted(matched_intents) if matched_intents else 'none'}. "
-                        f"Members: {', '.join(comm.get('top_members', []))}"
+                        f"Community '{comm_label}' ({size} lessons) has tags not "
+                        f"mapped to any intent: {sorted(unmapped)}. "
+                        f"Dominant intent so far: {dominant_intent} "
+                        f"({dominant_share:.0%} of mapped tags). "
+                        f"Members: {', '.join(top_members)}"
                     ),
                     options=[
-                        {"label": "Add new intent", "description": "Create a new intent category for these tags"},
-                        {"label": "Map to existing", "description": "Add these tags to an existing intent mapping"},
+                        {
+                            "label": "Map to dominant",
+                            "description": (
+                                f"Add {sorted(unmapped)} to the '{dominant_intent}' intent's tags"
+                                if dominant_intent
+                                else "No dominant intent — create a new one"
+                            ),
+                        },
+                        {
+                            "label": "Add new intent",
+                            "description": "Create a new intent for these tags",
+                        },
                         {"label": "Skip", "description": "Not actionable"},
                     ],
-                    recommended=1,
+                    recommended=0 if dominant_intent else 1,
                     metadata={
                         "community_id": comm["community_id"],
-                        "unmatched_tags": sorted(unmatched_tags),
-                        "matched_intents": sorted(matched_intents),
-                        "size": comm["size"],
+                        "community_label": comm_label,
+                        "unmapped_tags": sorted(unmapped),
+                        "dominant_intent": dominant_intent,
+                        "dominant_share": round(dominant_share, 3),
+                        "size": size,
+                        "top_members": top_members,
+                        "proposed_patch": {
+                            "type": "add_tags_to_intent",
+                            "intent": dominant_intent,
+                            "tags": sorted(unmapped),
+                        }
+                        if dominant_intent
+                        else {
+                            "type": "create_intent",
+                            "suggested_tags": sorted(unmapped),
+                        },
+                    },
+                ))
+
+            # --- Finding 2: incoherent community ---
+            #
+            # If a community's tags spread across multiple intents and the
+            # dominant intent doesn't dominate (< 60%), the community is
+            # likely a misfit cluster that deserves its own intent. This is
+            # the check that *would* have caught the missing session_end
+            # intent: lessons tagged with session-discipline + farewell +
+            # save-context all got force-mapped to task_start by the old
+            # hand-coded dict, hiding the fact that they belonged to a
+            # distinct lifecycle intent.
+            if (
+                dominant_intent
+                and dominant_share < 0.60
+                and len(intent_counts) >= 2
+            ):
+                sorted_dist = dict(
+                    sorted(intent_counts.items(), key=lambda x: -x[1])
+                )
+                findings.append(RemFinding(
+                    operation="intent_calibration",
+                    title=f"Incoherent community '{comm_label}' spans {len(intent_counts)} intents",
+                    description=(
+                        f"Community '{comm_label}' ({size} lessons) has tags spread "
+                        f"across {len(intent_counts)} intents: {sorted_dist}. "
+                        f"Dominant intent {dominant_intent} only covers "
+                        f"{dominant_share:.0%} of mapped tags. This usually means "
+                        f"a new intent reflecting the community's theme is needed, "
+                        f"or some tags should be remapped to improve coherence. "
+                        f"Members: {', '.join(top_members)}"
+                    ),
+                    options=[
+                        {
+                            "label": "Add new intent",
+                            "description": "Create a new intent reflecting this community's theme",
+                        },
+                        {
+                            "label": "Remap tags",
+                            "description": "Move some tags between intents to improve coherence",
+                        },
+                        {
+                            "label": "Skip",
+                            "description": "Community is genuinely cross-cutting",
+                        },
+                    ],
+                    recommended=0,
+                    metadata={
+                        "community_id": comm["community_id"],
+                        "community_label": comm_label,
+                        "intent_distribution": sorted_dist,
+                        "dominant_intent": dominant_intent,
+                        "dominant_share": round(dominant_share, 3),
+                        "size": size,
+                        "top_members": top_members,
+                        "proposed_patch": {
+                            "type": "create_intent",
+                            "reason": "incoherent_community",
+                            "community_id": comm["community_id"],
+                        },
                     },
                 ))
 

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Routing prompt as data** (v2.2): The intent classification system is no longer hard-coded across hooks and `rem_cycle._intent_calibration`. New `src/mgcp/intent_config.py` is the single source of truth — Pydantic models, default intents, load/save for `~/.mgcp/intent_config.json`. Save writes a pre-rendered cache (`session_init_routing`, `session_init_actions`, `dispatcher_routing`, `keyword_gates`) so the standalone hook scripts can read strings without importing the mgcp package. Editing the JSON (or calling the new MCP tools below) changes routing behavior on the next user message — no code change, no release.
+- **`session_end` intent**: New intent with both a tag mapping (`session-discipline`, `farewell`, `save-context`, etc.) and a hard keyword gate (`bye bye`, `goodbye`, `signing off`, `wrapping up`, `gotta go`, etc.). Fires the dispatcher gate to force `save_project_context` + `write_soliloquy` BEFORE the LLM responds with a farewell. Fixes the v2.1 failure mode where farewells were silently classified as `none` and the LLM waved back without saving anything.
+- **Coherence check in REM intent_calibration**: New finding type fires when a community's tags spread across multiple intents with no clear dominant (< 60% share). Catches misfit clusters that the v2.1 hand-coded `tag_to_intent` map silenced via defensive over-mapping (e.g. `session-discipline` and `discipline` were force-mapped to `task_start`, hiding the missing `session_end` intent). Findings include structured `proposed_patch` metadata so a future automated writeback path can apply REM's recommendations directly.
+- **5 new MCP tools** for managing intent_config from chat: `list_intents`, `get_intent`, `add_intent`, `update_intent`, `remove_intent`. Closes the growth loop the architectural fix promised: lesson community → REM finding → LLM applies patch → next session's hook injection picks up the new intent.
+- **Web UI: `/intents` page** with table view, edit, add, and delete actions. New REST endpoints under `/api/intent-config`. Nav link added from the dashboard.
+- **`tests/test_intent_config.py`** — 21 tests covering default config (including regression tests for the v2.1 tag mapping bugs), rendering, persistence (round-trip + corrupt-file fallback), and extensibility (custom intent injection).
+- **Soliloquy lifecycle**: `read_soliloquy` step at session start, `write_soliloquy` baked into the new `session_end` intent's action and the precompact hook's reminder, migration 9 creates the `soliloquies` table.
+
+### Changed
+- **Tool count**: 37 → 42 MCP tools (5 new intent_config tools)
+- **Hooks read JSON, not f-strings**: `session-init.py` and `user-prompt-dispatcher.py` rewritten to load pre-rendered prompt sections from `~/.mgcp/intent_config.json`. The dispatcher's hard keyword gate loop is now a single iteration over `rendered.keyword_gates` — both `git_operation` and `session_end` fire from the same code path. Both hooks fall back to a minimal hard-coded set if the JSON is missing or corrupt, so a fresh install never crashes.
+- **`rem_cycle._intent_calibration` deletes the 100-line hand-coded `tag_to_intent` dict** and loads from `intent_config.load_config()` instead.
+- **CLAUDE.md and README.md hooks sections** rewritten to describe v2.2 routing-as-data, the growth loop, and the new `session_end` intent.
+
+### Fixed
+- **Phase 8 leftover in `tests/test_rem_scheduling.py`**: `test_all_operations_have_schedules` no longer expects `skill_readiness`/`skill_drift_detection` in `DEFAULT_SCHEDULES`. This was the test failure that turned `ff375bc` red on CI.
+
 ### Removed
 - **Skill Compilation** (Phase 8): Removed entirely — skill compilation degraded reliability by hiding lessons from active querying via graduation filtering. Hook-based knowledge injection outperforms skill files.
   - Removed 3 MCP tools: `compile_skill`, `list_compiled_skills`, `ungraduate_skill`
@@ -15,9 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Removed `skill_readiness` and `skill_drift_detection` REM operations
   - Removed `mgcp-compile-skills` CLI entry point
   - Database columns (`graduated_to`, `compiled_skills` table) left in place for backwards compatibility
-
-### Changed
-- **Tool count**: 40 → 37 MCP tools
 
 ## [2.1.0] - 2026-02-27
 

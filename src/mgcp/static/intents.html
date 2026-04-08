@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Intents - Lesson Memory</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'brand-cyan': '#4fc3f7',
+                        'brand-dark': '#0a0a1a',
+                        'brand-panel': '#1a1a2e',
+                        'brand-surface': '#0f0f23',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-brand-dark text-gray-200 font-sans min-h-screen">
+    <!-- Header -->
+    <header class="bg-gradient-to-br from-brand-panel to-brand-surface px-6 py-4 flex justify-between items-center border-b border-brand-cyan">
+        <div class="flex items-center gap-6">
+            <h1 class="text-xl font-semibold text-white">Intent Routing Config</h1>
+            <nav class="flex gap-4 text-sm">
+                <a href="/" class="text-gray-400 hover:text-brand-cyan transition-colors">Dashboard</a>
+                <a href="/session" class="text-gray-400 hover:text-brand-cyan transition-colors">Sessions</a>
+                <a href="/lessons" class="text-gray-400 hover:text-brand-cyan transition-colors">Lessons</a>
+                <a href="/intents" class="text-brand-cyan">Intents</a>
+                <a href="/projects" class="text-gray-400 hover:text-brand-cyan transition-colors">Projects</a>
+            </nav>
+        </div>
+        <div class="flex items-center gap-4">
+            <button id="add-btn" onclick="openAddModal()" class="bg-brand-cyan text-brand-dark px-4 py-2 rounded text-sm font-medium hover:bg-cyan-300 transition-colors">+ New Intent</button>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container mx-auto px-6 py-8 max-w-6xl">
+        <!-- Description Card -->
+        <div class="bg-brand-panel border border-gray-700 rounded-lg p-5 mb-6">
+            <h2 class="text-lg font-medium text-white mb-2">Routing prompt as data</h2>
+            <p class="text-sm text-gray-400 leading-relaxed">
+                The intent classification system is the contract between user messages and what MGCP does about them.
+                This config is read by both the Claude Code hooks (<code class="text-brand-cyan">session-init.py</code>,
+                <code class="text-brand-cyan">user-prompt-dispatcher.py</code>) AND the REM <code class="text-brand-cyan">intent_calibration</code> operation.
+                Edit an intent here and the next user message uses the new routing prompt — no code change, no release.
+            </p>
+            <p class="text-xs text-gray-500 mt-3">
+                Source file: <code class="text-gray-400">~/.mgcp/intent_config.json</code> · Same data exposed via <code class="text-gray-400">list_intents</code>/<code class="text-gray-400">add_intent</code>/<code class="text-gray-400">update_intent</code>/<code class="text-gray-400">remove_intent</code> MCP tools.
+            </p>
+        </div>
+
+        <!-- Stats Bar -->
+        <div class="flex gap-6 mb-6 text-sm">
+            <div class="text-gray-400">
+                Intents: <span id="total-count" class="text-white font-medium">0</span>
+            </div>
+            <div class="text-gray-400">
+                With keyword gates: <span id="gated-count" class="text-amber-400 font-medium">0</span>
+            </div>
+            <div class="text-gray-400">
+                Total tags: <span id="tag-count" class="text-white font-medium">0</span>
+            </div>
+            <div class="text-gray-400">
+                Config version: <span id="version-num" class="text-white font-medium">—</span>
+            </div>
+        </div>
+
+        <!-- Intent List -->
+        <div id="intent-list" class="space-y-3">
+            <div class="text-gray-500 text-center py-12">Loading intents...</div>
+        </div>
+    </main>
+
+    <!-- Edit/Add Modal -->
+    <div id="edit-modal" class="fixed inset-0 bg-black/70 hidden items-center justify-center z-50">
+        <div class="bg-brand-panel rounded-lg border border-gray-700 w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div class="px-6 py-4 border-b border-gray-700 flex justify-between items-center">
+                <h2 id="modal-title" class="text-lg font-semibold text-white">Edit Intent</h2>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-white text-2xl leading-none">&times;</button>
+            </div>
+
+            <div class="p-6 overflow-y-auto flex-1 space-y-4">
+                <div>
+                    <label class="block text-xs uppercase text-gray-500 font-medium mb-1">Name (snake_case)</label>
+                    <input type="text" id="intent-name" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-sm text-white focus:border-brand-cyan focus:outline-none font-mono" placeholder="phishing_research">
+                </div>
+                <div>
+                    <label class="block text-xs uppercase text-gray-500 font-medium mb-1">Description (shown in routing prompt)</label>
+                    <input type="text" id="intent-description" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-sm text-white focus:border-brand-cyan focus:outline-none" placeholder="phishing campaign analysis, lure design">
+                </div>
+                <div>
+                    <label class="block text-xs uppercase text-gray-500 font-medium mb-1">Action (imperative — what the LLM should do)</label>
+                    <textarea id="intent-action" rows="3" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-sm text-white focus:border-brand-cyan focus:outline-none resize-y"></textarea>
+                </div>
+                <div>
+                    <label class="block text-xs uppercase text-gray-500 font-medium mb-1">Tags (comma-separated, used by REM intent_calibration)</label>
+                    <input type="text" id="intent-tags" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-sm text-white focus:border-brand-cyan focus:outline-none" placeholder="phishing, social-engineering">
+                </div>
+                <div>
+                    <label class="block text-xs uppercase text-gray-500 font-medium mb-1">Keyword patterns (one per line, regex — optional, hard-stop gate in dispatcher)</label>
+                    <textarea id="intent-keywords" rows="4" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-sm text-white focus:border-brand-cyan focus:outline-none resize-y font-mono" placeholder="\bphishing\b&#10;\blure\b"></textarea>
+                </div>
+                <div>
+                    <label class="block text-xs uppercase text-gray-500 font-medium mb-1">Gate message (required if keyword patterns are set)</label>
+                    <textarea id="intent-gate-message" rows="4" class="w-full bg-brand-dark border border-gray-600 rounded px-3 py-2 text-sm text-white focus:border-brand-cyan focus:outline-none resize-y" placeholder="STOP. Before any action: ..."></textarea>
+                </div>
+                <div id="form-error" class="text-sm text-red-400 hidden"></div>
+            </div>
+
+            <div class="px-6 py-4 border-t border-gray-700 flex justify-between">
+                <button id="delete-btn" onclick="deleteIntent()" class="px-4 py-2 rounded text-sm text-red-400 border border-red-800 hover:bg-red-950 transition-colors hidden">Delete</button>
+                <div class="flex gap-2 ml-auto">
+                    <button onclick="closeModal()" class="px-4 py-2 rounded text-sm text-gray-300 border border-gray-600 hover:bg-gray-700 transition-colors">Cancel</button>
+                    <button onclick="saveIntent()" class="px-4 py-2 rounded text-sm bg-brand-cyan text-brand-dark font-medium hover:bg-cyan-300 transition-colors">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allIntents = [];
+        let editingName = null;  // null = adding new
+
+        async function loadIntents() {
+            const list = document.getElementById('intent-list');
+            try {
+                const res = await fetch('/api/intent-config');
+                const data = await res.json();
+                allIntents = data.intents || [];
+                document.getElementById('version-num').textContent = data.version ?? '—';
+                renderIntents();
+            } catch (e) {
+                list.innerHTML = `<div class="text-red-400 text-center py-12">Failed to load: ${e}</div>`;
+            }
+        }
+
+        function renderIntents() {
+            const list = document.getElementById('intent-list');
+            document.getElementById('total-count').textContent = allIntents.length;
+            document.getElementById('gated-count').textContent = allIntents.filter(i => (i.keyword_patterns || []).length > 0).length;
+            document.getElementById('tag-count').textContent = allIntents.reduce((s, i) => s + (i.tags || []).length, 0);
+
+            if (allIntents.length === 0) {
+                list.innerHTML = '<div class="text-gray-500 text-center py-12">No intents configured.</div>';
+                return;
+            }
+
+            list.innerHTML = allIntents.map(intent => {
+                const hasGate = (intent.keyword_patterns || []).length > 0;
+                const tagPreview = (intent.tags || []).slice(0, 6).join(', ');
+                const moreTagsCount = Math.max(0, (intent.tags || []).length - 6);
+                return `
+                    <div class="bg-brand-panel border border-gray-700 rounded-lg p-5 hover:border-brand-cyan/50 transition-colors cursor-pointer" onclick="openEditModal('${intent.name}')">
+                        <div class="flex justify-between items-start mb-2">
+                            <h3 class="text-base font-mono font-semibold text-brand-cyan">${intent.name}</h3>
+                            ${hasGate ? `<span class="text-xs px-2 py-1 rounded bg-amber-900/40 text-amber-300 border border-amber-800">${intent.keyword_patterns.length} keyword gate${intent.keyword_patterns.length === 1 ? '' : 's'}</span>` : ''}
+                        </div>
+                        <p class="text-sm text-gray-300 mb-3">${escapeHtml(intent.description)}</p>
+                        <div class="text-xs text-gray-500 mb-2">
+                            <span class="text-gray-400">Action:</span> ${escapeHtml(intent.action)}
+                        </div>
+                        <div class="text-xs text-gray-500">
+                            <span class="text-gray-400">Tags (${(intent.tags || []).length}):</span>
+                            ${tagPreview ? `<span class="font-mono">${escapeHtml(tagPreview)}</span>` : '<span class="italic">none</span>'}
+                            ${moreTagsCount > 0 ? `<span class="text-gray-600"> +${moreTagsCount} more</span>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function escapeHtml(str) {
+            if (str == null) return '';
+            return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+        }
+
+        function openEditModal(name) {
+            const intent = allIntents.find(i => i.name === name);
+            if (!intent) return;
+            editingName = name;
+            document.getElementById('modal-title').textContent = `Edit intent: ${name}`;
+            document.getElementById('intent-name').value = intent.name;
+            document.getElementById('intent-name').disabled = true;
+            document.getElementById('intent-description').value = intent.description || '';
+            document.getElementById('intent-action').value = intent.action || '';
+            document.getElementById('intent-tags').value = (intent.tags || []).join(', ');
+            document.getElementById('intent-keywords').value = (intent.keyword_patterns || []).join('\n');
+            document.getElementById('intent-gate-message').value = intent.gate_message || '';
+            document.getElementById('delete-btn').classList.remove('hidden');
+            document.getElementById('form-error').classList.add('hidden');
+            showModal();
+        }
+
+        function openAddModal() {
+            editingName = null;
+            document.getElementById('modal-title').textContent = 'New intent';
+            document.getElementById('intent-name').value = '';
+            document.getElementById('intent-name').disabled = false;
+            document.getElementById('intent-description').value = '';
+            document.getElementById('intent-action').value = '';
+            document.getElementById('intent-tags').value = '';
+            document.getElementById('intent-keywords').value = '';
+            document.getElementById('intent-gate-message').value = '';
+            document.getElementById('delete-btn').classList.add('hidden');
+            document.getElementById('form-error').classList.add('hidden');
+            showModal();
+        }
+
+        function showModal() {
+            const modal = document.getElementById('edit-modal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('edit-modal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        async function saveIntent() {
+            const errEl = document.getElementById('form-error');
+            errEl.classList.add('hidden');
+
+            const tagsRaw = document.getElementById('intent-tags').value;
+            const keywordsRaw = document.getElementById('intent-keywords').value;
+            const payload = {
+                description: document.getElementById('intent-description').value.trim(),
+                action: document.getElementById('intent-action').value.trim(),
+                tags: tagsRaw.split(',').map(t => t.trim()).filter(Boolean),
+                keyword_patterns: keywordsRaw.split('\n').map(t => t.trim()).filter(Boolean),
+                gate_message: document.getElementById('intent-gate-message').value.trim() || null,
+            };
+
+            try {
+                let res;
+                if (editingName) {
+                    res = await fetch(`/api/intent-config/intents/${encodeURIComponent(editingName)}`, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(payload),
+                    });
+                } else {
+                    const name = document.getElementById('intent-name').value.trim();
+                    if (!name) {
+                        errEl.textContent = 'Name is required.';
+                        errEl.classList.remove('hidden');
+                        return;
+                    }
+                    res = await fetch('/api/intent-config/intents', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({name, ...payload}),
+                    });
+                }
+                const data = await res.json();
+                if (data.error) {
+                    errEl.textContent = data.error;
+                    errEl.classList.remove('hidden');
+                    return;
+                }
+                closeModal();
+                await loadIntents();
+            } catch (e) {
+                errEl.textContent = `Save failed: ${e}`;
+                errEl.classList.remove('hidden');
+            }
+        }
+
+        async function deleteIntent() {
+            if (!editingName) return;
+            if (!confirm(`Delete intent '${editingName}'? This cannot be undone, and removing a built-in intent (git_operation, session_end, etc.) will degrade routing accuracy.`)) return;
+            try {
+                const res = await fetch(`/api/intent-config/intents/${encodeURIComponent(editingName)}`, {method: 'DELETE'});
+                const data = await res.json();
+                if (data.error) {
+                    document.getElementById('form-error').textContent = data.error;
+                    document.getElementById('form-error').classList.remove('hidden');
+                    return;
+                }
+                closeModal();
+                await loadIntents();
+            } catch (e) {
+                document.getElementById('form-error').textContent = `Delete failed: ${e}`;
+                document.getElementById('form-error').classList.remove('hidden');
+            }
+        }
+
+        loadIntents();
+    </script>
+</body>
+</html>

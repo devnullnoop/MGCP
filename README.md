@@ -134,6 +134,10 @@ Browse, search, and manage lessons with relationship tracking.
 Architecture notes, security concerns, conventions, decisions.
 ![Projects](docs/screenshots/projects.png)
 
+### Intent Routing Config (v2.2)
+The routing prompt is data, not code. Edit intents in the UI (or via `add_intent`/`update_intent` MCP tools, or directly in `~/.mgcp/intent_config.json`) — the next user message uses the new prompt. REM intent_calibration writes back to this same file when community detection finds misfit clusters.
+![Intents](docs/screenshots/intents.png)
+
 ## Quick Start
 
 ### 1. Install
@@ -263,16 +267,22 @@ v2 replaces all three regex hooks with a single routing prompt injected at sessi
 
 We benchmarked all three approaches against a ground-truth corpus covering direct phrasing, indirect phrasing, false positives, multi-intent, no intent, and edge cases. LLM self-routing improved accuracy by ~50% over regex while cutting the hook codebase nearly in half. Graph-community classification was not competitive for intent detection (it remains valuable for knowledge retrieval, just not action classification).
 
+### v2.2: routing prompt as data
+
+LLM self-routing was a leap, but it was still hard-coded — three places had to be edited to add an intent (both hooks plus REM's `tag_to_intent` dict), and REM's intent_calibration findings were advisory only because there was no writeback path. v2.2 makes the routing prompt **data**: the canonical intent definitions live in `~/.mgcp/intent_config.json`, both hooks read pre-rendered prompt sections from that file, and REM intent_calibration loads from the same file. New `add_intent`/`update_intent`/`remove_intent` MCP tools let the LLM (or REM, or a human) modify the config from chat — the next session's hook injection picks up the change automatically. No code commit, no release.
+
+A new `session_end` intent was added to fix a real failure mode that v2.1 silently ignored: messages like "bye bye now" had no intent classification, no keyword gate, and no calibration finding flagging the gap. v2.2 also adds a coherence check to REM intent_calibration — when a community spans multiple intents with no clear dominant (< 60% share), it surfaces a finding suggesting a new intent or tag remap. This catches misfit clusters that defensive over-mapping in v2.1 silenced.
+
 ### Current hooks
 
 | Hook | Event | Purpose |
 |------|-------|---------|
-| `session-init.py` | SessionStart | Inject routing prompt, intent-action map, workflow instructions |
-| `user-prompt-dispatcher.py` | UserPromptSubmit | Scheduled reminders and workflow state injection (no regex) |
+| `session-init.py` | SessionStart | Inject routing prompt + intent-action map (loaded from `intent_config.json`) plus workflow instructions |
+| `user-prompt-dispatcher.py` | UserPromptSubmit | Hard keyword gates (data-driven from `intent_config.json` — both git and session_end fire from one loop), terse routing re-injection, scheduled reminders, workflow state |
 | `post-tool-dispatcher.py` | PostToolUse | Routes by tool: Edit/Write triggers knowledge-capture; Bash triggers error detection |
-| `mgcp-precompact.py` | PreCompact | Save context before compression |
+| `mgcp-precompact.py` | PreCompact | Save context (and write_soliloquy) before compression |
 
-Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
+Both hooks fall back to a minimal hard-coded intent set if the JSON file is missing or corrupt — a fresh install never crashes a hook. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
 
 ## Commands
 

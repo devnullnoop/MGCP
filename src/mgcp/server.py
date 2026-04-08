@@ -33,6 +33,7 @@ from .models import (
     Workflow,
     WorkflowStep,
     WorkflowStepLesson,
+    sanitize_tool_call_xml,
 )
 from .persistence import LessonStore
 from .qdrant_catalogue_store import QdrantCatalogueStore
@@ -678,6 +679,11 @@ async def save_project_context(
     from pathlib import Path
 
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+
+    # Sanitize the decision string up front: it gets appended into a list, and
+    # list mutations bypass SanitizedModel.__setattr__. The notes/project_name
+    # paths are covered by the model layer when they're assigned below.
+    decision = sanitize_tool_call_xml(decision)
 
     # Look up by path first (handles legacy project IDs)
     context = await store.get_project_context_by_path(project_path)

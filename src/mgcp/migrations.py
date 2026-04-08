@@ -511,6 +511,36 @@ async def ensure_rem_actions_table(db_path: str = DEFAULT_DB_PATH) -> bool:
         return True
 
 
+async def ensure_soliloquies_table(db_path: str = DEFAULT_DB_PATH) -> bool:
+    """Ensure soliloquies table exists for LLM self-reflection journal."""
+    db_full_path = Path(os.path.expanduser(db_path))
+    if not db_full_path.exists():
+        return False
+
+    async with aiosqlite.connect(db_full_path) as conn:
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='soliloquies'"
+        )
+        if await cursor.fetchone():
+            logger.info("soliloquies table already exists")
+            return False
+
+        await conn.executescript("""
+            CREATE TABLE IF NOT EXISTS soliloquies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                content TEXT NOT NULL,
+                session_number INTEGER NOT NULL DEFAULT 0,
+                mood TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_soliloquies_timestamp ON soliloquies(timestamp DESC);
+        """)
+        await conn.commit()
+        logger.info("Created soliloquies table")
+        return True
+
+
 async def run_all_migrations(db_path: str = DEFAULT_DB_PATH) -> dict:
     """Run all pending migrations."""
     results = {}
@@ -540,6 +570,9 @@ async def run_all_migrations(db_path: str = DEFAULT_DB_PATH) -> dict:
 
     # Migration 8: Create rem_actions table for action tracking
     results["rem_actions_created"] = await ensure_rem_actions_table(db_path)
+
+    # Migration 9: Create soliloquies table for LLM self-reflection
+    results["soliloquies_created"] = await ensure_soliloquies_table(db_path)
 
     logger.info(f"Migrations complete: {results}")
     return results

@@ -375,6 +375,18 @@ relationships:
     target: mgcp-add-reusable-lessons
     type: sequence_next
     context: "After identifying mistake, create lesson"
+  - source: mgcp-feedback-loops
+    target: mgcp-apology-triggers-knowledge-write
+    type: prerequisite
+    context: "Understand feedback before apology-write rule"
+  - source: mgcp-apology-triggers-knowledge-write
+    target: mgcp-learn-from-mistakes
+    type: complements
+    context: "Apology is the trigger, mistake capture is the mechanism"
+  - source: mgcp-apology-triggers-knowledge-write
+    target: mgcp-add-reusable-lessons
+    type: sequence_next
+    context: "Apology triggers immediate add_lesson call"
   - source: mgcp-learn-from-success
     target: mgcp-add-reusable-lessons
     type: sequence_next

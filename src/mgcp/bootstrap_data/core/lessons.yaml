@@ -670,6 +670,28 @@ lessons:
           )
         explanation: "Mistake converted to lesson that prevents recurrence"
 
+  - id: mgcp-apology-triggers-knowledge-write
+    trigger: "When you apologize, say 'sorry', 'my bad', 'you're right', 'good catch', 'should have', 'missed that', or 'fair point' in response to a mistake or correction"
+    action: "An apology is an admission of failure. The NEXT tool call after any apology MUST be add_lesson (or refine_lesson) capturing the failure pattern. Do not batch it, do not defer it, do not continue the conversation first. The apology and the knowledge write are one atomic action. If you apologize and then do something else first, the lesson will be forgotten."
+    rationale: "Apologies without knowledge capture are empty. The moment you recognize a mistake is when context is freshest and the failure pattern is clearest. Deferring the write even one tool call risks losing the insight to task momentum. This was validated repeatedly: when the write was deferred, it was forgotten entirely."
+    tags: [mgcp, feedback, mistakes, learning, discipline, session-discipline]
+    parent_id: mgcp-feedback-loops
+    examples:
+      - label: bad
+        code: |
+          # User: "you forgot the -m 'not slow' marker"
+          # Assistant: "Sorry about that. Let me re-run with the marker..."
+          # [runs pytest]
+          # [never captures what went wrong]
+        explanation: "Apologized, moved on, lesson lost forever"
+      - label: good
+        code: |
+          # User: "you forgot the -m 'not slow' marker"
+          # Assistant: "Sorry about that."
+          # [immediately calls refine_lesson or add_lesson capturing the failure]
+          # [then re-runs pytest]
+        explanation: "Apology and knowledge write are atomic - lesson captured while context is fresh"
+
   - id: mgcp-learn-from-success
     trigger: "When something worked particularly well — identify the reusable pattern and capture it as a lesson or catalogue item for future sessions"
     action: "When something works particularly well: (1) Identify WHY it worked (the pattern, not just the outcome), (2) Ask 'Is this pattern reusable across projects?', (3) If yes, create a lesson capturing the approach, (4) If project-specific, add to catalogue as an arch note or decision."

@@ -59,6 +59,12 @@ The system isn't intelligent. But an LLM with accumulated context *behaves* more
 
 ## How It Works
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/architecture-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/architecture-light.png">
+  <img alt="MGCP Architecture" src="docs/screenshots/architecture-dark.png" width="700">
+</picture>
+
 | Component | Purpose |
 |-----------|---------|
 | **SQLite** | Lessons, project contexts, telemetry |
@@ -113,6 +119,24 @@ schedule_reminder(
 ```
 
 The LLM reminds itself to not skip steps.
+
+## Screenshots
+
+### Knowledge Graph Dashboard
+Interactive visualization with usage heatmaps and real-time updates.
+![Dashboard](docs/screenshots/dashboard.png)
+
+### Lesson Management
+Browse, search, and manage lessons with relationship tracking.
+![Lessons](docs/screenshots/lessons.png)
+
+### Project Catalogue
+Architecture notes, security concerns, conventions, decisions.
+![Projects](docs/screenshots/projects.png)
+
+### Intent Routing Config (v2.2)
+The routing prompt is data, not code. Edit intents in the UI (or via `add_intent`/`update_intent` MCP tools, or directly in `~/.mgcp/intent_config.json`). REM intent_calibration writes back to this same file when community detection finds misfit clusters.
+![Intents](docs/screenshots/intents.png)
 
 ## Quick Start
 

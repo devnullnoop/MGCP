@@ -142,10 +142,12 @@ The routing prompt is data, not code. Edit intents in the UI (or via `add_intent
 
 ### 1. Install
 
+**Requires Python 3.11 or 3.12.** Python 3.13 is not supported (PyTorch has no wheels for it on Intel Macs).
+
 ```bash
 git clone https://github.com/devnullnoop/MGCP.git
 cd MGCP
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 ```

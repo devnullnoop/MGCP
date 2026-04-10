@@ -16,9 +16,3 @@ if sys.version_info >= (3, 13):
         RuntimeWarning,
         stacklevel=2,
     )
-elif sys.version_info < (3, 11):
-    warnings.warn(
-        f"MGCP requires Python 3.11 or 3.12. You are running {sys.version_info.major}.{sys.version_info.minor}.",
-        RuntimeWarning,
-        stacklevel=2,
-    )

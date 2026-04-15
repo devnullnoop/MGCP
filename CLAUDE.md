@@ -128,7 +128,7 @@ All source files are in `src/mgcp/`:
 - Decisions with rationale
 - Error patterns with solutions
 
-### MCP Tools (43 total)
+### MCP Tools (49 total)
 
 **Lesson Discovery & Retrieval (5):**
 - `query_lessons` - Semantic search for relevant lessons
@@ -195,6 +195,14 @@ All source files are in `src/mgcp/`:
 - `remove_intent` - Delete an intent from the routing config
 - `compile_intent_to_skill` - Compile an intent (+ linked workflow + lessons) into a SKILL.md file at `~/.claude/skills/` or `<project>/.claude/skills/`. Walks intent → workflow → ordered steps → lessons-per-step. Skill is a downstream artifact; the intent stays the source of truth.
 
+**Enforcement Rules (6):** Data-driven PreToolUse gates stored in `~/.mgcp/enforcement_rules.json`. Edits take effect on the next tool call.
+- `list_enforcement_rules` - List all rules with enabled/disabled status and trigger
+- `get_enforcement_rule` - Full JSON definition of one rule
+- `add_enforcement_rule` - Add a rule: `trigger` dict, `preconditions` list, `bypass_scope`, `deny_reason`
+- `update_enforcement_rule` - Change fields on an existing rule
+- `remove_enforcement_rule` - Delete a rule by name
+- `toggle_enforcement_rule` - Enable/disable without deleting
+
 ## Claude Code Integration
 
 Add to Claude Code MCP config (`~/.claude.json`):
@@ -221,8 +229,8 @@ MGCP v2.2 makes the routing prompt **data, not code**. The intent classification
 |------|-------|------|---------|
 | `session-init.py` | SessionStart | advisory | Inject routing prompt + intent-action map (loaded from `intent_config.json`) plus workflow instructions |
 | `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Hard keyword gates (loaded from `intent_config.json` — both git AND session_end fire from one loop), terse routing re-injection, scheduled reminders, workflow state, per-turn enforcement state reset, `MGCP_BYPASS` token detection |
-| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Refuses `git commit`/`git push` Bash calls unless `mcp__mgcp__query_lessons` ran in the same turn. Uses `shlex(punctuation_chars=True)` for quote-aware tokenization so `grep 'git commit' docs/` does not false-positive. Bypass per turn with `MGCP_BYPASS` in the user prompt. |
-| `post-tool-dispatcher.py` | PostToolUse | advisory | Routes by tool: Edit/Write triggers knowledge-capture checkpoint; Bash triggers error detection with cooldown; `mcp__mgcp__query_lessons` flips the per-turn flag consumed by PreToolUse |
+| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Generic data-driven evaluator. Reads `~/.mgcp/enforcement_rules.json` on every tool call and applies every enabled, triggered, non-bypassed rule. Denies when preconditions unsatisfied. Quote-aware Bash tokenization via `shlex(punctuation_chars=True)`. Scoped bypass: `MGCP_BYPASS:<scope>` disables one scope, bare `MGCP_BYPASS` disables all. |
+| `post-tool-dispatcher.py` | PostToolUse | advisory | Routes by tool: Edit/Write triggers knowledge-capture checkpoint; Bash triggers error detection with cooldown; every tool call is appended to `turn_tools_called` on workflow_state.json, consumed by PreToolUse `tool_called_this_turn` preconditions. |
 | `mgcp-precompact.py` | PreCompact | advisory | Critical reminder to save context (and write_soliloquy) before context compression |
 
 Advisory hooks fall back to a minimal hard-coded intent set if the JSON file is missing or corrupt, so a fresh install never crashes. The PreToolUse hook fails open (allows the tool call) on any parse error — enforcement is a net, not a tripwire. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
@@ -234,6 +242,33 @@ Advisory hooks fall back to a minimal hard-coded intent set if the JSON file is 
 **Intent → Skill compilation (v2.3):** An intent + its linked workflow + the workflow's per-step lessons can be compiled into an Anthropic-format SKILL.md file at `~/.claude/skills/{intent_name}/SKILL.md` (user scope) or `<project>/.claude/skills/{intent_name}/SKILL.md` (project scope). The compiler walks intent → workflow → ordered steps → lessons-per-step and inlines all four layers into a single self-contained document. Compiled skills give intents two new firing channels — slash commands (`/git_operation`) and Claude's auto-discovery via description matching — on top of MGCP's hook-level keyword gates and LLM intent classification.
 
 **Critical anti-Phase-8 invariant:** compiling a skill is purely additive. It does NOT remove the source intent from `intent_config.json`, it does NOT remove backing lessons from the active query pool, and it does NOT change any MGCP behavior. The intent stays the source of truth and the skill is a downstream artifact you can recompile any time. This is the inverse of Phase 8's failure mode, where graduated lessons were hidden from `query_lessons` (degrading reliability). The web UI badges compiled skills as "fresh" or "stale" by comparing the skill file mtime against the intent_config.json mtime and the backing lessons' `last_refined` timestamps, so users know when to recompile.
+
+**Enforcement-as-data (v2.4):** The PreToolUse hook is a generic evaluator. Rules live in `~/.mgcp/enforcement_rules.json` with this shape:
+
+```jsonc
+{
+  "version": 1,
+  "rules": [
+    {
+      "name": "git-requires-query-lessons",
+      "enabled": true,
+      "trigger": {"tool_name": "Bash",
+                  "command_match": {"type": "git_subcommand",
+                                    "subcommands": ["commit", "push"]}},
+      "preconditions": [
+        {"type": "tool_called_this_turn",
+         "tool_name": "mcp__mgcp__query_lessons"}
+      ],
+      "bypass_scope": "git",
+      "deny_reason": "git commit/push requires query_lessons first"
+    }
+  ]
+}
+```
+
+Trigger `command_match.type` ∈ {`git_subcommand`, `regex`, `contains`}. Precondition `type` ∈ {`tool_called_this_turn`, `tool_not_called_this_turn`, `staged_files_coupling`}. The staged-file coupling type takes `couplings: [{"when_staged": [glob,...], "require_one_of": [glob,...]}]` — if any staged file matches `when_staged`, at least one must match `require_one_of` or the tool call is denied. Use it to enforce doc-coupling, test-coupling, or changelog discipline on commits.
+
+Per-turn state flows through `workflow_state.json`: UserPromptSubmit resets `turn_tools_called=[]` and parses `MGCP_BYPASS[:scope]` tokens into `turn_bypass_scopes`. PostToolUse appends every tool name to `turn_tools_called`. PreToolUse reads both. Schema + evaluator + defaults live in `src/mgcp/enforcement.py`; the hook re-implements the same semantics stdlib-only (no `mgcp` import). Both sides are tested against the same behavioral contract.
 
 ## Implementation Roadmap
 

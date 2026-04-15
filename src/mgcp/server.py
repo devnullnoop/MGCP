@@ -2513,6 +2513,193 @@ async def compile_intent_to_skill(
 
 
 # ============================================================================
+# ENFORCEMENT RULES (PreToolUse)
+# ============================================================================
+#
+# These tools CRUD the rules consumed by the generic PreToolUse hook
+# evaluator (src/mgcp/hook_templates/pre-tool-dispatcher.py). The hook
+# reads ~/.mgcp/enforcement_rules.json on every tool call — no server
+# round-trip is needed — so edits via these tools take effect on the
+# *next* tool call without restarting Claude Code.
+
+
+@mcp.tool()
+async def list_enforcement_rules() -> str:
+    """List all enforcement rules from ~/.mgcp/enforcement_rules.json.
+
+    Enforcement rules are data-driven gates applied by the PreToolUse hook.
+    Each rule pairs a trigger (which tool calls it matches) with
+    preconditions (what must be true for the call to proceed). If a
+    matched rule's preconditions are unsatisfied, the hook denies the
+    tool call.
+    """
+    from .enforcement import load_config
+
+    config = load_config()
+    if not config.rules:
+        return "No enforcement rules configured."
+    lines = [f"# Enforcement rules ({len(config.rules)})", ""]
+    for r in config.rules:
+        status = "enabled" if r.enabled else "disabled"
+        trig = r.trigger.tool_name
+        if r.trigger.command_match:
+            trig += f" [{r.trigger.command_match.type}]"
+        lines.append(f"- **{r.name}** ({status}) — trigger: `{trig}`, bypass_scope: `{r.bypass_scope}`")
+        if r.description:
+            lines.append(f"  - {r.description}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_enforcement_rule(name: str) -> str:
+    """Return the full definition of one enforcement rule as JSON."""
+    from .enforcement import load_config
+
+    config = load_config()
+    for r in config.rules:
+        if r.name == name:
+            return json.dumps(r.model_dump(), indent=2)
+    return f"No rule named '{name}'."
+
+
+@mcp.tool()
+async def add_enforcement_rule(
+    name: str,
+    trigger: dict,
+    preconditions: list[dict],
+    bypass_scope: str,
+    deny_reason: str,
+    description: str = "",
+    enabled: bool = True,
+) -> str:
+    """Add a new enforcement rule.
+
+    Args:
+        name: Unique rule identifier (e.g. 'docs-coupling', 'no-git-force-push')
+        trigger: dict with 'tool_name' and optional 'command_match'.
+            Example: {"tool_name": "Bash",
+                      "command_match": {"type": "git_subcommand",
+                                        "subcommands": ["commit", "push"]}}
+            command_match.type ∈ {"git_subcommand", "regex", "contains"}.
+        preconditions: list of dicts. Each has "type" ∈
+            {"tool_called_this_turn", "tool_not_called_this_turn",
+             "staged_files_coupling"}. The first two take "tool_name";
+            the coupling type takes "couplings" — a list of
+            {"when_staged": [glob,...], "require_one_of": [glob,...]}.
+        bypass_scope: short token (e.g. 'git', 'docs') the user can name
+            in MGCP_BYPASS:<scope> to disable this rule for one turn.
+        deny_reason: text shown to the LLM when the rule blocks a call.
+        description: optional prose explaining the rule's purpose.
+        enabled: defaults to True; set False to keep the rule but skip it.
+    """
+    from .enforcement import (
+        EnforcementRule,
+        Precondition,
+        Trigger,
+        load_config,
+        save_config,
+    )
+
+    config = load_config()
+    if any(r.name == name for r in config.rules):
+        return f"Rule '{name}' already exists. Use update_enforcement_rule to change it."
+
+    try:
+        rule = EnforcementRule(
+            name=name,
+            description=description,
+            enabled=enabled,
+            trigger=Trigger(**trigger),
+            preconditions=[Precondition(**p) for p in preconditions],
+            bypass_scope=bypass_scope,
+            deny_reason=deny_reason,
+        )
+    except Exception as e:
+        return f"Invalid rule definition: {e}"
+
+    config.rules.append(rule)
+    save_config(config)
+    return f"Added rule '{name}'. Takes effect on next tool call."
+
+
+@mcp.tool()
+async def update_enforcement_rule(
+    name: str,
+    trigger: dict | None = None,
+    preconditions: list[dict] | None = None,
+    bypass_scope: str | None = None,
+    deny_reason: str | None = None,
+    description: str | None = None,
+    enabled: bool | None = None,
+) -> str:
+    """Update fields on an existing enforcement rule.
+
+    Any argument left as None preserves the current value. Pass the same
+    shapes as add_enforcement_rule.
+    """
+    from .enforcement import (
+        EnforcementRule,
+        Precondition,
+        Trigger,
+        load_config,
+        save_config,
+    )
+
+    config = load_config()
+    for i, r in enumerate(config.rules):
+        if r.name != name:
+            continue
+        try:
+            updated = EnforcementRule(
+                name=r.name,
+                description=description if description is not None else r.description,
+                enabled=enabled if enabled is not None else r.enabled,
+                trigger=Trigger(**trigger) if trigger is not None else r.trigger,
+                preconditions=(
+                    [Precondition(**p) for p in preconditions]
+                    if preconditions is not None
+                    else r.preconditions
+                ),
+                bypass_scope=bypass_scope if bypass_scope is not None else r.bypass_scope,
+                deny_reason=deny_reason if deny_reason is not None else r.deny_reason,
+            )
+        except Exception as e:
+            return f"Invalid update: {e}"
+        config.rules[i] = updated
+        save_config(config)
+        return f"Updated rule '{name}'."
+    return f"No rule named '{name}'."
+
+
+@mcp.tool()
+async def remove_enforcement_rule(name: str) -> str:
+    """Delete an enforcement rule by name."""
+    from .enforcement import load_config, save_config
+
+    config = load_config()
+    before = len(config.rules)
+    config.rules = [r for r in config.rules if r.name != name]
+    if len(config.rules) == before:
+        return f"No rule named '{name}'."
+    save_config(config)
+    return f"Removed rule '{name}'."
+
+
+@mcp.tool()
+async def toggle_enforcement_rule(name: str, enabled: bool) -> str:
+    """Enable or disable a rule without deleting it."""
+    from .enforcement import load_config, save_config
+
+    config = load_config()
+    for r in config.rules:
+        if r.name == name:
+            r.enabled = enabled
+            save_config(config)
+            return f"Rule '{name}' {'enabled' if enabled else 'disabled'}."
+    return f"No rule named '{name}'."
+
+
+# ============================================================================
 # ENTRY POINT
 # ============================================================================
 

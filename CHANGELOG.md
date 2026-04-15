@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (v2.4 — enforcement-as-data)
+- **`src/mgcp/enforcement.py`**: New Pydantic-schema + load/save + evaluator module. Enforcement rules are now **data**, not hardcoded: each rule pairs a `Trigger` (which tool calls it matches) with `Preconditions` (what must hold for the call to proceed) and a `bypass_scope`. Rules live in `~/.mgcp/enforcement_rules.json` (override with `MGCP_DATA_DIR`). Matches the v2.2 routing-as-data philosophy — new rules are added from chat via MCP tools, with **no code changes**.
+- **Precondition types**: `tool_called_this_turn`, `tool_not_called_this_turn`, and `staged_files_coupling` (blocks a commit until a glob-matched file is also staged, e.g. "if `src/**/*.py` is staged, `CHANGELOG.md` or `README.md` must be too"). The staged-file evaluator runs `git diff --cached --name-only` under the hood.
+- **Scoped bypass**: `MGCP_BYPASS:<scope>` in the user prompt disables rules whose `bypass_scope` matches; bare `MGCP_BYPASS` disables all. Replaces v2.3's all-or-nothing `turn_bypass` flag. UserPromptSubmit parses every `MGCP_BYPASS[:<scope>]` token and writes `turn_bypass_scopes: list[str]` to `workflow_state.json`.
+- **Generic `turn_tools_called: list[str]`** replaces v2.3's `turn_query_lessons_called: bool`. PostToolUse appends *every* tool name (not just `query_lessons`), so `tool_called_this_turn` preconditions can target arbitrary tools.
+- **6 new MCP tools** for enforcement CRUD: `list_enforcement_rules`, `get_enforcement_rule`, `add_enforcement_rule`, `update_enforcement_rule`, `remove_enforcement_rule`, `toggle_enforcement_rule`. Edits take effect on the next tool call (the hook re-reads the JSON each time) without restarting Claude Code. Tool count: 43 → 49.
+- **`tests/test_enforcement.py`**: 35 unit tests covering the schema, detectors, preconditions, rule evaluation, bypass parsing, and persistence round-trip.
+- **Default rule seeded on install**: `init_project.py` writes `~/.mgcp/enforcement_rules.json` containing the `git-requires-query-lessons` rule on first hook install. Never overwrites user edits across upgrades.
+
+### Changed (v2.4)
+- **`pre-tool-dispatcher.py`**: rewritten as a **stdlib-only generic evaluator** reading `enforcement_rules.json`. Same semantics as `src/mgcp/enforcement.py` (shared behavioral contract exercised by both test modules). No `mgcp` import — the hook stays independent of the server.
+- **`user-prompt-dispatcher.py`**: replaces `turn_query_lessons_called` / `turn_bypass` with `turn_tools_called=[]` and `turn_bypass_scopes=[...]`. Bypass parser is now regex-scoped, not a single boolean.
+- **`post-tool-dispatcher.py`**: replaces `_mark_query_lessons_called()` with `_append_tool_called(tool_name)` so arbitrary tools can be tracked.
+- **`hook_templates/VERSION`**: 2.3 → 2.4. Installer auto-upgrades.
+- **Tests**: `test_pre_tool_dispatcher.py` rewritten around the generic evaluator — drives the hook with a temp `enforcement_rules.json` and tests scoped / star / unrelated bypass, disabled rules, and both fail-open paths (missing rules file vs. missing state file).
+
+### Notes (v2.4)
+- Continues the v2.2 → v2.3 arc: v2.2 made the routing prompt data; v2.3 introduced the first enforcing hook (hardcoded); v2.4 makes **enforcement itself data**. The LLM can now add new interrupts from chat — e.g. "whenever I stage a Python file in `src/`, require `CHANGELOG.md` to be staged too" is one `add_enforcement_rule` call.
+- Fails open everywhere. Malformed JSON, unknown precondition types, subprocess errors on `git diff` — all allow the tool call. Enforcement is a safety net, not a tripwire.
+
 ### Added (v2.3 hook templates — PreToolUse enforcement)
 - **`src/mgcp/hook_templates/pre-tool-dispatcher.py`**: First ENFORCING MGCP hook. Prior hooks (SessionStart, UserPromptSubmit, PostToolUse, PreCompact) are all advisory — they inject text as `<system-reminder>` tags that the LLM may skim or ignore. PreToolUse returns `permissionDecision: "deny"` and the tool call is refused by the Claude Code harness. First enforced rule: `git commit` / `git push` is blocked unless `mcp__mgcp__query_lessons` ran in the same turn. Bypass token `MGCP_BYPASS` in the user prompt disables enforcement for that turn.
 - **Quote-aware command detection**: the detector uses `shlex.shlex(..., punctuation_chars=True)` + `whitespace_split=True` so quoted strings stay as single tokens and shell operators (`;`, `&&`, `||`, `|`, `()`) become their own tokens. `grep 'git commit' docs/` and `echo "how to git commit"` correctly pass through; `make build && git push` correctly blocks.

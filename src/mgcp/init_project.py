@@ -671,6 +671,23 @@ def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
     if not dry_run:
         version_file.write_text(current_version + "\n")
 
+    # Seed default enforcement_rules.json on first install. Never
+    # overwrite: user edits to this file (via MCP tools or manual edit)
+    # must be preserved across upgrades.
+    enforcement_path = Path.home() / ".mgcp" / "enforcement_rules.json"
+    if not dry_run and not enforcement_path.exists():
+        try:
+            from .enforcement import default_config
+
+            enforcement_path.parent.mkdir(parents=True, exist_ok=True)
+            enforcement_path.write_text(
+                json.dumps(default_config().model_dump(), indent=2) + "\n"
+            )
+            results.setdefault("created", []).append(str(enforcement_path))
+        except Exception:
+            # Never break hook install if enforcement seeding fails.
+            pass
+
     # Build settings with absolute paths (hooks + permissions only)
     global_settings = _build_global_hook_settings()
 

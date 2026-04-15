@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit dispatcher for MGCP v2.3.
+"""UserPromptSubmit dispatcher for MGCP v2.4.
 
 Responsibilities:
 1. Read keyword gates and the terse routing block from intent_config.json.
@@ -8,8 +8,9 @@ Responsibilities:
    context compaction.
 4. Surface scheduled reminders (counter/timer-based).
 5. Inject active workflow state.
-6. Reset per-turn enforcement state (for PreToolUse gate) and detect the
-   ``MGCP_BYPASS`` opt-out token.
+6. Reset per-turn enforcement state (``turn_tools_called=[]`` consumed by
+   the PreToolUse evaluator) and parse the ``MGCP_BYPASS[:scope]`` opt-out
+   tokens into ``turn_bypass_scopes``.
 
 The intent gates and routing prompt are loaded from
 ``~/.mgcp/intent_config.json`` (override with ``MGCP_DATA_DIR``). Editing
@@ -175,8 +176,21 @@ def main():
 
     # Per-turn enforcement state (consumed by pre-tool-dispatcher.py).
     # Resets every message so each turn gets fresh accounting.
-    state["turn_query_lessons_called"] = False
-    state["turn_bypass"] = bool(re.search(r"MGCP_BYPASS", prompt, re.IGNORECASE))
+    # - turn_tools_called: list of tool_name strings; PostToolUse appends
+    #   to this list. Preconditions of type "tool_called_this_turn" check
+    #   membership.
+    # - turn_bypass_scopes: list of scope strings. "*" disables all rules;
+    #   named scopes ("git", "docs") disable rules with matching
+    #   bypass_scope. Parsed from MGCP_BYPASS and MGCP_BYPASS:<scope>
+    #   tokens in the prompt.
+    state["turn_tools_called"] = []
+    bypass_scopes = []
+    for match in re.finditer(
+        r"MGCP_BYPASS(?::([A-Za-z0-9_-]+))?", prompt, re.IGNORECASE
+    ):
+        scope = match.group(1)
+        bypass_scopes.append(scope if scope else "*")
+    state["turn_bypass_scopes"] = bypass_scopes
 
     _save_state(state)
 

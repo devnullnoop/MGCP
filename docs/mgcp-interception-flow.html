@@ -166,8 +166,12 @@ flowchart LR
 inject text as <code>&lt;system-reminder&gt;</code> tags — the LLM can skim or ignore them (which is how
 <code>query-before-git-operations</code> failed v1→v4). <strong>PreToolUse is different</strong>: it returns
 <code>permissionDecision: deny</code> and the tool call is refused by the harness. Interception = compliance.
-Rule currently enforced: <code>git commit</code> / <code>git push</code> requires <code>query_lessons</code>
-in the same turn (bypass with <code>MGCP_BYPASS</code> token in prompt).
+<strong>v2.4 generalizes this</strong>: the hook is now a data-driven evaluator reading
+<code>~/.mgcp/enforcement_rules.json</code>. Rules are CRUD-ed from chat via six MCP tools
+(<code>add_enforcement_rule</code>, <code>update_enforcement_rule</code>, …) — no code changes,
+no release. Seeded default rule: <code>git commit</code> / <code>git push</code> requires
+<code>query_lessons</code> in the same turn. Scoped bypass via <code>MGCP_BYPASS:&lt;scope&gt;</code>
+(bare <code>MGCP_BYPASS</code> disables every rule).
 </div>
 
 <h2 id="session-start">2. SessionStart — <code>session-init.py</code></h2>
@@ -247,26 +251,35 @@ flowchart TD
 </table>
 </div>
 
-<h2 id="pre-tool">4. PreToolUse — <code>pre-tool-dispatcher.py</code> <span style="color: var(--warn); font-size: 0.8em;">(ENFORCING)</span></h2>
+<h2 id="pre-tool">4. PreToolUse — <code>pre-tool-dispatcher.py</code> <span style="color: var(--warn); font-size: 0.8em;">(ENFORCING · data-driven)</span></h2>
 <div class="panel">
 <p>Fires <em>before</em> every tool call. The only MGCP hook that can actually refuse a tool call — all others inject text the LLM can skim past. Returns <code>permissionDecision: "deny"</code> with a <code>reason</code> the LLM sees on its next turn.</p>
+<p><strong>v2.4:</strong> no hardcoded rules. The hook loads every rule from <code>~/.mgcp/enforcement_rules.json</code> and applies each one whose trigger matches and whose <code>bypass_scope</code> isn't in <code>turn_bypass_scopes</code>. Matched rules whose preconditions are unsatisfied contribute to the denial message; all failing rules are reported together.</p>
 <div class="mermaid">
 flowchart TD
-  T([LLM about to call tool]) --> D{tool_name<br/>== Bash?}
-  D -- no --> A1[Allow]
-  D -- yes --> P[Tokenize command with<br/>shlex punctuation_chars=True]
-  P --> Q{git commit<br/>or git push<br/>at command start?}
+  T([LLM about to call tool]) --> L[Load enforcement_rules.json]
+  L --> E{Rules present?}
+  E -- no --> A0[Allow]
+  E -- yes --> S[Load workflow_state.json]
+  S --> B{turn_bypass_scopes<br/>contains '*'?}
+  B -- yes --> A1[Allow<br/><i>bare MGCP_BYPASS in prompt</i>]
+  B -- no --> R[For each enabled rule]
+  R --> F{Trigger matches<br/>tool_name / command?}
+  F -- no --> NX[Skip rule]
+  F -- yes --> G{bypass_scope in<br/>turn_bypass_scopes?}
+  G -- yes --> NX
+  G -- no --> P[Evaluate preconditions]
+  P --> H{Any<br/>unsatisfied?}
+  H -- yes --> D[Collect denial reason]
+  H -- no --> NX
+  NX --> R
+  D --> R
+  R --> Q{Any denials<br/>collected?}
+  Q -- yes --> X[DENY — emit reason + rule names<br/>+ scoped bypass hint]
   Q -- no --> A2[Allow]
-  Q -- yes --> S[Load workflow_state.json]
-  S --> B{turn_bypass<br/>== True?}
-  B -- yes --> A3[Allow<br/><i>user opted out via MGCP_BYPASS</i>]
-  B -- no --> C{turn_query_lessons_called<br/>== True?}
-  C -- yes --> A4[Allow]
-  C -- no --> X[DENY with reason:<br/>'Call query_lessons first,<br/>then retry. Or include<br/>MGCP_BYPASS to skip.']
-  A1 --> Z([Tool runs])
+  A0 --> Z([Tool runs])
+  A1 --> Z
   A2 --> Z
-  A3 --> Z
-  A4 --> Z
   X --> Y([Tool call refused,<br/>LLM retries next turn])
 
   style T fill:#1c2a3e,stroke:#7ab8ff
@@ -275,19 +288,37 @@ flowchart TD
   style X fill:#3a1f1f,stroke:#ff7777
 </div>
 
+<h3>Rule shape</h3>
+<pre><code>{
+  "name": "git-requires-query-lessons",
+  "enabled": true,
+  "trigger": {
+    "tool_name": "Bash",
+    "command_match": {"type": "git_subcommand",
+                      "subcommands": ["commit", "push"]}
+  },
+  "preconditions": [
+    {"type": "tool_called_this_turn",
+     "tool_name": "mcp__mgcp__query_lessons"}
+  ],
+  "bypass_scope": "git",
+  "deny_reason": "git commit/push requires query_lessons first"
+}</code></pre>
+<p>Trigger <code>command_match.type</code> ∈ <code>git_subcommand</code> / <code>regex</code> / <code>contains</code>. Precondition <code>type</code> ∈ <code>tool_called_this_turn</code> / <code>tool_not_called_this_turn</code> / <code>staged_files_coupling</code>. The coupling type takes <code>couplings: [{"when_staged": [glob], "require_one_of": [glob]}]</code> — use it to enforce doc-parity, test-parity, or changelog discipline on commits.</p>
+
 <h3>Why a token walker, not a regex</h3>
-<p>A naive <code>\bgit\s+(commit|push)\b</code> regex false-positives on <code>grep 'git commit' docs/</code> or <code>echo "how to git commit"</code>. The hook uses <code>shlex.shlex(..., punctuation_chars=True)</code> so quoted strings stay as single tokens and shell operators (<code>;</code>, <code>&&</code>, <code>||</code>, <code>|</code>, <code>()</code>) split into their own tokens. The walker only matches <code>git commit</code> / <code>git push</code> when <code>git</code> appears at a true command boundary.</p>
+<p>A naive <code>\bgit\s+(commit|push)\b</code> regex false-positives on <code>grep 'git commit' docs/</code> or <code>echo "how to git commit"</code>. The hook uses <code>shlex.shlex(..., punctuation_chars=True)</code> so quoted strings stay as single tokens and shell operators (<code>;</code>, <code>&&</code>, <code>||</code>, <code>|</code>, <code>()</code>) split into their own tokens. The walker only matches <code>git &lt;subcommand&gt;</code> when <code>git</code> appears at a true command boundary.</p>
 
 <h3>State flow across the three hooks that collaborate</h3>
 <table>
 <tr><th>Hook</th><th>Operation on turn state</th></tr>
-<tr><td>UserPromptSubmit</td><td>Reset <code>turn_query_lessons_called = False</code>. Set <code>turn_bypass = True</code> iff prompt contains <code>MGCP_BYPASS</code>.</td></tr>
-<tr><td>PostToolUse</td><td>On <code>tool_name == "mcp__mgcp__query_lessons"</code>: flip <code>turn_query_lessons_called = True</code>.</td></tr>
-<tr><td>PreToolUse</td><td>Read both flags. Allow or deny.</td></tr>
+<tr><td>UserPromptSubmit</td><td>Reset <code>turn_tools_called = []</code>. Parse every <code>MGCP_BYPASS[:&lt;scope&gt;]</code> token in the prompt into <code>turn_bypass_scopes: list[str]</code>.</td></tr>
+<tr><td>PostToolUse</td><td>Append <code>tool_name</code> to <code>turn_tools_called</code> (any tool, not just <code>query_lessons</code>).</td></tr>
+<tr><td>PreToolUse</td><td>Read both fields. Apply every enabled, triggered, non-bypassed rule.</td></tr>
 </table>
 
 <h3>Fail-open policy</h3>
-<p>Any parse error (unterminated quotes, malformed JSON input) results in <code>allow</code>, never <code>deny</code>. Enforcement is a net, not a tripwire — a silent pass-through is always preferable to blocking the user because of a malformed state file. The exception: <em>missing</em> state file with an enforced command defaults to <code>deny</code> (LLM hasn't demonstrated the precondition yet).</p>
+<p>Any parse error (unterminated quotes, malformed rules JSON, unknown precondition type) results in that rule being skipped, never a blanket deny. A completely missing <code>enforcement_rules.json</code> allows all tool calls. The exception: a valid rule whose preconditions aren't met denies — that's the whole point.</p>
 </div>
 
 <h2 id="post-tool">5. PostToolUse — <code>post-tool-dispatcher.py</code></h2>
@@ -371,7 +402,7 @@ flowchart TB
     C1[intent_config.json]
   end
   subgraph STATE["Ephemeral state"]
-    S1[workflow_state.json<br/><i>call counter, active workflow,<br/>scheduled reminders,<br/>turn_query_lessons_called,<br/>turn_bypass</i>]
+    S1[workflow_state.json<br/><i>call counter, active workflow,<br/>scheduled reminders,<br/>turn_tools_called (list),<br/>turn_bypass_scopes (list)</i>]
     S2[reminder_state.json]
     S3[error_detector_state.json<br/><i>bash error cooldown</i>]
   end
@@ -469,14 +500,14 @@ flowchart TB
   <td>10</td>
   <td style="color:#ffb86b">new</td>
   <td>Bypass token is all-or-nothing</td>
-  <td><code>MGCP_BYPASS</code> disables every PreToolUse gate for the turn, not just the one the user meant to bypass</td>
-  <td>Scope bypass per-gate (e.g. <code>MGCP_BYPASS:git</code>, <code>MGCP_BYPASS:doc-parity</code>). Default bare token disables all, for convenience.</td>
+  <td><del>MGCP_BYPASS disables every PreToolUse gate for the turn</del> — <strong>resolved in v2.4</strong></td>
+  <td><strong>Done.</strong> Each rule has a <code>bypass_scope</code>; <code>MGCP_BYPASS:&lt;scope&gt;</code> disables only matching rules; bare <code>MGCP_BYPASS</code> still disables all for convenience.</td>
 </tr>
 </table>
 </div>
 
 <p class="lead" style="margin-top: 3rem; font-size: 0.9rem;">
-  Generated for session 94. Hook template version <strong>v2.3</strong> (adds PreToolUse enforcement).
+  Generated for session 94. Hook template version <strong>v2.4</strong> (enforcement-as-data — rules are CRUD-able from chat via MCP tools; no code changes).
   Regenerate any time by asking: "update the interception flow doc."
 </p>
 

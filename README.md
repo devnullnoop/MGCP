@@ -177,7 +177,7 @@ mgcp-bootstrap
 mgcp-dashboard
 ```
 
-## MCP Tools (38 total)
+## MCP Tools (49 total)
 
 ### Lesson Discovery (5)
 | Tool | Purpose |
@@ -255,6 +255,17 @@ Each operation runs on its own schedule — staleness scans every 5 sessions, du
 | `schedule_reminder` | Schedule self-reminder |
 | `reset_reminder_state` | Clear reminders |
 
+### Enforcement Rules (6)
+Data-driven gates for the PreToolUse hook. Edits take effect on the next tool call.
+| Tool | Purpose |
+|------|---------|
+| `list_enforcement_rules` | List all configured rules |
+| `get_enforcement_rule` | Full definition of one rule |
+| `add_enforcement_rule` | Add a new rule (trigger + preconditions + bypass scope + deny reason) |
+| `update_enforcement_rule` | Change fields on an existing rule |
+| `remove_enforcement_rule` | Delete a rule |
+| `toggle_enforcement_rule` | Enable/disable without deleting |
+
 ## Claude Code Hooks
 
 ### The problem with regex routing
@@ -287,7 +298,17 @@ A new `compile_intent_to_skill` MCP tool, a `POST /api/intent-config/intents/{na
 
 All prior hooks (SessionStart, UserPromptSubmit, PostToolUse, PreCompact) are **advisory** — they inject text as `<system-reminder>` tags that the LLM can skim or ignore. The `query-before-git-operations` lesson failed v1 → v4 across months despite the hook firing correctly every time; interception was not compliance.
 
-v2.3 adds a `PreToolUse` hook (`pre-tool-dispatcher.py`) that can actually refuse a tool call by returning `permissionDecision: "deny"`. First enforced rule: `git commit` / `git push` is blocked unless `mcp__mgcp__query_lessons` ran in the same turn. To opt out for a single turn, include the token `MGCP_BYPASS` anywhere in the user prompt. The detector uses quote-aware tokenization (`shlex` with `punctuation_chars=True`), so `grep 'git commit' docs/` and `echo "how to git commit"` correctly pass through while `make build && git push` correctly blocks. See `docs/mgcp-interception-flow.html` for the full interception map, the growth loop, and candidate improvement areas.
+v2.3 adds a `PreToolUse` hook (`pre-tool-dispatcher.py`) that can actually refuse a tool call by returning `permissionDecision: "deny"`. First enforced rule: `git commit` / `git push` is blocked unless `mcp__mgcp__query_lessons` ran in the same turn. The detector uses quote-aware tokenization (`shlex` with `punctuation_chars=True`), so `grep 'git commit' docs/` and `echo "how to git commit"` correctly pass through while `make build && git push` correctly blocks. See `docs/mgcp-interception-flow.html` for the full interception map, the growth loop, and candidate improvement areas.
+
+### v2.4: enforcement-as-data
+
+v2.3 introduced enforcement but the rule was **hardcoded** in the hook. Adding a new interrupt — "before `rm -rf`, require a confirmation tool", "if you staged `src/**.py`, you must also stage `CHANGELOG.md`" — meant editing Python and shipping a release. That's the same drift pattern v2.2 fixed for intent routing.
+
+v2.4 makes the routing prompt's philosophy universal: **enforcement is now data**. Rules live in `~/.mgcp/enforcement_rules.json`. The `pre-tool-dispatcher.py` hook is a generic stdlib-only evaluator — it reads the JSON on every tool call and applies every enabled, triggered, non-bypassed rule. Adding a new rule is a chat-time `add_enforcement_rule` call; the next tool call picks it up with no restart.
+
+Each rule has three parts: a **trigger** (which tool calls it matches — tool name plus optional Bash-command matcher: `git_subcommand`, `regex`, or `contains`), one or more **preconditions** (`tool_called_this_turn`, `tool_not_called_this_turn`, `staged_files_coupling`), and a **bypass_scope** (short token like `"git"` or `"docs"` the user can name in `MGCP_BYPASS:<scope>` to disable that rule for one turn; bare `MGCP_BYPASS` disables all).
+
+Six new MCP tools (`list_enforcement_rules`, `get_enforcement_rule`, `add_enforcement_rule`, `update_enforcement_rule`, `remove_enforcement_rule`, `toggle_enforcement_rule`) let the LLM — or a human — CRUD rules from chat. The `git-requires-query-lessons` rule from v2.3 is preserved as a seeded default. Tool count: 43 → 49.
 
 ### Current hooks
 
@@ -295,8 +316,8 @@ v2.3 adds a `PreToolUse` hook (`pre-tool-dispatcher.py`) that can actually refus
 |------|-------|------|---------|
 | `session-init.py` | SessionStart | advisory | Inject routing prompt + intent-action map (loaded from `intent_config.json`) plus workflow instructions |
 | `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Hard keyword gates (data-driven from `intent_config.json` — both git and session_end fire from one loop), terse routing re-injection, scheduled reminders, workflow state, per-turn enforcement state reset |
-| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Refuses `git commit`/`git push` when `query_lessons` hasn't run this turn (unless `MGCP_BYPASS` in prompt) |
-| `post-tool-dispatcher.py` | PostToolUse | advisory | Routes by tool: Edit/Write triggers knowledge-capture; Bash triggers error detection; `query_lessons` flips the PreToolUse gate flag |
+| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Generic evaluator reading `~/.mgcp/enforcement_rules.json`. Applies every enabled rule; denies when preconditions unsatisfied. Scoped bypass via `MGCP_BYPASS:<scope>` or bare `MGCP_BYPASS` |
+| `post-tool-dispatcher.py` | PostToolUse | advisory | Routes by tool: Edit/Write triggers knowledge-capture; Bash triggers error detection; appends every tool name to `turn_tools_called` for PreToolUse rules |
 | `mgcp-precompact.py` | PreCompact | advisory | Save context (and write_soliloquy) before compression |
 
 Both hooks fall back to a minimal hard-coded intent set if the JSON file is missing or corrupt — a fresh install never crashes a hook. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.

@@ -95,6 +95,58 @@ class TestCommandDetector:
         assert hook_module._detect_git_subcommand("git commit -m 'oops", ["commit"]) is False
 
 
+class TestApologyDetector:
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "sorry about that",
+            "My bad, I missed it.",
+            "you're right — that was wrong.",
+            "You are right, I should have asked.",
+            "That was my mistake.",
+            "my apologies for the confusion",
+            "My apology — let me fix it.",
+            "I apologize for the delay.",
+            "Apologise, rerunning now.",
+        ],
+    )
+    def test_apology_text_matches(self, hook_module, text):
+        assert hook_module._has_apology(text) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Here is the plan.",
+            "Running the tests now.",
+            "The right answer is 42.",
+            "No mistake was made.",
+            "",
+        ],
+    )
+    def test_non_apology_text_does_not_match(self, hook_module, text):
+        assert hook_module._has_apology(text) is False
+
+    def test_current_turn_extracts_only_since_last_user_message(self, hook_module, tmp_path):
+        path = tmp_path / "transcript.jsonl"
+        entries = [
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "OLD TURN sorry"}]}},
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "NEW TURN hello"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "more of new turn"}]}},
+        ]
+        path.write_text("\n".join(json.dumps(e) for e in entries))
+        text = hook_module._current_turn_assistant_text(str(path))
+        assert "NEW TURN" in text
+        assert "more of new turn" in text
+        assert "OLD TURN" not in text
+
+    def test_current_turn_handles_missing_file(self, hook_module, tmp_path):
+        assert hook_module._current_turn_assistant_text(str(tmp_path / "nope.jsonl")) == ""
+
+    def test_current_turn_handles_empty_path(self, hook_module):
+        assert hook_module._current_turn_assistant_text("") == ""
+
+
 class TestEnforcement:
     """End-to-end: run the hook as a subprocess against a temp
     enforcement_rules.json + workflow_state.json."""
@@ -229,6 +281,150 @@ class TestEnforcement:
             {"turn_tools_called": [], "turn_bypass_scopes": []},
             tmp_path,
             rules=[disabled],
+        )
+        assert r.stdout.strip() == ""
+
+    def _make_transcript(self, tmp_path: Path, assistant_text: str) -> Path:
+        """Build a minimal transcript JSONL: one user entry then one
+        assistant entry with the given text. Returns the file path."""
+        path = tmp_path / "transcript.jsonl"
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": assistant_text}],
+                },
+            },
+        ]
+        path.write_text("\n".join(json.dumps(l) for l in lines))
+        return path
+
+    def test_apology_denies_non_add_lesson_tool(self, tmp_path):
+        transcript = self._make_transcript(
+            tmp_path, "sorry, you're right about the qdrant lock issue."
+        )
+        r = self._run(
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": "echo hi"},
+                "transcript_path": str(transcript),
+            },
+            {"turn_tools_called": [], "turn_bypass_scopes": []},
+            tmp_path,
+            rules=[],
+        )
+        assert r.returncode == 0, r.stderr
+        payload = json.loads(r.stdout)
+        assert payload["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "apology-requires-add-lesson" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_apology_allows_add_lesson_through(self, tmp_path):
+        transcript = self._make_transcript(tmp_path, "sorry, my mistake.")
+        r = self._run(
+            {
+                "tool_name": "mcp__mgcp__add_lesson",
+                "tool_input": {"id": "x", "trigger": "y", "action": "z"},
+                "transcript_path": str(transcript),
+            },
+            {"turn_tools_called": [], "turn_bypass_scopes": []},
+            tmp_path,
+            rules=[],
+        )
+        assert r.stdout.strip() == ""
+
+    def test_apology_satisfied_after_add_lesson_called(self, tmp_path):
+        transcript = self._make_transcript(tmp_path, "my bad, you were right.")
+        r = self._run(
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": "echo ok"},
+                "transcript_path": str(transcript),
+            },
+            {
+                "turn_tools_called": ["mcp__mgcp__add_lesson"],
+                "turn_bypass_scopes": [],
+            },
+            tmp_path,
+            rules=[],
+        )
+        assert r.stdout.strip() == ""
+
+    def test_apology_bypass_scope_allows_through(self, tmp_path):
+        transcript = self._make_transcript(tmp_path, "sorry about that.")
+        r = self._run(
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": "echo ok"},
+                "transcript_path": str(transcript),
+            },
+            {"turn_tools_called": [], "turn_bypass_scopes": ["apology"]},
+            tmp_path,
+            rules=[],
+        )
+        assert r.stdout.strip() == ""
+
+    def test_non_apology_assistant_text_does_not_fire(self, tmp_path):
+        transcript = self._make_transcript(
+            tmp_path, "Here is the plan: read the file, edit it, commit."
+        )
+        r = self._run(
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": "echo ok"},
+                "transcript_path": str(transcript),
+            },
+            {"turn_tools_called": [], "turn_bypass_scopes": []},
+            tmp_path,
+            rules=[],
+        )
+        assert r.stdout.strip() == ""
+
+    def test_apology_in_previous_turn_does_not_fire(self, tmp_path):
+        # Apology was before a user message — current turn is clean.
+        path = tmp_path / "transcript.jsonl"
+        entries = [
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "sorry, my mistake!"}],
+                },
+            },
+            {"type": "user", "message": {"role": "user", "content": "ok continue"}},
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "proceeding with the plan."}],
+                },
+            },
+        ]
+        path.write_text("\n".join(json.dumps(e) for e in entries))
+        r = self._run(
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": "echo ok"},
+                "transcript_path": str(path),
+            },
+            {"turn_tools_called": [], "turn_bypass_scopes": []},
+            tmp_path,
+            rules=[],
+        )
+        assert r.stdout.strip() == ""
+
+    def test_apology_with_missing_transcript_fails_open(self, tmp_path):
+        r = self._run(
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": "echo ok"},
+                "transcript_path": str(tmp_path / "nope.jsonl"),
+            },
+            {"turn_tools_called": [], "turn_bypass_scopes": []},
+            tmp_path,
+            rules=[],
         )
         assert r.stdout.strip() == ""
 

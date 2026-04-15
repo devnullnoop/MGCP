@@ -1148,10 +1148,10 @@ class TestHookTemplates:
         assert HOOK_TEMPLATES_DIR.is_dir()
 
     def test_hook_templates_version_file_exists(self):
-        """VERSION file should exist in templates."""
+        """VERSION file should exist and be non-empty."""
         version_file = HOOK_TEMPLATES_DIR / "VERSION"
         assert version_file.exists()
-        assert version_file.read_text().strip() == "2.0"
+        assert version_file.read_text().strip()
 
     def test_all_v2_templates_exist(self):
         """All v2 hook template files should exist."""
@@ -1167,9 +1167,10 @@ class TestHookTemplates:
             compile(code, str(template), "exec")
 
     def test_get_hook_version(self):
-        """_get_hook_version should return version string."""
+        """_get_hook_version should match the VERSION file contents."""
         version = _get_hook_version()
-        assert version == "2.0"
+        expected = (HOOK_TEMPLATES_DIR / "VERSION").read_text().strip()
+        assert version == expected
 
 
 # ============================================================================
@@ -1341,7 +1342,7 @@ class TestVersionMarker:
 
         version_file = temp_project / ".claude" / "hooks" / VERSION_MARKER
         assert version_file.exists()
-        assert version_file.read_text().strip() == "2.0"
+        assert version_file.read_text().strip() == _get_hook_version()
 
     def test_upgrade_available_when_version_mismatch(self, temp_project):
         """Should report upgrade_available when version marker is outdated."""
@@ -1363,6 +1364,28 @@ class TestVersionMarker:
         result = init_claude_hooks(temp_project)
 
         assert result["upgrade_available"] is False
+
+    def test_auto_upgrade_overwrites_on_version_mismatch(self, temp_project):
+        """Stale hook files should be overwritten when the version marker is
+        behind the template VERSION, even without --force. Prevents the silent
+        drift that happens when hook code is edited but VERSION is not bumped
+        in sync on a fresh release."""
+        init_claude_hooks(temp_project)
+
+        hooks_dir = temp_project / ".claude" / "hooks"
+        version_file = hooks_dir / VERSION_MARKER
+        version_file.write_text("1.0\n")
+
+        # Corrupt an installed hook so we can detect the rewrite
+        stale = hooks_dir / "session-init.py"
+        stale.write_text("# stale content\n")
+
+        result = init_claude_hooks(temp_project)
+
+        assert result["upgrade_available"] is True
+        assert str(stale) in result["updated"]
+        assert stale.read_text() != "# stale content\n"
+        assert version_file.read_text().strip() == _get_hook_version()
 
 
 # ============================================================================
@@ -1499,7 +1522,7 @@ class TestGlobalHooks:
 
         version_file = hooks_dir / VERSION_MARKER
         assert version_file.exists()
-        assert version_file.read_text().strip() == "2.0"
+        assert version_file.read_text().strip() == _get_hook_version()
 
     def test_global_hooks_permissions(self, mock_global_paths):
         """Settings should include mcp__mgcp__* permission."""

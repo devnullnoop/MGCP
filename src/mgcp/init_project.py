@@ -481,14 +481,16 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False, force: bool = Fa
     if not dry_run:
         hooks_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check existing version marker
+    # Check existing version marker — auto-upgrade when marker is behind
+    # the template so silent drift can't happen again.
+    auto_upgrade = False
     if not force and version_file.exists():
         installed_version = version_file.read_text().strip()
-        if installed_version == current_version:
-            # All up to date - still need to check individual files
-            pass
-        else:
+        if installed_version != current_version:
             results["upgrade_available"] = True
+            auto_upgrade = True
+
+    overwrite = force or auto_upgrade
 
     # Build hook file list from templates
     hook_files = []
@@ -499,7 +501,7 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False, force: bool = Fa
     # Write all hook files
     for hook_file, hook_content in hook_files:
         if hook_file.exists():
-            if force:
+            if overwrite:
                 if dry_run:
                     results["would_update"].append(str(hook_file))
                 else:
@@ -516,8 +518,8 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False, force: bool = Fa
                 hook_file.chmod(0o755)
                 results["created"].append(str(hook_file))
 
-    # Remove legacy hook files when force is set
-    if force:
+    # Remove legacy hook files when we're overwriting
+    if overwrite:
         for legacy_name in LEGACY_HOOK_FILES:
             legacy_file = hooks_dir / legacy_name
             if legacy_file.exists():
@@ -619,11 +621,16 @@ def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
     if not dry_run:
         hooks_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check existing version marker
+    # Check existing version marker — auto-upgrade when marker is behind
+    # the template so silent drift can't happen again.
+    auto_upgrade = False
     if not force and version_file.exists():
         installed_version = version_file.read_text().strip()
         if installed_version != current_version:
             results["upgrade_available"] = True
+            auto_upgrade = True
+
+    overwrite = force or auto_upgrade
 
     # Copy hook scripts from templates to ~/.mgcp/hooks/
     for filename in V2_HOOK_FILES:
@@ -631,7 +638,7 @@ def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
         dst = hooks_dir / filename
 
         if dst.exists():
-            if force:
+            if overwrite:
                 if dry_run:
                     results["would_update"].append(str(dst))
                 else:
@@ -648,8 +655,8 @@ def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
                 dst.chmod(0o755)
                 results["created"].append(str(dst))
 
-    # Remove legacy hook files when force is set
-    if force:
+    # Remove legacy hook files when we're overwriting
+    if overwrite:
         for legacy_name in LEGACY_HOOK_FILES:
             legacy_file = hooks_dir / legacy_name
             if legacy_file.exists():
@@ -967,7 +974,10 @@ def _print_hook_results(hook_results: dict) -> None:
         print(f"    ! {e}")
 
     if hook_results["upgrade_available"]:
-        print("\n    Note: Hook upgrade available. Run with --force to upgrade.")
+        if hook_results["updated"]:
+            print("\n    Hooks auto-upgraded to new template version.")
+        elif hook_results["would_update"]:
+            print("\n    Hook upgrade pending (dry-run). Re-run without --dry-run to apply.")
 
 
 def main():

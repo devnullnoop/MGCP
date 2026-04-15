@@ -2,11 +2,22 @@
 
 import json
 import os
+import shlex
 import shutil
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def _hook_python_command() -> str:
+    """Return the quoted python interpreter command for hook settings.
+
+    Using ``sys.executable`` makes hooks portable across Windows (where
+    the default is ``python``, not ``python3``) and across virtualenvs.
+    The path is shell-quoted so installs under paths with spaces work.
+    """
+    return shlex.quote(sys.executable)
 
 
 def get_mgcp_python_path() -> str:
@@ -233,7 +244,7 @@ def _build_hook_settings() -> dict:
     for filename, (event_type, matcher) in V2_HOOK_FILES.items():
         entry_hook = {
             "type": "command",
-            "command": f"python3 $CLAUDE_PROJECT_DIR/.claude/hooks/{filename}",
+            "command": f"{_hook_python_command()} $CLAUDE_PROJECT_DIR/.claude/hooks/{filename}",
         }
         entry: dict = {"hooks": [entry_hook]}
         if matcher:
@@ -271,7 +282,7 @@ def _build_global_hook_settings() -> dict:
         abs_path = GLOBAL_HOOKS_DIR / filename
         entry_hook = {
             "type": "command",
-            "command": f"python3 {abs_path}",
+            "command": f"{_hook_python_command()} {shlex.quote(str(abs_path))}",
         }
         entry: dict = {"hooks": [entry_hook]}
         if matcher:

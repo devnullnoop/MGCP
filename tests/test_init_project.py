@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import stat
 import subprocess
 import sys
@@ -1639,8 +1640,11 @@ class TestGlobalHooks:
 
         for cmd in all_commands:
             assert "$CLAUDE_PROJECT_DIR" not in cmd
-            # Command should start with python3 followed by an absolute path
-            assert cmd.startswith("python3 /") or cmd.startswith("python3 C:"), f"Not absolute: {cmd}"
+            # Command should be "<abs interpreter> <abs hook path>"; both absolute.
+            parts = shlex.split(cmd)
+            assert len(parts) == 2, f"Expected 'interpreter hookpath', got: {cmd}"
+            assert os.path.isabs(parts[0]), f"Interpreter not absolute: {parts[0]}"
+            assert os.path.isabs(parts[1]), f"Hook path not absolute: {parts[1]}"
 
 
 # ============================================================================

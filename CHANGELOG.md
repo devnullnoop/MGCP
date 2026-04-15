@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (v2.3 hook templates — PreToolUse enforcement)
+- **`src/mgcp/hook_templates/pre-tool-dispatcher.py`**: First ENFORCING MGCP hook. Prior hooks (SessionStart, UserPromptSubmit, PostToolUse, PreCompact) are all advisory — they inject text as `<system-reminder>` tags that the LLM may skim or ignore. PreToolUse returns `permissionDecision: "deny"` and the tool call is refused by the Claude Code harness. First enforced rule: `git commit` / `git push` is blocked unless `mcp__mgcp__query_lessons` ran in the same turn. Bypass token `MGCP_BYPASS` in the user prompt disables enforcement for that turn.
+- **Quote-aware command detection**: the detector uses `shlex.shlex(..., punctuation_chars=True)` + `whitespace_split=True` so quoted strings stay as single tokens and shell operators (`;`, `&&`, `||`, `|`, `()`) become their own tokens. `grep 'git commit' docs/` and `echo "how to git commit"` correctly pass through; `make build && git push` correctly blocks.
+- **Per-turn state in `workflow_state.json`**: UserPromptSubmit resets `turn_query_lessons_called = False` every message and sets `turn_bypass` from the prompt. PostToolUse flips `turn_query_lessons_called = True` when the tool runs. PreToolUse reads both.
+- **`docs/mgcp-interception-flow.html`**: Comprehensive mermaid.js flowchart of all 5 hook interception points (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PreCompact), the growth loop, data stores touched per session, and 10 known gaps with remediation ideas. Per project convention (HTML over ASCII art).
+- **`tests/test_pre_tool_dispatcher.py`**: 14 tests covering detector true/false positives (including the quoted-string false-positive the naive regex hit during bring-up), subprocess-level deny/allow/bypass flows, and fail-open behavior on malformed state or input.
+
+### Changed (v2.3 hook templates)
+- **`hook_templates/VERSION`**: 2.2 → 2.3. The installer auto-upgrades installed hooks in `~/.mgcp/hooks/` when the on-disk marker is behind the template version (previously required `--force`, which was the root cause of the silent v2.0 → v2.2 drift).
+- **`V2_HOOK_FILES`** in `init_project.py` registers the new `pre-tool-dispatcher.py` under `PreToolUse`.
+- **`post-tool-dispatcher.py`** now flips the turn_query_lessons_called flag on `mcp__mgcp__query_lessons` invocations.
+- **`user-prompt-dispatcher.py`** resets per-turn state and detects the `MGCP_BYPASS` token.
+
 ### Added (v2.3 — intent → skill compiler)
 - **`src/mgcp/skill_compiler.py`**: Compiles MGCP intents into Anthropic-format SKILL.md files at `~/.claude/skills/{name}/SKILL.md` (user scope) or `<project>/.claude/skills/{name}/SKILL.md` (project scope). Walks `intent → linked_workflow → ordered steps → lessons-per-step` and inlines all four layers into a single self-contained document. Includes a generation header marking the file as machine-generated, gate_message rendered as a STOP preamble, action template, full workflow with checklists and lesson actions/rationales inlined per step, and a categorization tags footer.
 - **`linked_workflow: str | None`** field on `IntentDefinition` so intents can declare which workflow's steps should be inlined when compiling. Optional and explicit (rather than discovered at compile time via semantic match) so compilation is reproducible across embedding model updates.

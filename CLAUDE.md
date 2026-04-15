@@ -217,14 +217,17 @@ Data is stored in `~/.mgcp/` by default.
 
 MGCP v2.2 makes the routing prompt **data, not code**. The intent classification system has 8 intent categories (`git_operation`, `catalogue_dependency`, `catalogue_security`, `catalogue_decision`, `catalogue_arch_note`, `catalogue_convention`, `task_start`, `session_end`) defined in `~/.mgcp/intent_config.json`. Both Claude Code hooks and the REM intent_calibration operation read from this file. Adding or modifying an intent no longer requires editing hook code or shipping a release — you edit the JSON (or call `add_intent` / `update_intent` MCP tools, or let REM propose the change) and the next session picks it up automatically.
 
-| Hook | Event | Purpose |
-|------|-------|---------|
-| `session-init.py` | SessionStart | Inject routing prompt + intent-action map (loaded from `intent_config.json`) plus workflow instructions |
-| `user-prompt-dispatcher.py` | UserPromptSubmit | Hard keyword gates (loaded from `intent_config.json` — both git AND session_end fire from one loop), terse routing re-injection, scheduled reminders, workflow state |
-| `post-tool-dispatcher.py` | PostToolUse | Routes by tool: Edit/Write triggers knowledge-capture checkpoint; Bash triggers error detection with cooldown |
-| `mgcp-precompact.py` | PreCompact | Critical reminder to save context (and write_soliloquy) before context compression |
+| Hook | Event | Type | Purpose |
+|------|-------|------|---------|
+| `session-init.py` | SessionStart | advisory | Inject routing prompt + intent-action map (loaded from `intent_config.json`) plus workflow instructions |
+| `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Hard keyword gates (loaded from `intent_config.json` — both git AND session_end fire from one loop), terse routing re-injection, scheduled reminders, workflow state, per-turn enforcement state reset, `MGCP_BYPASS` token detection |
+| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Refuses `git commit`/`git push` Bash calls unless `mcp__mgcp__query_lessons` ran in the same turn. Uses `shlex(punctuation_chars=True)` for quote-aware tokenization so `grep 'git commit' docs/` does not false-positive. Bypass per turn with `MGCP_BYPASS` in the user prompt. |
+| `post-tool-dispatcher.py` | PostToolUse | advisory | Routes by tool: Edit/Write triggers knowledge-capture checkpoint; Bash triggers error detection with cooldown; `mcp__mgcp__query_lessons` flips the per-turn flag consumed by PreToolUse |
+| `mgcp-precompact.py` | PreCompact | advisory | Critical reminder to save context (and write_soliloquy) before context compression |
 
-Both hooks fall back to a minimal hard-coded intent set if the JSON file is missing or corrupt, so a fresh install never crashes. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
+Advisory hooks fall back to a minimal hard-coded intent set if the JSON file is missing or corrupt, so a fresh install never crashes. The PreToolUse hook fails open (allows the tool call) on any parse error — enforcement is a net, not a tripwire. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
+
+**Advisory vs. enforcing.** The first four hooks inject text into `<system-reminder>` tags that the LLM may skim or ignore. `pre-tool-dispatcher.py` is different: it returns `permissionDecision: "deny"` with a `reason` string and the Claude Code harness refuses to run the tool. This addresses the repeated failure mode where `query-before-git-operations` was violated (v1→v4) despite correct hook fires. See `docs/mgcp-interception-flow.html` for the full interception map and remaining enforcement gaps.
 
 **Growth loop:** REM intent_calibration runs community detection on the lesson graph and surfaces findings when (a) a community has unmapped tags or (b) a community spans multiple intents with no clear dominant (< 60% share) — the latter check catches misfit clusters that the v2.1 hand-coded `tag_to_intent` map silenced via defensive over-mapping. Findings include structured `proposed_patch` metadata so the LLM (or a future automated writeback path) can call `add_intent`/`update_intent` directly. Lesson community → REM finding → intent_config update → next session's hook injection picks up the new intent. No code commit required.
 

@@ -283,14 +283,21 @@ The compiled skill is **purely additive**. The intent stays in `intent_config.js
 
 A new `compile_intent_to_skill` MCP tool, a `POST /api/intent-config/intents/{name}/compile` web endpoint, and a "Compile to skill" button on the `/intents` page all converge on the same `compile_intent_to_skill()` function. The web UI badges compiled skills as **fresh** (green) or **stale** (orange) by comparing the SKILL.md mtime against the backing lessons' `last_refined` timestamps and the `intent_config.json` mtime, so users know when to recompile.
 
+### v2.3 hook templates: enforcement, not just advice
+
+All prior hooks (SessionStart, UserPromptSubmit, PostToolUse, PreCompact) are **advisory** — they inject text as `<system-reminder>` tags that the LLM can skim or ignore. The `query-before-git-operations` lesson failed v1 → v4 across months despite the hook firing correctly every time; interception was not compliance.
+
+v2.3 adds a `PreToolUse` hook (`pre-tool-dispatcher.py`) that can actually refuse a tool call by returning `permissionDecision: "deny"`. First enforced rule: `git commit` / `git push` is blocked unless `mcp__mgcp__query_lessons` ran in the same turn. To opt out for a single turn, include the token `MGCP_BYPASS` anywhere in the user prompt. The detector uses quote-aware tokenization (`shlex` with `punctuation_chars=True`), so `grep 'git commit' docs/` and `echo "how to git commit"` correctly pass through while `make build && git push` correctly blocks. See `docs/mgcp-interception-flow.html` for the full interception map, the growth loop, and candidate improvement areas.
+
 ### Current hooks
 
-| Hook | Event | Purpose |
-|------|-------|---------|
-| `session-init.py` | SessionStart | Inject routing prompt + intent-action map (loaded from `intent_config.json`) plus workflow instructions |
-| `user-prompt-dispatcher.py` | UserPromptSubmit | Hard keyword gates (data-driven from `intent_config.json` — both git and session_end fire from one loop), terse routing re-injection, scheduled reminders, workflow state |
-| `post-tool-dispatcher.py` | PostToolUse | Routes by tool: Edit/Write triggers knowledge-capture; Bash triggers error detection |
-| `mgcp-precompact.py` | PreCompact | Save context (and write_soliloquy) before compression |
+| Hook | Event | Type | Purpose |
+|------|-------|------|---------|
+| `session-init.py` | SessionStart | advisory | Inject routing prompt + intent-action map (loaded from `intent_config.json`) plus workflow instructions |
+| `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Hard keyword gates (data-driven from `intent_config.json` — both git and session_end fire from one loop), terse routing re-injection, scheduled reminders, workflow state, per-turn enforcement state reset |
+| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Refuses `git commit`/`git push` when `query_lessons` hasn't run this turn (unless `MGCP_BYPASS` in prompt) |
+| `post-tool-dispatcher.py` | PostToolUse | advisory | Routes by tool: Edit/Write triggers knowledge-capture; Bash triggers error detection; `query_lessons` flips the PreToolUse gate flag |
+| `mgcp-precompact.py` | PreCompact | advisory | Save context (and write_soliloquy) before compression |
 
 Both hooks fall back to a minimal hard-coded intent set if the JSON file is missing or corrupt — a fresh install never crashes a hook. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
 

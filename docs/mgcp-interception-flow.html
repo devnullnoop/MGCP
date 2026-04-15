@@ -113,6 +113,7 @@
   <a href="#growth-loop">Growth loop</a>
   <a href="#data-stores">Data stores</a>
   <a href="#gaps">Known gaps</a>
+  <a href="#recipes">Recipes</a>
 </nav>
 
 <h2 id="big-picture">1. Big picture — five hook interception points</h2>
@@ -223,7 +224,7 @@ flowchart TD
   N --> P[Re-inject terse routing block<br/>survives context compaction]
   O --> P
   P --> Q[Load workflow_state.json]
-  Q --> R{Scheduled reminder<br/>due? (counter or timer)}
+  Q --> R{"Scheduled reminder<br/>due? (counter or timer)"}
   R -- yes --> S[Emit scheduled-reminder block<br/>+ consume reminder state]
   R -- no --> T[Skip]
   S --> V{Active workflow<br/>not complete?}
@@ -402,7 +403,7 @@ flowchart TB
     C1[intent_config.json]
   end
   subgraph STATE["Ephemeral state"]
-    S1[workflow_state.json<br/><i>call counter, active workflow,<br/>scheduled reminders,<br/>turn_tools_called (list),<br/>turn_bypass_scopes (list)</i>]
+    S1["workflow_state.json<br/><i>call counter, active workflow,<br/>scheduled reminders,<br/>turn_tools_called list,<br/>turn_bypass_scopes list</i>"]
     S2[reminder_state.json]
     S3[error_detector_state.json<br/><i>bash error cooldown</i>]
   end
@@ -463,10 +464,10 @@ flowchart TB
 </tr>
 <tr>
   <td>5</td>
-  <td>open</td>
+  <td style="color:#88cc88">mechanism ✓</td>
   <td>PostToolUse is best-effort</td>
   <td>Edit/Write checkpoint emitted every time but often skipped by LLM</td>
-  <td>PreToolUse gate on the <em>next</em> Edit/Write: require at least one <code>add_catalogue_item</code> since the last N edits</td>
+  <td><strong>v2.4 enables this:</strong> one <code>add_enforcement_rule</code> call with <code>trigger: Edit</code> and <code>precondition: tool_called_this_turn(add_catalogue_item)</code>. Not enabled by default because it's aggressive; users opt in per-project.</td>
 </tr>
 <tr>
   <td>6</td>
@@ -477,10 +478,10 @@ flowchart TB
 </tr>
 <tr>
   <td>7</td>
-  <td>open</td>
+  <td style="color:#88cc88">resolved ✓</td>
   <td>Windows hook portability</td>
-  <td><code>settings.json</code> hardcodes <code>python3</code>; Windows default is <code>python</code></td>
-  <td>Use <code>sys.executable</code> or per-OS command in <code>_build_global_hook_settings</code></td>
+  <td><del><code>settings.json</code> hardcodes <code>python3</code>; Windows default is <code>python</code></del></td>
+  <td><strong>Done in v2.4.</strong> <code>_hook_python_command()</code> returns <code>shlex.quote(sys.executable)</code>, so installed hooks use the same interpreter that ran <code>mgcp-init</code> — portable across Windows / venvs / paths with spaces.</td>
 </tr>
 <tr>
   <td>8</td>
@@ -491,10 +492,10 @@ flowchart TB
 </tr>
 <tr>
   <td>9</td>
-  <td style="color:#ffb86b">new</td>
+  <td style="color:#88cc88">mechanism ✓</td>
   <td>Doc/code parity not enforced</td>
-  <td>Code changes land without updating architecture docs that describe them (this flowchart was almost shipped stale after adding PreToolUse)</td>
-  <td>PreToolUse gate on <code>git commit</code>: if staged diff touches paths flagged in a doc-coupling map (e.g. <code>hook_templates/*</code> ↔ <code>docs/mgcp-interception-flow.html</code>), require that the coupled doc is also staged. Reuse the catalogue's existing <code>coupling</code> item type.</td>
+  <td>Code changes land without updating architecture docs that describe them</td>
+  <td><strong>v2.4 ships the <code>staged_files_coupling</code> precondition for exactly this.</strong> One <code>add_enforcement_rule</code> call per coupling, e.g. "if <code>src/mgcp/hook_templates/*</code> is staged, require <code>docs/mgcp-interception-flow.html</code>". Not shipped as a default because couplings are project-specific; maintainers add the rules matching their repo layout.</td>
 </tr>
 <tr>
   <td>10</td>
@@ -504,6 +505,60 @@ flowchart TB
   <td><strong>Done.</strong> Each rule has a <code>bypass_scope</code>; <code>MGCP_BYPASS:&lt;scope&gt;</code> disables only matching rules; bare <code>MGCP_BYPASS</code> still disables all for convenience.</td>
 </tr>
 </table>
+</div>
+
+<h2 id="recipes">10. Recipes — the remaining open gaps are one-liners</h2>
+<div class="panel">
+<p>v2.4 turned gaps #5 and #9 into chat-time config changes. Below are the exact calls a maintainer can make to close them for their project. These are examples — pick the ones that fit your workflow.</p>
+
+<h3>Doc/code parity (gap #9)</h3>
+<pre><code>add_enforcement_rule(
+  name="hooks-require-flowchart-update",
+  trigger={"tool_name": "Bash",
+           "command_match": {"type": "git_subcommand",
+                             "subcommands": ["commit"]}},
+  preconditions=[{
+    "type": "staged_files_coupling",
+    "couplings": [{
+      "when_staged": ["src/mgcp/hook_templates/*"],
+      "require_one_of": ["docs/mgcp-interception-flow.html"]
+    }]
+  }],
+  bypass_scope="docs",
+  deny_reason="Hook template changed; stage the interception flowchart too "
+              "or run MGCP_BYPASS:docs to skip."
+)</code></pre>
+
+<h3>CHANGELOG discipline</h3>
+<pre><code>add_enforcement_rule(
+  name="src-requires-changelog",
+  trigger={"tool_name": "Bash",
+           "command_match": {"type": "git_subcommand",
+                             "subcommands": ["commit"]}},
+  preconditions=[{
+    "type": "staged_files_coupling",
+    "couplings": [{
+      "when_staged": ["src/**/*.py"],
+      "require_one_of": ["CHANGELOG.md"]
+    }]
+  }],
+  bypass_scope="changelog",
+  deny_reason="Code change without CHANGELOG entry. Bypass with MGCP_BYPASS:changelog."
+)</code></pre>
+
+<h3>Edit requires catalogue capture (gap #5)</h3>
+<pre><code>add_enforcement_rule(
+  name="edit-requires-catalogue-capture",
+  trigger={"tool_name": "Edit"},
+  preconditions=[{
+    "type": "tool_called_this_turn",
+    "tool_name": "mcp__mgcp__add_catalogue_item"
+  }],
+  bypass_scope="edit",
+  deny_reason="Capture the pattern/gotcha/coupling you learned before editing. "
+              "Bypass with MGCP_BYPASS:edit for trivial edits."
+)</code></pre>
+<p><em>This one's aggressive — it blocks every Edit until you call <code>add_catalogue_item</code>. Consider starting with <code>toggle_enforcement_rule(name=..., enabled=False)</code> and enabling only during deliberate capture sessions.</em></p>
 </div>
 
 <p class="lead" style="margin-top: 3rem; font-size: 0.9rem;">

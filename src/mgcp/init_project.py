@@ -203,6 +203,7 @@ LEGACY_HOOK_FILES = [
 V2_HOOK_FILES = {
     "session-init.py": ("SessionStart", None),
     "user-prompt-dispatcher.py": ("UserPromptSubmit", None),
+    "pre-tool-dispatcher.py": ("PreToolUse", None),
     "post-tool-dispatcher.py": ("PostToolUse", None),
     "mgcp-precompact.py": ("PreCompact", None),
 }

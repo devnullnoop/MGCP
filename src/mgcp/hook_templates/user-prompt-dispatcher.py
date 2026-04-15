@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit dispatcher for MGCP v2.2.
+"""UserPromptSubmit dispatcher for MGCP v2.3.
 
 Responsibilities:
 1. Read keyword gates and the terse routing block from intent_config.json.
@@ -8,6 +8,8 @@ Responsibilities:
    context compaction.
 4. Surface scheduled reminders (counter/timer-based).
 5. Inject active workflow state.
+6. Reset per-turn enforcement state (for PreToolUse gate) and detect the
+   ``MGCP_BYPASS`` opt-out token.
 
 The intent gates and routing prompt are loaded from
 ``~/.mgcp/intent_config.json`` (override with ``MGCP_DATA_DIR``). Editing
@@ -170,6 +172,12 @@ def main():
 
     state = _load_state()
     state["current_call_count"] = state.get("current_call_count", 0) + 1
+
+    # Per-turn enforcement state (consumed by pre-tool-dispatcher.py).
+    # Resets every message so each turn gets fresh accounting.
+    state["turn_query_lessons_called"] = False
+    state["turn_bypass"] = bool(re.search(r"MGCP_BYPASS", prompt, re.IGNORECASE))
+
     _save_state(state)
 
     # 2. Check scheduled reminders

@@ -492,10 +492,11 @@ class TestClaudeHooks:
         """Should return list of created files."""
         result = init_claude_hooks(temp_project)
 
-        # Creates 4 hook scripts + settings.json = 5 files
-        assert len(result["created"]) == 5
+        # All hook scripts + settings.json
+        assert len(result["created"]) == len(V2_HOOK_FILES) + 1
         assert any("session-init.py" in f for f in result["created"])
         assert any("user-prompt-dispatcher.py" in f for f in result["created"])
+        assert any("pre-tool-dispatcher.py" in f for f in result["created"])
         assert any("post-tool-dispatcher.py" in f for f in result["created"])
         assert any("mgcp-precompact.py" in f for f in result["created"])
         assert any("settings.json" in f for f in result["created"])
@@ -724,13 +725,13 @@ class TestIntegration:
 
     def test_idempotent_hooks(self, temp_project):
         """Running hook init twice should be idempotent."""
-        # First run - creates 4 hook scripts + settings.json = 5 files
+        expected = len(V2_HOOK_FILES) + 1  # hooks + settings.json
         result1 = init_claude_hooks(temp_project)
-        assert len(result1["created"]) == 5
+        assert len(result1["created"]) == expected
 
-        # Second run - all hooks should be skipped, settings.json skipped too
+        # Second run — all hooks skipped, settings.json skipped too
         result2 = init_claude_hooks(temp_project)
-        assert len(result2["skipped"]) == 5
+        assert len(result2["skipped"]) == expected
         assert len(result2["created"]) == 0
 
 
@@ -1044,8 +1045,8 @@ class TestDryRun:
         """Dry run should not create hook files."""
         result = init_claude_hooks(temp_project, dry_run=True)
 
-        # Would create 4 hook scripts + settings.json = 5 files
-        assert len(result["would_create"]) == 5
+        # Would create all hook scripts + settings.json
+        assert len(result["would_create"]) == len(V2_HOOK_FILES) + 1
         assert len(result["created"]) == 0
         assert not (temp_project / ".claude").exists()
 

@@ -4,14 +4,43 @@
 Routes post-tool actions by tool_name:
 - Edit/Write: knowledge-capture checkpoint (patterns, gotchas, couplings)
 - Bash: error detection with cooldown (self-correction + lesson capture)
+- mcp__mgcp__query_lessons: flip per-turn enforcement flag consumed by
+  pre-tool-dispatcher.py's git gate.
 
 Single hook, single matcher (no filter — handles all tools internally).
 """
 import json
+import os
 import re
 import sys
 import time
 from pathlib import Path
+
+WORKFLOW_STATE_FILE = Path(
+    os.environ.get(
+        "MGCP_STATE_FILE",
+        str(Path.home() / ".mgcp" / "workflow_state.json"),
+    )
+)
+
+
+def _mark_query_lessons_called() -> None:
+    """Flip the per-turn flag consumed by pre-tool-dispatcher.py.
+
+    Fails silently — losing enforcement is preferable to crashing the hook.
+    """
+    try:
+        if WORKFLOW_STATE_FILE.exists():
+            with open(WORKFLOW_STATE_FILE) as f:
+                state = json.load(f)
+        else:
+            state = {}
+        state["turn_query_lessons_called"] = True
+        WORKFLOW_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(WORKFLOW_STATE_FILE, "w") as f:
+            json.dump(state, f, indent=2)
+    except (json.JSONDecodeError, OSError):
+        pass
 
 # --- Bash error detection ---
 
@@ -125,6 +154,11 @@ def main():
         sys.exit(0)
 
     tool_name = hook_input.get("tool_name", "")
+
+    # Record that query_lessons ran this turn so pre-tool-dispatcher.py
+    # can clear its git enforcement gate.
+    if tool_name == "mcp__mgcp__query_lessons":
+        _mark_query_lessons_called()
 
     if tool_name in ("Edit", "Write"):
         handle_edit_write()

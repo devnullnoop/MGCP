@@ -58,6 +58,22 @@ ENFORCEMENT_CONFIG = Path(
 
 SHELL_SEPARATORS = {"&&", "||", "&", ";", ";;", "|", "(", ")", "{", "}"}
 BYPASS_ALL = "*"
+APOLOGY_BYPASS_SCOPE = "apology"
+ADD_LESSON_TOOL = "mcp__mgcp__add_lesson"
+
+# Apology markers that must immediately trigger an add_lesson call.
+# Rule: if the assistant's current turn contains any of these patterns,
+# the very next tool call must be add_lesson — anything else is denied.
+# The gate clears naturally on the next user prompt (turn_tools_called reset).
+APOLOGY_PATTERNS = [
+    re.compile(r"\bsorry\b", re.IGNORECASE),
+    re.compile(r"\bmy bad\b", re.IGNORECASE),
+    re.compile(r"\byou'?re right\b", re.IGNORECASE),
+    re.compile(r"\byou are right\b", re.IGNORECASE),
+    re.compile(r"\bmy mistake\b", re.IGNORECASE),
+    re.compile(r"\bmy apolog(?:y|ies)\b", re.IGNORECASE),
+    re.compile(r"\bapologi[sz]e\b", re.IGNORECASE),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +125,53 @@ def _trigger_matches(trigger: dict, tool_name: str, tool_input: dict) -> bool:
     if cm_type == "contains":
         return cm.get("pattern", "") in command
     return False
+
+
+# ---------------------------------------------------------------------------
+# Apology gate (hardcoded — trigger is assistant text, not a tool arg)
+# ---------------------------------------------------------------------------
+
+
+def _has_apology(text: str) -> bool:
+    return any(p.search(text) for p in APOLOGY_PATTERNS)
+
+
+def _current_turn_assistant_text(transcript_path: str) -> str:
+    """Concatenate assistant text blocks emitted since the most recent user turn.
+
+    Walks the transcript JSONL backwards stopping at the first user entry.
+    Falls back to empty string on any read/parse error (fail open).
+    """
+    if not transcript_path:
+        return ""
+    try:
+        with open(transcript_path) as f:
+            lines = f.readlines()
+    except (OSError, IOError):
+        return ""
+    parts = []
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        etype = entry.get("type")
+        if etype == "user":
+            break
+        if etype != "assistant":
+            continue
+        msg = entry.get("message") or {}
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+        elif isinstance(content, str):
+            parts.append(content)
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -245,12 +308,34 @@ def main():
     project_dir = hook_input.get("cwd") or os.getcwd()
 
     rules = _load_rules()
-    if not rules:
-        _allow()
-
     state = _load_state()
     bypass_scopes = set(state.get("turn_bypass_scopes") or [])
     if BYPASS_ALL in bypass_scopes:
+        _allow()
+
+    # Apology gate: if this turn's assistant text contains an apology and
+    # add_lesson hasn't been called yet, the only permitted tool is
+    # add_lesson itself. Rationale: MEMORY.md rule that apologies must
+    # immediately trigger a knowledge write, promoted from passive note
+    # to hard enforcement. Bypass with MGCP_BYPASS:apology. Runs
+    # independently of enforcement_rules.json — this is a first-class
+    # gate, not a data rule, because its trigger is assistant text not a
+    # tool arg.
+    if (
+        tool_name != ADD_LESSON_TOOL
+        and APOLOGY_BYPASS_SCOPE not in bypass_scopes
+        and ADD_LESSON_TOOL not in (state.get("turn_tools_called") or [])
+    ):
+        transcript_path = hook_input.get("transcript_path", "")
+        if _has_apology(_current_turn_assistant_text(transcript_path)):
+            _deny([
+                "[apology-requires-add-lesson] You apologized in this turn. "
+                "Before any other tool call, call mcp__mgcp__add_lesson "
+                "capturing what you should do differently next time. "
+                "Bypass: include MGCP_BYPASS:apology in the next user prompt."
+            ])
+
+    if not rules:
         _allow()
 
     denials = []

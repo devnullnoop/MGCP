@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MGCP Interception Flow</title>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'dark', flowchart: { curve: 'basis' } });
+</script>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171b22;
+    --border: #2a3140;
+    --accent: #7ab8ff;
+    --text: #d7dde6;
+    --muted: #8a94a6;
+    --warn: #ffb86b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 2rem 3rem 6rem;
+    line-height: 1.55;
+  }
+  h1 { color: var(--accent); margin-top: 0; }
+  h2 {
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.3rem;
+    margin-top: 3rem;
+  }
+  h3 { color: var(--text); margin-top: 2rem; }
+  .lead {
+    color: var(--muted);
+    max-width: 64rem;
+    font-size: 1.05rem;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    margin: 1.25rem 0;
+  }
+  .mermaid { text-align: center; margin: 1rem 0; }
+  nav {
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2rem;
+    z-index: 10;
+  }
+  nav a {
+    color: var(--accent);
+    text-decoration: none;
+    margin-right: 1.25rem;
+    font-size: 0.9rem;
+  }
+  nav a:hover { text-decoration: underline; }
+  code {
+    background: #0b0e13;
+    color: var(--warn);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.88em;
+  }
+  table {
+    border-collapse: collapse;
+    margin: 1rem 0;
+    width: 100%;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #1e2430; color: var(--accent); }
+  tr:nth-child(even) td { background: #141820; }
+  .callout {
+    border-left: 3px solid var(--warn);
+    background: #20180d;
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+    color: var(--text);
+    border-radius: 0 4px 4px 0;
+  }
+  .callout strong { color: var(--warn); }
+</style>
+</head>
+<body>
+
+<h1>MGCP Interception Flow</h1>
+<p class="lead">
+  Every arrow is a point where MGCP gets to shape the LLM's next action. The goal of this
+  document is to make every interception visible so gaps and weak points stand out.
+  Source of truth for routing: <code>~/.mgcp/intent_config.json</code>.
+</p>
+
+<nav>
+  <a href="#big-picture">Big picture</a>
+  <a href="#session-start">SessionStart</a>
+  <a href="#user-prompt">UserPromptSubmit</a>
+  <a href="#pre-tool">PreToolUse</a>
+  <a href="#post-tool">PostToolUse</a>
+  <a href="#pre-compact">PreCompact</a>
+  <a href="#growth-loop">Growth loop</a>
+  <a href="#data-stores">Data stores</a>
+  <a href="#gaps">Known gaps</a>
+</nav>
+
+<h2 id="big-picture">1. Big picture — five hook interception points</h2>
+<div class="panel">
+<p>Claude Code fires five hook events during a session. MGCP owns one Python script per event. Four are <strong>advisory</strong> (inject text the LLM may skim or ignore); one is <strong>enforcing</strong> (can refuse a tool call outright).</p>
+<div class="mermaid">
+flowchart LR
+  subgraph CC["Claude Code harness"]
+    direction TB
+    A1[Session opens]
+    A2[User types message]
+    A3[LLM about to call a tool]
+    A3b[LLM tool finished]
+    A4[Context about to compact]
+  end
+
+  subgraph HOOKS["MGCP hooks (~/.mgcp/hooks/)"]
+    direction TB
+    H1["session-init.py<br/><i>SessionStart</i><br/>advisory"]
+    H2["user-prompt-dispatcher.py<br/><i>UserPromptSubmit</i><br/>advisory"]
+    H3["pre-tool-dispatcher.py<br/><i>PreToolUse</i><br/><b>ENFORCING</b>"]
+    H4["post-tool-dispatcher.py<br/><i>PostToolUse</i><br/>advisory"]
+    H5["mgcp-precompact.py<br/><i>PreCompact</i><br/>advisory"]
+  end
+
+  subgraph LLM["LLM's next turn"]
+    direction TB
+    L1[Receives injected context / decision]
+    L2[Reads → decides next action]
+  end
+
+  A1 --> H1 --> L1
+  A2 --> H2 --> L1
+  A3 --> H3 -->|"deny → tool refused"| L1
+  A3 -.->|"allow"| A3b
+  A3b --> H4 --> L1
+  A4 --> H5 --> L1
+  L1 --> L2
+
+  classDef hook fill:#1c2a3e,stroke:#7ab8ff,color:#d7dde6;
+  classDef enforce fill:#3a1f1f,stroke:#ff7777,color:#ffe2e2;
+  classDef stage fill:#171b22,stroke:#2a3140,color:#d7dde6;
+  class H1,H2,H4,H5 hook;
+  class H3 enforce;
+  class A1,A2,A3,A3b,A4,L1,L2 stage;
+</div>
+</div>
+
+<div class="callout">
+<strong>The advisory-vs-enforcing distinction:</strong> SessionStart / UserPromptSubmit / PostToolUse / PreCompact
+inject text as <code>&lt;system-reminder&gt;</code> tags — the LLM can skim or ignore them (which is how
+<code>query-before-git-operations</code> failed v1→v4). <strong>PreToolUse is different</strong>: it returns
+<code>permissionDecision: deny</code> and the tool call is refused by the harness. Interception = compliance.
+Rule currently enforced: <code>git commit</code> / <code>git push</code> requires <code>query_lessons</code>
+in the same turn (bypass with <code>MGCP_BYPASS</code> token in prompt).
+</div>
+
+<h2 id="session-start">2. SessionStart — <code>session-init.py</code></h2>
+<div class="panel">
+<p>Single shot per session. Reads <code>intent_config.json</code> (v2.2+), checks whether a REM cycle is due, and injects the routing contract the LLM is supposed to follow for the rest of the conversation.</p>
+<div class="mermaid">
+flowchart TD
+  S([SessionStart event]) --> A[Read intent_config.json]
+  A --> B{Config present?}
+  B -- yes --> C[Use rendered.session_init_routing +<br/>rendered.session_init_actions]
+  B -- no/corrupt --> D[Fall back to hard-coded<br/>minimal routing block]
+  C --> E[Query lessons.db: REM due?]
+  D --> E
+  E --> F{REM overdue<br/>≥ 5 sessions?}
+  F -- yes --> G[Inject extra step:<br/>'Call rem_run then<br/>present findings']
+  F -- no --> H[Skip REM injection]
+  G --> I[Emit hookSpecificOutput.additionalContext]
+  H --> I
+  I --> Z([LLM first turn begins])
+
+  style S fill:#1c2a3e,stroke:#7ab8ff
+  style Z fill:#1c2a3e,stroke:#7ab8ff
+  style C fill:#1b2e1b,stroke:#88cc88
+  style D fill:#2e1b1b,stroke:#cc8888
+  style G fill:#2e281b,stroke:#ffb86b
+</div>
+
+<h3>What it injects</h3>
+<table>
+<tr><th>Block</th><th>Purpose</th></tr>
+<tr><td>Project context instructions</td><td>Tells the LLM to call <code>get_project_context</code> and <code>query_lessons</code> BEFORE addressing the user.</td></tr>
+<tr><td><code>&lt;intent-routing&gt;</code></td><td>The 8-intent classification prompt (loaded from config).</td></tr>
+<tr><td><code>&lt;intent-actions&gt;</code></td><td>What tool to call per intent.</td></tr>
+<tr><td>Workflow instructions</td><td>How to execute multi-step workflows with reminders.</td></tr>
+<tr><td>REM step (conditional)</td><td>Injected only if a REM cycle is overdue.</td></tr>
+</table>
+</div>
+
+<h2 id="user-prompt">3. UserPromptSubmit — <code>user-prompt-dispatcher.py</code></h2>
+<div class="panel">
+<p>Fires on <strong>every</strong> user message. Busiest hook, and the most important one because it's the last chance to interrupt before the LLM reacts.</p>
+<div class="mermaid">
+flowchart TD
+  U([User submits prompt]) --> L[Load intent_config.json]
+  L --> K[For each keyword gate in config]
+  K --> M{Pattern matches<br/>prompt text?}
+  M -- yes --> N[Emit hard-STOP gate message<br/>e.g. 'Call query_lessons git commit NOW']
+  M -- no --> O[Continue]
+  N --> P[Re-inject terse routing block<br/>survives context compaction]
+  O --> P
+  P --> Q[Load workflow_state.json]
+  Q --> R{Scheduled reminder<br/>due? (counter or timer)}
+  R -- yes --> S[Emit scheduled-reminder block<br/>+ consume reminder state]
+  R -- no --> T[Skip]
+  S --> V{Active workflow<br/>not complete?}
+  T --> V
+  V -- yes --> W[Emit workflow-state block<br/>'EXECUTE step X now']
+  V -- no --> X[Skip]
+  W --> Y[stdout → system reminder]
+  X --> Y
+  Y --> Z([LLM processes prompt + injected blocks])
+
+  style U fill:#1c2a3e,stroke:#7ab8ff
+  style Z fill:#1c2a3e,stroke:#7ab8ff
+  style N fill:#3a1f1f,stroke:#ff7777
+  style S fill:#2e281b,stroke:#ffb86b
+  style W fill:#1b2e2e,stroke:#77cccc
+</div>
+
+<h3>The three injection layers</h3>
+<table>
+<tr><th>Layer</th><th>Trigger</th><th>Strength</th></tr>
+<tr><td>Keyword gate</td><td>Regex match in <code>keyword_patterns</code> (git, session_end)</td><td>Hard STOP — strongest signal</td></tr>
+<tr><td>Routing re-inject</td><td>Every message unconditionally</td><td>Soft — survives context loss but easy to skim</td></tr>
+<tr><td>Scheduled reminder</td><td>Call-count or time reached</td><td>Self-directed — depends on prior LLM scheduling</td></tr>
+<tr><td>Workflow state</td><td><code>active_workflow</code> set and not complete</td><td>Persistent — reminds of current step until updated</td></tr>
+</table>
+</div>
+
+<h2 id="pre-tool">4. PreToolUse — <code>pre-tool-dispatcher.py</code> <span style="color: var(--warn); font-size: 0.8em;">(ENFORCING)</span></h2>
+<div class="panel">
+<p>Fires <em>before</em> every tool call. The only MGCP hook that can actually refuse a tool call — all others inject text the LLM can skim past. Returns <code>permissionDecision: "deny"</code> with a <code>reason</code> the LLM sees on its next turn.</p>
+<div class="mermaid">
+flowchart TD
+  T([LLM about to call tool]) --> D{tool_name<br/>== Bash?}
+  D -- no --> A1[Allow]
+  D -- yes --> P[Tokenize command with<br/>shlex punctuation_chars=True]
+  P --> Q{git commit<br/>or git push<br/>at command start?}
+  Q -- no --> A2[Allow]
+  Q -- yes --> S[Load workflow_state.json]
+  S --> B{turn_bypass<br/>== True?}
+  B -- yes --> A3[Allow<br/><i>user opted out via MGCP_BYPASS</i>]
+  B -- no --> C{turn_query_lessons_called<br/>== True?}
+  C -- yes --> A4[Allow]
+  C -- no --> X[DENY with reason:<br/>'Call query_lessons first,<br/>then retry. Or include<br/>MGCP_BYPASS to skip.']
+  A1 --> Z([Tool runs])
+  A2 --> Z
+  A3 --> Z
+  A4 --> Z
+  X --> Y([Tool call refused,<br/>LLM retries next turn])
+
+  style T fill:#1c2a3e,stroke:#7ab8ff
+  style Z fill:#1b2e1b,stroke:#88cc88
+  style Y fill:#3a1f1f,stroke:#ff7777
+  style X fill:#3a1f1f,stroke:#ff7777
+</div>
+
+<h3>Why a token walker, not a regex</h3>
+<p>A naive <code>\bgit\s+(commit|push)\b</code> regex false-positives on <code>grep 'git commit' docs/</code> or <code>echo "how to git commit"</code>. The hook uses <code>shlex.shlex(..., punctuation_chars=True)</code> so quoted strings stay as single tokens and shell operators (<code>;</code>, <code>&&</code>, <code>||</code>, <code>|</code>, <code>()</code>) split into their own tokens. The walker only matches <code>git commit</code> / <code>git push</code> when <code>git</code> appears at a true command boundary.</p>
+
+<h3>State flow across the three hooks that collaborate</h3>
+<table>
+<tr><th>Hook</th><th>Operation on turn state</th></tr>
+<tr><td>UserPromptSubmit</td><td>Reset <code>turn_query_lessons_called = False</code>. Set <code>turn_bypass = True</code> iff prompt contains <code>MGCP_BYPASS</code>.</td></tr>
+<tr><td>PostToolUse</td><td>On <code>tool_name == "mcp__mgcp__query_lessons"</code>: flip <code>turn_query_lessons_called = True</code>.</td></tr>
+<tr><td>PreToolUse</td><td>Read both flags. Allow or deny.</td></tr>
+</table>
+
+<h3>Fail-open policy</h3>
+<p>Any parse error (unterminated quotes, malformed JSON input) results in <code>allow</code>, never <code>deny</code>. Enforcement is a net, not a tripwire — a silent pass-through is always preferable to blocking the user because of a malformed state file. The exception: <em>missing</em> state file with an enforced command defaults to <code>deny</code> (LLM hasn't demonstrated the precondition yet).</p>
+</div>
+
+<h2 id="post-tool">5. PostToolUse — <code>post-tool-dispatcher.py</code></h2>
+<div class="panel">
+<p>Fires after every tool call. Used to turn outputs into knowledge. Dispatches by <code>tool_name</code>.</p>
+<div class="mermaid">
+flowchart TD
+  T([Tool finishes]) --> D{Which tool?}
+  D -- Edit / Write --> E[Emit knowledge-capture checkpoint:<br/>'LIST changed files,<br/>STATE patterns/gotchas,<br/>CALL add_catalogue_item']
+  D -- Bash --> B[Scan stdout/stderr for<br/>error patterns: Traceback, error:,<br/>ModuleNotFoundError, etc.]
+  D -- other --> S[No-op]
+  B --> F{Pattern<br/>matched?}
+  F -- no --> S
+  F -- yes --> G{Cooldown<br/>60s elapsed?}
+  G -- no --> S
+  G -- yes --> H[Update last_fire timestamp]
+  H --> I[Emit self-correction checkpoint:<br/>'IDENTIFY error, FIX root cause,<br/>CALL add_lesson if recurring']
+  E --> Z([LLM next turn])
+  I --> Z
+  S --> Z
+
+  style T fill:#1c2a3e,stroke:#7ab8ff
+  style Z fill:#1c2a3e,stroke:#7ab8ff
+  style E fill:#1b2e1b,stroke:#88cc88
+  style I fill:#3a1f1f,stroke:#ff7777
+</div>
+</div>
+
+<h2 id="pre-compact">6. PreCompact — <code>mgcp-precompact.py</code></h2>
+<div class="panel">
+<p>Fires when Claude Code is about to compress older conversation turns. Last chance to pull state OUT of conversation memory and INTO persistent storage.</p>
+<div class="mermaid">
+flowchart LR
+  P([Context nearing limit]) --> I[Emit high-priority reminder:<br/>'BEFORE compaction:<br/>1. save_project_context<br/>2. write_soliloquy']
+  I --> L([LLM's next turn must call these tools<br/>or state is lost])
+
+  style P fill:#2e281b,stroke:#ffb86b
+  style I fill:#2e281b,stroke:#ffb86b
+  style L fill:#1c2a3e,stroke:#7ab8ff
+</div>
+</div>
+
+<h2 id="growth-loop">7. The growth loop — how interception learns over time</h2>
+<div class="panel">
+<p>Each interception can produce data that shapes the <em>next</em> interception. This is the core value prop: MGCP gets better the more it's used.</p>
+<div class="mermaid">
+flowchart LR
+  UP[UserPromptSubmit] -- advises + resets turn state --> LLM[LLM acts]
+  PT[PreToolUse] -- deny/allow --> LLM
+  PotT[PostToolUse] -- on error/edit + flips turn flags --> LLM
+  LLM -- add_lesson<br/>add_catalogue_item<br/>save_project_context --> DB[(SQLite<br/>+ Qdrant)]
+  DB -- embeddings --> QL[query_lessons]
+  QL -- surfaces at task start --> LLM
+  DB -- graph relationships --> REM[REM cycle]
+  REM -- detect_communities --> IC[intent_calibration]
+  IC -- proposed_patch --> CFG[intent_config.json]
+  CFG -- read by --> SI[session-init.py]
+  CFG -- read by --> UP
+  SI -- injects routing --> LLM
+
+  style LLM fill:#1c2a3e,stroke:#7ab8ff
+  style DB fill:#171b22,stroke:#2a3140
+  style CFG fill:#2e281b,stroke:#ffb86b
+  style REM fill:#1b2e1b,stroke:#88cc88
+  style PT fill:#3a1f1f,stroke:#ff7777
+</div>
+
+<p>Three feedback paths close the loop:</p>
+<ol>
+  <li><strong>Session → lessons → next session.</strong> Mistakes become <code>add_lesson</code> calls, surface via <code>query_lessons</code> in future sessions.</li>
+  <li><strong>Lessons → REM → routing config.</strong> Community detection finds tag clusters that span multiple intents. <code>intent_calibration</code> proposes config patches.</li>
+  <li><strong>Routing config → hooks → session start.</strong> Adding an intent in JSON changes hook injection immediately next session — no code commit required.</li>
+</ol>
+</div>
+
+<h2 id="data-stores">8. Data stores touched during a session</h2>
+<div class="panel">
+<div class="mermaid">
+flowchart TB
+  subgraph CFG["Config (source of truth for routing)"]
+    C1[intent_config.json]
+  end
+  subgraph STATE["Ephemeral state"]
+    S1[workflow_state.json<br/><i>call counter, active workflow,<br/>scheduled reminders,<br/>turn_query_lessons_called,<br/>turn_bypass</i>]
+    S2[reminder_state.json]
+    S3[error_detector_state.json<br/><i>bash error cooldown</i>]
+  end
+  subgraph KNOWLEDGE["Persistent knowledge"]
+    K1[lessons.db<br/><i>SQLite: lessons, projects,<br/>catalogue, REM state</i>]
+    K2[mgcp.db<br/><i>telemetry</i>]
+    K3[qdrant/<br/><i>BGE embeddings:<br/>lessons, workflows,<br/>catalogue, communities</i>]
+  end
+  SI[session-init.py] --> C1
+  SI --> K1
+  UP[user-prompt-dispatcher.py] --> C1
+  UP --> S1
+  UP --> S2
+  PreT[pre-tool-dispatcher.py] --> S1
+  PostT[post-tool-dispatcher.py] --> S1
+  PostT --> S3
+  MCP[MCP server tools] --> K1
+  MCP --> K3
+  MCP --> K2
+
+  style C1 fill:#2e281b,stroke:#ffb86b
+  style K1 fill:#1b2e1b,stroke:#88cc88
+  style K3 fill:#1b2e1b,stroke:#88cc88
+</div>
+</div>
+
+<h2 id="gaps">9. Known gaps (candidate improvement areas)</h2>
+<div class="panel">
+<table>
+<tr><th>#</th><th>Status</th><th>Gap</th><th>Symptom</th><th>Possible fix</th></tr>
+<tr>
+  <td>1</td>
+  <td>open</td>
+  <td>Keyword-only gating</td>
+  <td>Synonyms/paraphrases slip through ("ship it", "lock this down", "tuck it in")</td>
+  <td>Semantic intent matching via BGE; daemon-hosted model to avoid per-prompt cold start</td>
+</tr>
+<tr>
+  <td>2</td>
+  <td style="color:#88cc88">partial ✓</td>
+  <td>No enforcement, only advice</td>
+  <td>Lesson <code>query-before-git-operations</code> failed v1→v4 across months</td>
+  <td><strong>Done</strong> for git commit/push via PreToolUse gate. Extend to Edit/Write → add_catalogue_item, and to doc-parity (gap #9).</td>
+</tr>
+<tr>
+  <td>3</td>
+  <td>open</td>
+  <td>Only git + session_end have keyword gates</td>
+  <td>Catalogue-security, catalogue-decision, task_start all rely on LLM self-routing</td>
+  <td>Add keyword patterns to more intents in <code>intent_config.json</code></td>
+</tr>
+<tr>
+  <td>4</td>
+  <td>open</td>
+  <td>First-message bootstrap fragility</td>
+  <td>"Tough" first questions cause skipping of <code>get_project_context</code> / <code>query_lessons</code></td>
+  <td>Track whether context-load tools have been called this session; nag harder in dispatcher if not</td>
+</tr>
+<tr>
+  <td>5</td>
+  <td>open</td>
+  <td>PostToolUse is best-effort</td>
+  <td>Edit/Write checkpoint emitted every time but often skipped by LLM</td>
+  <td>PreToolUse gate on the <em>next</em> Edit/Write: require at least one <code>add_catalogue_item</code> since the last N edits</td>
+</tr>
+<tr>
+  <td>6</td>
+  <td>open</td>
+  <td>Routing prompt gets long</td>
+  <td>8 intents × description + action = ~600 tokens per UserPromptSubmit re-inject</td>
+  <td>Adaptive injection: only emit intents whose tags match the prompt, fall back to full list when ambiguous</td>
+</tr>
+<tr>
+  <td>7</td>
+  <td>open</td>
+  <td>Windows hook portability</td>
+  <td><code>settings.json</code> hardcodes <code>python3</code>; Windows default is <code>python</code></td>
+  <td>Use <code>sys.executable</code> or per-OS command in <code>_build_global_hook_settings</code></td>
+</tr>
+<tr>
+  <td>8</td>
+  <td>open</td>
+  <td>No telemetry on gate effectiveness</td>
+  <td>Can't tell which gates are working vs being ignored</td>
+  <td>Log gate-fire + deny events to telemetry.db alongside whether the required tool was actually called next turn</td>
+</tr>
+<tr>
+  <td>9</td>
+  <td style="color:#ffb86b">new</td>
+  <td>Doc/code parity not enforced</td>
+  <td>Code changes land without updating architecture docs that describe them (this flowchart was almost shipped stale after adding PreToolUse)</td>
+  <td>PreToolUse gate on <code>git commit</code>: if staged diff touches paths flagged in a doc-coupling map (e.g. <code>hook_templates/*</code> ↔ <code>docs/mgcp-interception-flow.html</code>), require that the coupled doc is also staged. Reuse the catalogue's existing <code>coupling</code> item type.</td>
+</tr>
+<tr>
+  <td>10</td>
+  <td style="color:#ffb86b">new</td>
+  <td>Bypass token is all-or-nothing</td>
+  <td><code>MGCP_BYPASS</code> disables every PreToolUse gate for the turn, not just the one the user meant to bypass</td>
+  <td>Scope bypass per-gate (e.g. <code>MGCP_BYPASS:git</code>, <code>MGCP_BYPASS:doc-parity</code>). Default bare token disables all, for convenience.</td>
+</tr>
+</table>
+</div>
+
+<p class="lead" style="margin-top: 3rem; font-size: 0.9rem;">
+  Generated for session 94. Hook template version <strong>v2.3</strong> (adds PreToolUse enforcement).
+  Regenerate any time by asking: "update the interception flow doc."
+</p>
+
+</body>
+</html>

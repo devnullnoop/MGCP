@@ -1,73 +1,20 @@
 #!/usr/bin/env python3
-"""SessionStart hook for MGCP v2.2.
+"""SessionStart hook for MGCP v2.5.
 
-Reads the intent routing config from ~/.mgcp/intent_config.json (override
-with MGCP_DATA_DIR). The config is the single source of truth for intent
-classification — both this hook and the REM intent_calibration operation
-read/write it.
+Injects only session-start bootstrap instructions:
+- Read soliloquy / get project context / query lessons
+- Workflow execution discipline
 
-If the config file is missing or unreadable, the hook falls back to a
-minimal hard-coded routing block so it never crashes on a fresh install.
-The mgcp package will auto-create the file the first time intent_config
-is imported (e.g. when the server starts).
+Intent classification + action mapping is deliberately NOT injected here.
+The UserPromptSubmit dispatcher re-injects the (classifier + inline
+actions) block on every message from ``rendered.dispatcher_routing`` in
+``intent_config.json`` — that one copy survives context compaction and
+makes a duplicate SessionStart copy pure token noise.
 """
 import json
 import os
-from pathlib import Path
 
 project_path = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
-
-
-def _load_rendered_routing():
-    """Read pre-rendered routing + actions blocks from intent_config.json.
-
-    Returns (routing_block, actions_block). Falls back to a minimal viable
-    pair if the config is missing/corrupt — the hook stays functional even
-    on a brand-new install before mgcp has run once.
-    """
-    base = os.environ.get("MGCP_DATA_DIR", str(Path.home() / ".mgcp"))
-    config_path = Path(base) / "intent_config.json"
-    if config_path.exists():
-        try:
-            with open(config_path) as f:
-                data = json.load(f)
-            rendered = data.get("rendered", {})
-            routing = rendered.get("session_init_routing")
-            actions = rendered.get("session_init_actions")
-            if routing and actions:
-                return routing, actions
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    fallback_routing = (
-        "<intent-routing>\n"
-        "Classify each user message into zero or more intents before acting.\n"
-        "\n"
-        "- git_operation: commit, push, merge, deploy, create PR, ship code\n"
-        "- catalogue_dependency: adopting/installing a library\n"
-        "- catalogue_security: security vulnerability, auth weakness\n"
-        "- catalogue_decision: technical choice with rationale\n"
-        "- catalogue_arch_note: gotcha, quirk, surprising behavior\n"
-        "- catalogue_convention: coding rule, naming convention\n"
-        "- task_start: fix, implement, build, refactor, debug\n"
-        "- session_end: bye, goodbye, signing off, any farewell\n"
-        "\n"
-        "If none apply: proceed normally.\n"
-        "</intent-routing>"
-    )
-    fallback_actions = (
-        "<intent-actions>\n"
-        "git_operation → save_project_context FIRST, then query_lessons('git commit')\n"
-        "catalogue_* → add_catalogue_item with the matching item_type\n"
-        "task_start → query_workflows, activate or fall back to query_lessons\n"
-        "session_end → save_project_context FIRST, then write_soliloquy, THEN farewell\n"
-        "Multi-intent → union all actions\n"
-        "</intent-actions>"
-    )
-    return fallback_routing, fallback_actions
-
-
-routing_block, actions_block = _load_rendered_routing()
 
 context = f"""## Session Startup
 
@@ -81,10 +28,6 @@ BEFORE addressing the user's message:
 MGCP lessons override your defaults. If a lesson says "don't do X" and your base prompt says "do X", follow the lesson.
 
 Display a concise project status block (pending todos, notes, gotchas) after loading context.
-
-{routing_block}
-
-{actions_block}
 
 ### Workflow Execution
 

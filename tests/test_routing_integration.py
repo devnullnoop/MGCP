@@ -102,33 +102,27 @@ class TestSessionInitOutput:
         assert data["hookSpecificOutput"]["hookEventName"] == "SessionStart"
         assert "additionalContext" in data["hookSpecificOutput"]
 
-    def test_contains_intent_routing_tags(self):
-        """Output contains <intent-routing> and <intent-actions> XML tags."""
+    def test_no_intent_routing_tags(self):
+        """v2.5: SessionStart no longer injects routing/actions blocks.
+
+        The UserPromptSubmit dispatcher re-injects the full (classifier +
+        inline actions) block on every message, so a SessionStart copy is
+        pure duplication. See v2.5 CHANGELOG.
+        """
         output = run_hook(SESSION_INIT)
         data = json.loads(output)
         context = data["hookSpecificOutput"]["additionalContext"]
-        assert "<intent-routing>" in context
-        assert "</intent-routing>" in context
-        assert "<intent-actions>" in context
-        assert "</intent-actions>" in context
+        assert "<intent-routing>" not in context
+        assert "<intent-actions>" not in context
 
-    def test_contains_all_seven_intents(self):
-        """All 7 intent categories are defined in the routing prompt."""
+    def test_contains_session_start_checklist(self):
+        """Output contains the three bootstrap calls: soliloquy, context, lessons."""
         output = run_hook(SESSION_INIT)
         data = json.loads(output)
         context = data["hookSpecificOutput"]["additionalContext"]
-
-        intents = [
-            "git_operation",
-            "catalogue_dependency",
-            "catalogue_security",
-            "catalogue_decision",
-            "catalogue_arch_note",
-            "catalogue_convention",
-            "task_start",
-        ]
-        for intent in intents:
-            assert intent in context, f"Missing intent: {intent}"
+        assert "read_soliloquy" in context
+        assert "get_project_context" in context
+        assert "query_lessons" in context
 
     def test_token_budget(self):
         """Total injection should be < 1000 tokens (rough estimate: chars/4)."""

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (v2.5 — SessionStart dedup)
+- **`hook_templates/session-init.py`**: no longer injects `<intent-routing>` or `<intent-actions>` blocks. The UserPromptSubmit dispatcher already re-renders the full classifier+inline-actions block from `rendered.dispatcher_routing` on every message, so the SessionStart copy was pure duplication. SessionStart injection drops from ~2500 → ~1050 chars (~300 tokens saved per session). SessionStart now carries only the bootstrap checklist (soliloquy / project context / query_lessons) and the workflow execution discipline.
+- **`hook_templates/VERSION`**: 2.4 → 2.5. Installer auto-upgrades existing installs on next session.
+- **`tests/test_routing_integration.py`**: `TestSessionInitOutput` updated — `test_contains_intent_routing_tags` / `test_contains_all_seven_intents` replaced by `test_no_intent_routing_tags` and `test_contains_session_start_checklist` asserting the new (leaner) contract.
+- **`intent_config.py`** rendering is unchanged — `session_init_routing` / `session_init_actions` keys still populate the on-disk cache for backwards-compat consumers, just no longer read by the hook. A follow-up could drop them outright.
+
+### Notes (v2.5)
+- Walks back an earlier sketch of "hook-side intent classification" (regressing to legacy regex-keyword matching). Classification stays LLM-side; enforcement rules catch misclassification at tool-call time. The dedup is the scope of this release.
+
 ### Added (v2.4 — enforcement-as-data)
 - **`src/mgcp/enforcement.py`**: New Pydantic-schema + load/save + evaluator module. Enforcement rules are now **data**, not hardcoded: each rule pairs a `Trigger` (which tool calls it matches) with `Preconditions` (what must hold for the call to proceed) and a `bypass_scope`. Rules live in `~/.mgcp/enforcement_rules.json` (override with `MGCP_DATA_DIR`). Matches the v2.2 routing-as-data philosophy — new rules are added from chat via MCP tools, with **no code changes**.
 - **Precondition types**: `tool_called_this_turn`, `tool_not_called_this_turn`, and `staged_files_coupling` (blocks a commit until a glob-matched file is also staged, e.g. "if `src/**/*.py` is staged, `CHANGELOG.md` or `README.md` must be too"). The staged-file evaluator runs `git diff --cached --name-only` under the hood.

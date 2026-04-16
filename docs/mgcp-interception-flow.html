@@ -177,38 +177,24 @@ no release. Seeded default rule: <code>git commit</code> / <code>git push</code>
 
 <h2 id="session-start">2. SessionStart — <code>session-init.py</code></h2>
 <div class="panel">
-<p>Single shot per session. Reads <code>intent_config.json</code> (v2.2+), checks whether a REM cycle is due, and injects the routing contract the LLM is supposed to follow for the rest of the conversation.</p>
+<p>Single shot per session. As of v2.5, injects only the session-start bootstrap checklist and workflow execution discipline — the routing/actions contract is owned by <code>user-prompt-dispatcher.py</code>, which re-injects it on every message (see section 3). v2.5 dropped the SessionStart copy because the two injections were identical and burned ~300 tokens per session.</p>
 <div class="mermaid">
 flowchart TD
-  S([SessionStart event]) --> A[Read intent_config.json]
-  A --> B{Config present?}
-  B -- yes --> C[Use rendered.session_init_routing +<br/>rendered.session_init_actions]
-  B -- no/corrupt --> D[Fall back to hard-coded<br/>minimal routing block]
-  C --> E[Query lessons.db: REM due?]
-  D --> E
-  E --> F{REM overdue<br/>≥ 5 sessions?}
-  F -- yes --> G[Inject extra step:<br/>'Call rem_run then<br/>present findings']
-  F -- no --> H[Skip REM injection]
-  G --> I[Emit hookSpecificOutput.additionalContext]
-  H --> I
+  S([SessionStart event]) --> I[Render bootstrap checklist:<br/>read_soliloquy / get_project_context / query_lessons<br/>+ workflow execution block]
   I --> Z([LLM first turn begins])
 
   style S fill:#1c2a3e,stroke:#7ab8ff
   style Z fill:#1c2a3e,stroke:#7ab8ff
-  style C fill:#1b2e1b,stroke:#88cc88
-  style D fill:#2e1b1b,stroke:#cc8888
-  style G fill:#2e281b,stroke:#ffb86b
+  style I fill:#1b2e1b,stroke:#88cc88
 </div>
 
 <h3>What it injects</h3>
 <table>
 <tr><th>Block</th><th>Purpose</th></tr>
-<tr><td>Project context instructions</td><td>Tells the LLM to call <code>get_project_context</code> and <code>query_lessons</code> BEFORE addressing the user.</td></tr>
-<tr><td><code>&lt;intent-routing&gt;</code></td><td>The 8-intent classification prompt (loaded from config).</td></tr>
-<tr><td><code>&lt;intent-actions&gt;</code></td><td>What tool to call per intent.</td></tr>
+<tr><td>Bootstrap checklist</td><td>Tells the LLM to call <code>read_soliloquy</code>, <code>get_project_context</code>, and <code>query_lessons</code> BEFORE addressing the user's first message.</td></tr>
 <tr><td>Workflow instructions</td><td>How to execute multi-step workflows with reminders.</td></tr>
-<tr><td>REM step (conditional)</td><td>Injected only if a REM cycle is overdue.</td></tr>
 </table>
+<p><em>Intent classification + action mapping (<code>&lt;intent-routing&gt;</code> / <code>&lt;intent-actions&gt;</code>) is no longer injected here — see section 3 for the dispatcher's per-turn copy.</em></p>
 </div>
 
 <h2 id="user-prompt">3. UserPromptSubmit — <code>user-prompt-dispatcher.py</code></h2>

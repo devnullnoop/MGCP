@@ -310,17 +310,23 @@ Each rule has three parts: a **trigger** (which tool calls it matches — tool n
 
 Six new MCP tools (`list_enforcement_rules`, `get_enforcement_rule`, `add_enforcement_rule`, `update_enforcement_rule`, `remove_enforcement_rule`, `toggle_enforcement_rule`) let the LLM — or a human — CRUD rules from chat. The `git-requires-query-lessons` rule from v2.3 is preserved as a seeded default. Tool count: 43 → 49.
 
+### v2.5: SessionStart dedup
+
+The `session-init.py` hook previously injected a full `<intent-routing>` + `<intent-actions>` pair on top of the per-turn copy already rendered by `user-prompt-dispatcher.py`. Two copies of the same 8-intent choreography in the same conversation — competing for attention and burning ~300 tokens per session — with no behavioral payoff, since the dispatcher block survives context compaction and the SessionStart block did not carry any information the dispatcher didn't.
+
+v2.5 drops the SessionStart copy. The hook now carries only the bootstrap checklist (`read_soliloquy` / `get_project_context` / `query_lessons`) and the workflow execution discipline. SessionStart injection drops ~2500 → ~1050 chars. The dispatcher is unchanged. This walks back an earlier sketch of moving intent classification into the hook (keyword regex) — that direction would have regressed to the legacy hooks archived in `examples/claude-hooks/legacy/`; classification stays LLM-side and enforcement rules catch misclassification at tool-call time regardless.
+
 ### Current hooks
 
 | Hook | Event | Type | Purpose |
 |------|-------|------|---------|
-| `session-init.py` | SessionStart | advisory | Inject routing prompt + intent-action map (loaded from `intent_config.json`) plus workflow instructions |
-| `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Hard keyword gates (data-driven from `intent_config.json` — both git and session_end fire from one loop), terse routing re-injection, scheduled reminders, workflow state, per-turn enforcement state reset |
+| `session-init.py` | SessionStart | advisory | Inject the session-start bootstrap checklist (read_soliloquy / get_project_context / query_lessons) and workflow execution discipline. (v2.5: no longer duplicates the dispatcher's routing/actions block.) |
+| `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Hard keyword gates (data-driven from `intent_config.json` — both git and session_end fire from one loop), full classifier+actions re-injection every message, scheduled reminders, workflow state, per-turn enforcement state reset |
 | `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Generic evaluator reading `~/.mgcp/enforcement_rules.json`. Applies every enabled rule; denies when preconditions unsatisfied. Scoped bypass via `MGCP_BYPASS:<scope>` or bare `MGCP_BYPASS` |
 | `post-tool-dispatcher.py` | PostToolUse | advisory | Routes by tool: Edit/Write triggers knowledge-capture; Bash triggers error detection; appends every tool name to `turn_tools_called` for PreToolUse rules |
 | `mgcp-precompact.py` | PreCompact | advisory | Save context (and write_soliloquy) before compression |
 
-Both hooks fall back to a minimal hard-coded intent set if the JSON file is missing or corrupt — a fresh install never crashes a hook. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
+The dispatcher falls back to a minimal hard-coded intent set if the JSON file is missing or corrupt — a fresh install never crashes a hook. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
 
 ## Commands
 

@@ -227,13 +227,13 @@ MGCP v2.2 makes the routing prompt **data, not code**. The intent classification
 
 | Hook | Event | Type | Purpose |
 |------|-------|------|---------|
-| `session-init.py` | SessionStart | advisory | Inject routing prompt + intent-action map (loaded from `intent_config.json`) plus workflow instructions |
+| `session-init.py` | SessionStart | advisory | Inject the session-start bootstrap checklist (read_soliloquy / get_project_context / query_lessons) and workflow execution discipline. (v2.5: no longer duplicates the dispatcher's routing/actions block.) |
 | `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Hard keyword gates (loaded from `intent_config.json` — both git AND session_end fire from one loop), terse routing re-injection, scheduled reminders, workflow state, per-turn enforcement state reset, `MGCP_BYPASS` token detection |
 | `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Generic data-driven evaluator. Reads `~/.mgcp/enforcement_rules.json` on every tool call and applies every enabled, triggered, non-bypassed rule. Denies when preconditions unsatisfied. Quote-aware Bash tokenization via `shlex(punctuation_chars=True)`. Scoped bypass: `MGCP_BYPASS:<scope>` disables one scope, bare `MGCP_BYPASS` disables all. |
 | `post-tool-dispatcher.py` | PostToolUse | advisory | Routes by tool: Edit/Write triggers knowledge-capture checkpoint; Bash triggers error detection with cooldown; every tool call is appended to `turn_tools_called` on workflow_state.json, consumed by PreToolUse `tool_called_this_turn` preconditions. |
 | `mgcp-precompact.py` | PreCompact | advisory | Critical reminder to save context (and write_soliloquy) before context compression |
 
-Advisory hooks fall back to a minimal hard-coded intent set if the JSON file is missing or corrupt, so a fresh install never crashes. The PreToolUse hook fails open (allows the tool call) on any parse error — enforcement is a net, not a tripwire. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
+The dispatcher falls back to a minimal hard-coded intent set if the JSON file is missing or corrupt, so a fresh install never crashes. The PreToolUse hook fails open (allows the tool call) on any parse error — enforcement is a net, not a tripwire. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
 
 **Advisory vs. enforcing.** The first four hooks inject text into `<system-reminder>` tags that the LLM may skim or ignore. `pre-tool-dispatcher.py` is different: it returns `permissionDecision: "deny"` with a `reason` string and the Claude Code harness refuses to run the tool. This addresses the repeated failure mode where `query-before-git-operations` was violated (v1→v4) despite correct hook fires. See `docs/mgcp-interception-flow.html` for the full interception map and remaining enforcement gaps.
 

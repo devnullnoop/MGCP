@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (v2.6 — stale hook reference cleanup)
+- **`src/mgcp/init_project.py`**: the legacy-command scrub in `settings.json` was gated behind `force=True` in both `init_claude_hooks` and `init_global_hooks`. `mgcp-init` (no flags) would delete a legacy hook file from `~/.mgcp/hooks/` but leave the reference in `~/.claude/settings.json`, producing `hook returned blocking error` / `Errno 2: No such file or directory` noise on every matching tool call. The scrub is now unconditional — file removal and reference removal are two halves of the same cleanup. Extracted to `_scrub_legacy_hook_commands(existing)` helper. Only compacts groups/types it actually modified; pre-existing empty structures are preserved.
+- **`hook_templates/session-init.py`**: new session-start check — scans `~/.claude/settings.json` AND `$CLAUDE_PROJECT_DIR/.claude/settings.json` for hook commands referencing missing absolute `.py` paths and injects a `## ⚠️ Stale Hook References Detected` block with a "run `mgcp-init --force`" fix instruction. Stdlib-only, fails open on parse errors, one `stat()` per hook command.
+- **`hook_templates/VERSION`**: 2.5 → 2.6. Installer auto-upgrades existing installs on next session.
+- **`tests/test_init_project.py`**: new `TestScrubLegacyHookCommands` class + regression tests `test_upgrade_without_force_scrubs_legacy_from_settings` (project) and `test_global_upgrade_without_force_scrubs_legacy_from_settings` (global). Guards the exact failure mode reported (`mgcp-reminder.py` orphan reference).
+- **`tests/test_session_init.py`**: new test module driving `session-init.py` as a subprocess. Covers: no warning when settings absent, no warning when scripts exist, warning for global settings orphan, warning for project settings orphan, malformed JSON fails open, relative paths ignored.
+
+### Notes (v2.6)
+- **If you're upgrading from v2.0/v2.1 to v2.6+**: run `mgcp-init --force` once. Fresh installs and re-runs of `mgcp-init` now scrub automatically, but existing broken machines don't self-heal on upgrade — they get the advisory warning at session start, telling the LLM to instruct the user.
+- The PostToolUse "blocking error" UI wording is a Claude Code labeling quirk, not a MGCP bug. Any non-zero PostToolUse exit gets labeled that way even though PostToolUse cannot actually block a tool call. The Write/Edit always succeeded.
+
 ### Changed (v2.5 — SessionStart dedup)
 - **`hook_templates/session-init.py`**: no longer injects `<intent-routing>` or `<intent-actions>` blocks. The UserPromptSubmit dispatcher already re-renders the full classifier+inline-actions block from `rendered.dispatcher_routing` on every message, so the SessionStart copy was pure duplication. SessionStart injection drops from ~2500 → ~1050 chars (~300 tokens saved per session). SessionStart now carries only the bootstrap checklist (soliloquy / project context / query_lessons) and the workflow execution discipline.
 - **`hook_templates/VERSION`**: 2.4 → 2.5. Installer auto-upgrades existing installs on next session.

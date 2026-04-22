@@ -354,6 +354,54 @@ def _merge_settings(existing: dict, mgcp_settings: dict) -> bool:
     return changed
 
 
+def _scrub_legacy_hook_commands(existing: dict) -> bool:
+    """Remove references to LEGACY_HOOK_FILES from existing['hooks'].
+
+    File removal (LEGACY_HOOK_FILES unlink) and settings-reference removal
+    are two halves of the same cleanup. If a legacy file is being deleted
+    from ~/.mgcp/hooks/, any settings.json entry pointing at it is stale
+    and will surface as an Errno 2 on every matching tool call. Run this
+    on every upgrade, not just --force.
+
+    Only compacts/removes groups and hook types that this scrub actually
+    modified — pre-existing empty structures (e.g. user-defined hook types
+    with no entries yet) are preserved.
+
+    Returns True if any hook command was removed.
+    """
+    if "hooks" not in existing or not isinstance(existing["hooks"], dict):
+        return False
+    changed = False
+    for hook_type in list(existing["hooks"].keys()):
+        groups = existing["hooks"][hook_type]
+        if not isinstance(groups, list):
+            continue
+        touched = False
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            hooks_list = group.get("hooks", []) or []
+            filtered = [
+                h for h in hooks_list
+                if not any(
+                    legacy in (h.get("command", "") if isinstance(h, dict) else "")
+                    for legacy in LEGACY_HOOK_FILES
+                )
+            ]
+            if len(filtered) != len(hooks_list):
+                group["hooks"] = filtered
+                changed = True
+                touched = True
+        if not touched:
+            continue
+        # Compact: drop groups we emptied, and the hook type if nothing's left.
+        new_groups = [g for g in groups if g.get("hooks")]
+        existing["hooks"][hook_type] = new_groups
+        if not new_groups:
+            del existing["hooks"][hook_type]
+    return changed
+
+
 # ============================================================================
 # Configuration Functions
 # ============================================================================
@@ -550,29 +598,12 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False, force: bool = Fa
         try:
             existing = json.loads(settings_file.read_text())
 
-            if force:
-                # Remove legacy hook commands from settings
-                if "hooks" in existing:
-                    for hook_type in list(existing["hooks"].keys()):
-                        groups = existing["hooks"][hook_type]
-                        for group in groups:
-                            hooks_list = group.get("hooks", [])
-                            group["hooks"] = [
-                                h for h in hooks_list
-                                if not any(
-                                    legacy in h.get("command", "")
-                                    for legacy in LEGACY_HOOK_FILES
-                                )
-                            ]
-                        # Remove empty groups
-                        existing["hooks"][hook_type] = [
-                            g for g in groups if g.get("hooks")
-                        ]
-                        # Remove empty hook types
-                        if not existing["hooks"][hook_type]:
-                            del existing["hooks"][hook_type]
+            # Always scrub legacy hook commands — stale references cause
+            # Errno 2 on every matching tool call. File removal above and
+            # reference removal here must stay coupled.
+            scrubbed = _scrub_legacy_hook_commands(existing)
 
-            needs_update = _merge_settings(existing, HOOK_SETTINGS)
+            needs_update = _merge_settings(existing, HOOK_SETTINGS) or scrubbed
 
             if needs_update or force:
                 if dry_run:
@@ -707,32 +738,15 @@ def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
         try:
             existing = json.loads(settings_file.read_text())
 
-            if force:
-                # Remove legacy hook commands from settings
-                if "hooks" in existing:
-                    for hook_type in list(existing["hooks"].keys()):
-                        groups = existing["hooks"][hook_type]
-                        for group in groups:
-                            hooks_list = group.get("hooks", [])
-                            group["hooks"] = [
-                                h for h in hooks_list
-                                if not any(
-                                    legacy in h.get("command", "")
-                                    for legacy in LEGACY_HOOK_FILES
-                                )
-                            ]
-                        existing["hooks"][hook_type] = [
-                            g for g in groups if g.get("hooks")
-                        ]
-                        if not existing["hooks"][hook_type]:
-                            del existing["hooks"][hook_type]
+            # Always scrub legacy hook commands — see _scrub_legacy_hook_commands.
+            scrubbed = _scrub_legacy_hook_commands(existing)
 
             # Migration: remove mcpServers from settings.json (belongs in claude.json)
             settings_had_mcp = "mcpServers" in existing
             if settings_had_mcp:
                 del existing["mcpServers"]
 
-            needs_update = _merge_settings(existing, global_settings)
+            needs_update = _merge_settings(existing, global_settings) or scrubbed
 
             if needs_update or force or settings_had_mcp:
                 if dry_run:

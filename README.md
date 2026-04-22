@@ -316,6 +316,15 @@ The `session-init.py` hook previously injected a full `<intent-routing>` + `<int
 
 v2.5 drops the SessionStart copy. The hook now carries only the bootstrap checklist (`read_soliloquy` / `get_project_context` / `query_lessons`) and the workflow execution discipline. SessionStart injection drops ~2500 → ~1050 chars. The dispatcher is unchanged. This walks back an earlier sketch of moving intent classification into the hook (keyword regex) — that direction would have regressed to the legacy hooks archived in `examples/claude-hooks/legacy/`; classification stays LLM-side and enforcement rules catch misclassification at tool-call time regardless.
 
+### v2.6: Stale hook reference self-detection
+
+Two coupled fixes for an upgrade-path bug. On installs that ran `mgcp-init` between v2.0/v2.1 (when `mgcp-reminder.py` was a real hook) and v2.2+ (where it was superseded by `post-tool-dispatcher.py`), the installer would delete the file from `~/.mgcp/hooks/` but leave the reference in `~/.claude/settings.json` — because the settings-scrub was gated behind `--force`. Every matching `PostToolUse` tool call then surfaced `hook returned blocking error` / `Errno 2: No such file` noise. The Write itself always succeeded — PostToolUse has no blocking authority — but the UI wording was misleading.
+
+1. **Fix the installer.** The legacy-command scrub now runs on every `mgcp-init`, not just `--force`. Removing a legacy hook file and removing the `settings.json` reference to it are two halves of the same cleanup; separating them was the bug.
+2. **Detect at session start.** `session-init.py` now scans `settings.json` for hook commands pointing at missing absolute `.py` paths and injects a `## ⚠️ Stale Hook References Detected` block telling me (and the user) to run `mgcp-init --force`. One `stat()` per hook command per session; fails open on parse errors.
+
+If you're upgrading from v2.0 or v2.1 and were ever seeing "hook returned blocking error" noise, run `mgcp-init --force` once to clean up.
+
 ### Current hooks
 
 | Hook | Event | Type | Purpose |

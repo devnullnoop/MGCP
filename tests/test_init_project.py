@@ -22,6 +22,7 @@ from mgcp.init_project import (
     _build_global_hook_settings,
     _get_hook_version,
     _merge_settings,
+    _scrub_legacy_hook_commands,
     configure_claude_code_project,
     configure_client,
     detect_installed_clients,
@@ -1261,6 +1262,104 @@ class TestForceUpgrade:
         assert any("user-prompt-dispatcher.py" in c for c in all_commands)
 
 
+class TestScrubLegacyHookCommands:
+    """Unit tests for the _scrub_legacy_hook_commands helper."""
+
+    def test_removes_legacy_commands(self):
+        existing = {
+            "hooks": {
+                "PostToolUse": [{
+                    "matcher": "Edit|Write",
+                    "hooks": [
+                        {"type": "command", "command": "python3 /x/.mgcp/hooks/mgcp-reminder.py"},
+                    ],
+                }],
+            }
+        }
+        changed = _scrub_legacy_hook_commands(existing)
+        assert changed
+        # Empty hook type should be removed entirely
+        assert "PostToolUse" not in existing.get("hooks", {})
+
+    def test_preserves_non_legacy_commands(self):
+        existing = {
+            "hooks": {
+                "PostToolUse": [{
+                    "hooks": [
+                        {"type": "command", "command": "python3 /x/.mgcp/hooks/mgcp-reminder.py"},
+                        {"type": "command", "command": "python3 /x/.mgcp/hooks/post-tool-dispatcher.py"},
+                    ],
+                }],
+            }
+        }
+        changed = _scrub_legacy_hook_commands(existing)
+        assert changed
+        remaining = [
+            h["command"]
+            for e in existing["hooks"]["PostToolUse"]
+            for h in e["hooks"]
+        ]
+        assert remaining == ["python3 /x/.mgcp/hooks/post-tool-dispatcher.py"]
+
+    def test_noop_on_clean_settings(self):
+        existing = {
+            "hooks": {
+                "PostToolUse": [{
+                    "hooks": [
+                        {"type": "command", "command": "python3 /x/.mgcp/hooks/post-tool-dispatcher.py"},
+                    ],
+                }],
+            }
+        }
+        changed = _scrub_legacy_hook_commands(existing)
+        assert not changed
+
+    def test_noop_when_no_hooks_key(self):
+        existing = {"permissions": {"allow": []}}
+        changed = _scrub_legacy_hook_commands(existing)
+        assert not changed
+        assert existing == {"permissions": {"allow": []}}
+
+    def test_upgrade_without_force_scrubs_legacy_from_settings(self, temp_project):
+        """Regression: mgcp-init (no --force) must remove stale legacy entries.
+
+        The failure mode this guards: v2.0/v2.1 installs referenced mgcp-reminder.py
+        in settings.json; upgrading removed the FILE from ~/.mgcp/hooks/ but left
+        the REFERENCE, producing Errno 2 noise on every matching tool call.
+        """
+        claude_dir = temp_project / ".claude"
+        claude_dir.mkdir()
+        settings_file = claude_dir / "settings.json"
+
+        legacy_settings = {
+            "hooks": {
+                "PostToolUse": [{
+                    "matcher": "Edit|Write",
+                    "hooks": [
+                        {"type": "command", "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/mgcp-reminder.py"},
+                    ],
+                }],
+            }
+        }
+        settings_file.write_text(json.dumps(legacy_settings))
+
+        # No force — the bug was that the scrub was gated behind force=True.
+        init_claude_hooks(temp_project)
+
+        settings = json.loads(settings_file.read_text())
+        all_commands = [
+            h.get("command", "")
+            for entries in settings.get("hooks", {}).values()
+            for entry in entries
+            for h in entry.get("hooks", [])
+        ]
+        assert not any("mgcp-reminder.py" in c for c in all_commands), (
+            "mgcp-init (no --force) left stale mgcp-reminder.py reference in settings.json"
+        )
+        # v2 dispatcher should still be present
+        assert any("post-tool-dispatcher.py" in c for c in all_commands)
+
+
 # ============================================================================
 # Tests: Settings Merge
 # ============================================================================
@@ -1515,6 +1614,42 @@ class TestGlobalHooks:
 
         assert len(result["updated"]) >= 4
         assert hook_file.read_text() != "# custom modification"
+
+    def test_global_upgrade_without_force_scrubs_legacy_from_settings(self, mock_global_paths):
+        """Regression: ``mgcp-init`` (no ``--force``) must strip legacy hook commands.
+
+        Same bug class as the project-level test, but for the global path
+        (~/.claude/settings.json). This is the exact failure the user hit:
+        mgcp-reminder.py removed from ~/.mgcp/hooks/ but still referenced
+        in global settings.json.
+        """
+        settings_path = mock_global_paths["settings_path"]
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        hooks_dir = mock_global_paths["hooks_dir"]
+
+        legacy_settings = {
+            "hooks": {
+                "PostToolUse": [{
+                    "matcher": "Edit|Write",
+                    "hooks": [
+                        {"type": "command", "command": f"python3 {hooks_dir}/mgcp-reminder.py"},
+                    ],
+                }],
+            }
+        }
+        settings_path.write_text(json.dumps(legacy_settings))
+
+        init_global_hooks()  # no force
+
+        settings = json.loads(settings_path.read_text())
+        all_commands = [
+            h.get("command", "")
+            for entries in settings.get("hooks", {}).values()
+            for entry in entries
+            for h in entry.get("hooks", [])
+        ]
+        assert not any("mgcp-reminder.py" in c for c in all_commands)
+        assert any("post-tool-dispatcher.py" in c for c in all_commands)
 
     def test_init_global_hooks_version_marker(self, mock_global_paths):
         """Should write version marker to ~/.mgcp/hooks/."""

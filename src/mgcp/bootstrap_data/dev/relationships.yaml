@@ -136,10 +136,6 @@ relationships:
     target: verify-before-push
     type: prerequisite
     context: "Understand git practices before push verification"
-  - source: git-practices
-    target: pre-commit-documentation-review
-    type: prerequisite
-    context: "Understand git before doc review"
   - source: lint-before-commit
     target: verify-before-push
     type: sequence_next
@@ -152,10 +148,6 @@ relationships:
     target: testing
     type: related
     context: "Both concern verifying code before sharing"
-  - source: pre-commit-documentation-review
-    target: verify-before-push
-    type: complements
-    context: "Both are pre-commit checks"
 
   # OWASP Input Validation hierarchy
   - source: security

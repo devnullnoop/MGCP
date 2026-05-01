@@ -40,9 +40,3 @@ lessons:
     parent_id: git-practices
     tags: [git, verification, ci]
 
-  - id: pre-commit-documentation-review
-    trigger: "When committing code changes — verify that documentation is updated alongside code to prevent stale docs, including CLAUDE.md, README, and CHANGELOG"
-    action: "BEFORE committing changes, verify documentation is updated: (1) Check if code changes require doc updates, (2) Update CLAUDE.md if architecture or conventions changed, (3) Update README if user-facing behavior changed, (4) Add to CHANGELOG if user-visible. Never commit code changes that make docs stale."
-    rationale: "Stale documentation is worse than no documentation - it actively misleads. Documentation debt compounds: the longer you wait, the harder it is to remember what changed and why. Commit docs with code, not 'later'."
-    parent_id: git-practices
-    tags: [git, documentation, workflow, quality]

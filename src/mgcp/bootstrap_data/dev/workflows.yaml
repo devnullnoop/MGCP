@@ -188,9 +188,6 @@ workflows:
           - lesson_id: no-hardcoded-secrets
             relevance: "Check for committed secrets"
             priority: 1
-          - lesson_id: pre-commit-documentation-review
-            relevance: "Verify docs are updated"
-            priority: 1
 
   - id: bug-fix
     name: "Bug Fix"

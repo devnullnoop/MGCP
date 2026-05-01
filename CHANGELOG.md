@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`hook_templates/VERSION`**: 2.6 → 2.7. Installer auto-upgrades existing installs on next session.
 - **`hook_templates/session-init.py`** + **`examples/claude-hooks/session-init.py`**: kept in sync; both now carry the REM detector and the v2.7 docstring.
 
+### Removed (v2.7 follow-up — bootstrap data)
+- **`bootstrap_data/dev/git-practices.yaml`**: dropped the `pre-commit-documentation-review` lesson. Its function is now mechanically enforced by the `version-bump-requires-readme` rule (for hook_templates/VERSION → README parity) plus the broader `add_enforcement_rule` machinery for any other doc-coupling the user wants to gate. Keeping it as advisory wisdom alongside enforcement created a redundant warning that the LLM would skim past.
+- **`bootstrap_data/dev/relationships.yaml`**: dropped the two graph relationships that pointed at or from the removed lesson (`git-practices → pre-commit-documentation-review` prerequisite and `pre-commit-documentation-review → verify-before-push` complement).
+- **`bootstrap_data/dev/workflows.yaml`**: dropped the `pre-commit-documentation-review` step lesson from the `qa-release` workflow.
+- **`bootstrap_data/core/relationships.yaml`** **does NOT** reference `version-consistency-across-docs` (verified by grep) — that lesson, also deleted from this dogfood install, was apparently never seeded into bootstrap, only added ad hoc in this project's history.
+
 ### Notes (v2.7)
 - **Existing installs do not auto-migrate the new DEFAULT_RULES.** The seed in `init_project.py:720` writes `~/.mgcp/enforcement_rules.json` only when the file does not already exist (preserves user edits). To pick up the new rules on an existing install, either delete the file (loses user edits) or call `mcp__mgcp__add_enforcement_rule` for each. The SessionStart REM-overdue detector activates immediately on upgrade because it reads the DB directly, not via the rules file.
 - **`rem-required-before-commit` is default-off on purpose.** Default-on would force `rem_run` on every commit even on fresh installs without REM state, producing no-finding noise that trains the LLM to skim past REM output. Default-off plus the SessionStart visibility layer surfaces overdue state at the right moment (session start, not commit time) and lets the user opt into commit-time enforcement once REM is producing useful findings.

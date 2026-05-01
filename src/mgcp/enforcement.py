@@ -142,6 +142,81 @@ DEFAULT_RULES: list[EnforcementRule] = [
             "To bypass all gates: bare MGCP_BYPASS."
         ),
     ),
+    EnforcementRule(
+        name="version-bump-requires-readme",
+        description=(
+            "Couple hook_templates/VERSION bumps to README.md updates in the "
+            "same commit. Backs the publish-requires-doc-parity lesson with "
+            "data enforcement so advisory knowledge alone doesn't have to "
+            "carry the discipline. Triggered originally by v2.5 (3f4b621) "
+            "shipping without README updates despite the v2.4 CHANGELOG "
+            "literally citing this exact coupling as a use case."
+        ),
+        enabled=True,
+        trigger=Trigger(
+            tool_name="Bash",
+            command_match=CommandMatch(
+                type="git_subcommand",
+                subcommands=["commit", "push"],
+            ),
+        ),
+        preconditions=[
+            Precondition(
+                type="staged_files_coupling",
+                couplings=[
+                    {
+                        "when_staged": ["src/mgcp/hook_templates/VERSION"],
+                        "require_one_of": ["README.md"],
+                    },
+                ],
+            ),
+        ],
+        bypass_scope="docs",
+        deny_reason=(
+            "A hook VERSION bump is staged without README.md. Version bumps "
+            "change documented behavior — update README in the same commit, "
+            "not as a follow-up. If this is a no-op version bump (no "
+            "user-visible change), bypass with MGCP_BYPASS:docs."
+        ),
+    ),
+    EnforcementRule(
+        name="rem-required-before-commit",
+        description=(
+            "Force REM cycle execution before git commit/push. REM has no "
+            "auto-trigger; without forced execution at commit time the "
+            "schedule drifts unboundedly. Seeded DISABLED by default — fresh "
+            "installs do not benefit from REM enforcement until they have "
+            "lesson history and REM state. Toggle with "
+            "toggle_enforcement_rule('rem-required-before-commit') once REM "
+            "has run a few cycles. The SessionStart hook surfaces an "
+            "advisory warning when operations are overdue regardless of "
+            "this rule's enabled state."
+        ),
+        enabled=False,
+        trigger=Trigger(
+            tool_name="Bash",
+            command_match=CommandMatch(
+                type="git_subcommand",
+                subcommands=["commit", "push"],
+            ),
+        ),
+        preconditions=[
+            Precondition(
+                type="tool_called_this_turn",
+                tool_name="mcp__mgcp__rem_run",
+            ),
+        ],
+        bypass_scope="rem",
+        deny_reason=(
+            "git commit/push requires mcp__mgcp__rem_run in this turn first. "
+            "REM cycles have no auto-trigger; this rule forces execution at "
+            "commit time so the schedule does not drift unboundedly. Call "
+            "mcp__mgcp__rem_run with no arguments to pick up every due "
+            "operation, READ the findings, then retry the commit. To "
+            "bypass this gate only: include MGCP_BYPASS:rem in your next "
+            "prompt. To bypass all gates: bare MGCP_BYPASS."
+        ),
+    ),
 ]
 
 

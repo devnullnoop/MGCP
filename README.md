@@ -316,6 +316,19 @@ The `session-init.py` hook previously injected a full `<intent-routing>` + `<int
 
 v2.5 drops the SessionStart copy. The hook now carries only the bootstrap checklist (`read_soliloquy` / `get_project_context` / `query_lessons`) and the workflow execution discipline. SessionStart injection drops ~2500 → ~1050 chars. The dispatcher is unchanged. This walks back an earlier sketch of moving intent classification into the hook (keyword regex) — that direction would have regressed to the legacy hooks archived in `examples/claude-hooks/legacy/`; classification stays LLM-side and enforcement rules catch misclassification at tool-call time regardless.
 
+### v2.7: REM enforcement gate + visibility
+
+REM cycles have no auto-trigger. The schedule lives in `rem_state` and operations move forward only when something calls `mcp__mgcp__rem_run`. On this project the schedule fell 13 sessions overdue (about 2 months) before anyone noticed, because the only way to surface that was to read `rem_status` manually. The advisory channel had failed silently. v2.7 closes both halves of that gap:
+
+1. **Seeded enforcement rule (default-off).** `rem-required-before-commit` is now in `DEFAULT_RULES` in `src/mgcp/enforcement.py`. When enabled, it blocks `git commit` / `git push` unless `rem_run` was called in the same turn. Default-off because fresh installs without lesson history do not benefit from REM enforcement; toggle it on via `mcp__mgcp__toggle_enforcement_rule('rem-required-before-commit')` once REM is producing useful findings. Bypass scope `rem`.
+2. **SessionStart visibility layer (always on).** `session-init.py` now reads `~/.mgcp/lessons.db` directly (stdlib `sqlite3`, read-only URI mode, 2-second timeout) and injects a `## ⚠️ REM Operations Overdue` block listing every operation whose `next_due_session` is at or below the project's `session_count`. Each entry shows last-run session, due-at session, and the gap in sessions. The action footer recommends `rem_run` and points at the optional toggle for commit-time enforcement.
+
+Together: the rule is opt-in commit-time enforcement, the detector is always-on session-start visibility. The rule fires at the moment of shipping discipline; the detector fires at the moment of attention.
+
+v2.7 also seeds `version-bump-requires-readme` in `DEFAULT_RULES`. That rule was added out-of-band via `add_enforcement_rule` after v2.4 shipped and the recent-decisions log called for seeding it next session. v2.7 is that next session.
+
+**Existing installs do not auto-migrate the new defaults.** The seed in `init_project.py:720` writes `~/.mgcp/enforcement_rules.json` only when the file does not already exist (preserves user edits). Pick up the new rules on an existing install by calling `mcp__mgcp__add_enforcement_rule` for each, or delete the rules file (loses local edits) and re-run `mgcp-init`. The SessionStart REM-overdue detector activates immediately on upgrade because it reads the DB directly, not via the rules file.
+
 ### v2.6: Stale hook reference self-detection
 
 Two coupled fixes for an upgrade-path bug. On installs that ran `mgcp-init` between v2.0/v2.1 (when `mgcp-reminder.py` was a real hook) and v2.2+ (where it was superseded by `post-tool-dispatcher.py`), the installer would delete the file from `~/.mgcp/hooks/` but leave the reference in `~/.claude/settings.json` — because the settings-scrub was gated behind `--force`. Every matching `PostToolUse` tool call then surfaced `hook returned blocking error` / `Errno 2: No such file` noise. The Write itself always succeeded — PostToolUse has no blocking authority — but the UI wording was misleading.
@@ -329,7 +342,7 @@ If you're upgrading from v2.0 or v2.1 and were ever seeing "hook returned blocki
 
 | Hook | Event | Type | Purpose |
 |------|-------|------|---------|
-| `session-init.py` | SessionStart | advisory | Inject the session-start bootstrap checklist (read_soliloquy / get_project_context / query_lessons) and workflow execution discipline. (v2.5: no longer duplicates the dispatcher's routing/actions block.) |
+| `session-init.py` | SessionStart | advisory | Inject the session-start bootstrap checklist (read_soliloquy / get_project_context / query_lessons) and workflow execution discipline. v2.5: no longer duplicates the dispatcher's routing/actions block. v2.6: detects stale `.py` hook references in settings.json. v2.7: detects overdue REM operations from `rem_state` and recommends `rem_run`. |
 | `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Hard keyword gates (data-driven from `intent_config.json` — both git and session_end fire from one loop), full classifier+actions re-injection every message, scheduled reminders, workflow state, per-turn enforcement state reset |
 | `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Generic evaluator reading `~/.mgcp/enforcement_rules.json`. Applies every enabled rule; denies when preconditions unsatisfied. Scoped bypass via `MGCP_BYPASS:<scope>` or bare `MGCP_BYPASS` |
 | `post-tool-dispatcher.py` | PostToolUse | advisory | Routes by tool: Edit/Write triggers knowledge-capture; Bash triggers error detection; appends every tool name to `turn_tools_called` for PreToolUse rules |

@@ -80,15 +80,23 @@ class Precondition(BaseModel):
     - ``staged_files_coupling`` — for each coupling in ``couplings``, if
       any staged file matches ``when_staged`` (glob) then at least one
       staged file must match ``require_one_of`` (glob).
+    - ``tool_input_glob`` — inspect ``tool_input.<field>`` (a string)
+      and deny if any glob in ``deny_globs`` matches it via fnmatch.
+      Used to gate writes to sensitive paths (settings.json, secrets,
+      etc.) by Edit/Write tools and to gate URL targets on web fetches.
+      Fails open on missing field or non-string value.
     """
 
     type: Literal[
         "tool_called_this_turn",
         "tool_not_called_this_turn",
         "staged_files_coupling",
+        "tool_input_glob",
     ]
     tool_name: str = ""
     couplings: list[dict] = Field(default_factory=list)
+    field: str = ""
+    deny_globs: list[str] = Field(default_factory=list)
 
 
 class EnforcementRule(BaseModel):
@@ -352,8 +360,16 @@ def evaluate_precondition(
     pre: Precondition,
     state: dict,
     staged_files: list[str],
+    tool_input: dict | None = None,
 ) -> tuple[bool, str]:
-    """Evaluate one precondition. Returns (satisfied, failure_detail)."""
+    """Evaluate one precondition. Returns (satisfied, failure_detail).
+
+    ``tool_input`` is the dict of arguments the LLM passed to the tool
+    being gated. Required for ``tool_input_glob``; ignored by other
+    types. Defaults to ``{}`` so existing callers without a tool_input
+    keep working (the older types do not need it).
+    """
+    tool_input = tool_input or {}
     called = state.get("turn_tools_called") or []
 
     if pre.type == "tool_called_this_turn":
@@ -381,6 +397,27 @@ def evaluate_precondition(
         if not unsatisfied:
             return True, ""
         return False, "Doc-coupling violations:\n" + "\n".join(unsatisfied)
+
+    if pre.type == "tool_input_glob":
+        # Malformed precondition (no field or no globs) → fail open.
+        if not pre.field or not pre.deny_globs:
+            return True, ""
+        value = tool_input.get(pre.field)
+        # Field missing or wrong type → fail open. Enforcement is a net,
+        # not a tripwire; misshapen tool inputs should not produce false
+        # positives.
+        if not isinstance(value, str):
+            return True, ""
+        for pattern in pre.deny_globs:
+            try:
+                if fnmatch.fnmatch(value, pattern):
+                    return (
+                        False,
+                        f"tool_input.{pre.field} = {value!r} matches deny pattern {pattern!r}",
+                    )
+            except Exception:
+                continue  # malformed glob → skip this pattern
+        return True, ""
 
     # Unknown type — fail open (skip, don't block)
     return True, ""
@@ -431,7 +468,9 @@ def evaluate_rules(
         unsatisfied: list[str] = []
         for pre in rule.preconditions:
             try:
-                ok, detail = evaluate_precondition(pre, state, staged_files or [])
+                ok, detail = evaluate_precondition(
+                    pre, state, staged_files or [], tool_input
+                )
             except Exception:
                 ok, detail = True, ""  # fail open on malformed precondition
             if not ok:

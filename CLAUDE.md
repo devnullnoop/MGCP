@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **MGCP** (Memory Graph Core Primitives) is a Python MCP server providing persistent, graph-based memory for LLM interactions. The system stores lessons learned during LLM sessions in a graph structure, allowing semantic querying without loading full context histories.
 
-**Status**: v2.1.0 - Alpha/Research project. Phases 1-7 complete, actively dogfooding. Phase 8 (skill compilation) removed — degraded reliability.
+**Status**: v2.1.0 - Alpha/Research project. Phases 1-7 complete, actively dogfooding. Phase 8's *strategy* — graduating lessons out of `query_lessons` into compiled skill prompts — was dropped for degrading reliability. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
 
 ## Documentation Preferences
 
@@ -85,7 +85,7 @@ The system flows from Claude/LLM through MCP Protocol to the MGCP Server, which 
 
 All source files are in `src/mgcp/`:
 
-- `server.py` - MCP server with 37 tools
+- `server.py` - MCP server with 49 tools
 - `models.py` - Pydantic models (Lesson, ProjectContext, ProjectCatalogue, SecurityNote, Convention, etc.)
 - `graph.py` - NetworkX graph operations with typed relationships and Louvain community detection
 - `embedding.py` - Centralized BGE embedding model (`BAAI/bge-base-en-v1.5`)
@@ -187,6 +187,14 @@ All source files are in `src/mgcp/`:
 - `write_soliloquy` - Write a reflective message to your future self (at session close/compression)
 - `read_soliloquy` - Read your most recent message(s) to yourself (at session start)
 
+The journal is **stored globally** — it is one continuous inner voice, not one
+per codebase — and **read project-aware**: `read_soliloquy` returns this
+project's most recent entry, and only when this project has none does it fall
+back to the newest entry from anywhere, labelled with where it came from. Both
+tools resolve the project from `project_path`, else `CLAUDE_PROJECT_DIR`, else
+cwd. Entries written before tagging existed carry no project tag and read as
+"from an untagged earlier session".
+
 **Intent Config (6):**
 - `list_intents` - List all configured intents (name, description, action, tag/keyword counts)
 - `get_intent` - Get full definition of one intent by name
@@ -279,4 +287,4 @@ Per-turn state flows through `workflow_state.json`: UserPromptSubmit resets `tur
 5. ~~Phase 5: Quality of Life~~ Complete - Multi-client support, export/import, backup/restore, proactive hooks
 6. ~~Phase 6: Proactive Intelligence~~ Complete - Intent-based LLM self-routing, REM intent calibration, workflow state management
 7. ~~Phase 7: Feedback Loops~~ Complete - REM cycle engine (staleness scan, duplicate detection, community detection, knowledge extraction), versioned context history, lesson version snapshots, scheduled reminders
-8. ~~Phase 8: Skill Compilation~~ **Removed** - Degraded reliability by hiding lessons from active querying. Hook-based injection outperforms skill files.
+8. Phase 8: Skill Compilation — **strategy dropped, feature shipped.** The abandoned strategy was replacing stored knowledge with compiled skill prompts: graduated lessons were hidden from `query_lessons`, which degraded reliability. Hook-based injection outperforms skill files, so lessons stay in the active query pool. The compiler itself is live as v2.3 `compile_intent_to_skill` — it emits a SKILL.md file and never touches the knowledge store. REM owns knowledge maintenance; skill compilation owns file emission.

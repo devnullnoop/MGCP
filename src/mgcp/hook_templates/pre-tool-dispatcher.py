@@ -205,7 +205,8 @@ def _check_coupling(staged, when_staged, require_one_of):
     return False, triggering
 
 
-def _evaluate_precondition(pre: dict, state: dict, staged_files: list):
+def _evaluate_precondition(pre: dict, state: dict, staged_files: list, tool_input: dict = None):
+    tool_input = tool_input or {}
     called = state.get("turn_tools_called") or []
     pre_type = pre.get("type", "")
 
@@ -236,6 +237,25 @@ def _evaluate_precondition(pre: dict, state: dict, staged_files: list):
         if not unsatisfied:
             return True, ""
         return False, "Doc-coupling violations:\n" + "\n".join(unsatisfied)
+
+    if pre_type == "tool_input_glob":
+        field = pre.get("field", "")
+        deny_globs = pre.get("deny_globs") or []
+        if not field or not deny_globs:
+            return True, ""
+        value = tool_input.get(field)
+        if not isinstance(value, str):
+            return True, ""
+        for pattern in deny_globs:
+            try:
+                if fnmatch.fnmatch(value, pattern):
+                    return (
+                        False,
+                        f"tool_input.{field} = {value!r} matches deny pattern {pattern!r}",
+                    )
+            except Exception:
+                continue
+        return True, ""
 
     # Unknown type — fail open
     return True, ""
@@ -364,7 +384,9 @@ def main():
         unsatisfied = []
         for pre in preconditions:
             try:
-                ok, detail = _evaluate_precondition(pre or {}, state, staged_files or [])
+                ok, detail = _evaluate_precondition(
+                    pre or {}, state, staged_files or [], tool_input
+                )
             except Exception:
                 ok, detail = True, ""
             if not ok:

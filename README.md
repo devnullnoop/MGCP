@@ -266,6 +266,24 @@ Data-driven gates for the PreToolUse hook. Edits take effect on the next tool ca
 | `remove_enforcement_rule` | Delete a rule |
 | `toggle_enforcement_rule` | Enable/disable without deleting |
 
+### Intent Config (6)
+The routing prompt is data. These tools edit `~/.mgcp/intent_config.json` from chat; the next session's hook injection picks up the change.
+| Tool | Purpose |
+|------|---------|
+| `list_intents` | List configured intents (name, description, action, tag/keyword counts) |
+| `get_intent` | Full definition of one intent |
+| `add_intent` | Add a new intent |
+| `update_intent` | Change fields on an existing intent |
+| `remove_intent` | Delete an intent |
+| `compile_intent_to_skill` | Emit an intent + its workflow + per-step lessons as a SKILL.md **file**. Purely additive — writes nothing back to the knowledge store. |
+
+### Soliloquy (2)
+The agent's message to its future self. Stored **globally** — one continuous inner voice, not one journal per codebase — but **read project-aware**: `read_soliloquy` returns this project's most recent entry, and only falls back to the newest entry from anywhere when this project has none, labelled with where it came from.
+| Tool | Purpose |
+|------|---------|
+| `write_soliloquy` | Write a reflection for next-you (session close / compaction) |
+| `read_soliloquy` | Read your most recent message(s) to yourself (session start) |
+
 ## Claude Code Hooks
 
 ### The problem with regex routing
@@ -290,7 +308,7 @@ A new `session_end` intent was added to fix a real failure mode that v2.1 silent
 
 Anthropic's plugin system distributes prompt-only "skills" as `SKILL.md` files in `~/.claude/skills/`. Once installed, a skill is invocable as a slash command (`/skill_name`) and auto-discoverable by Claude via its frontmatter description. v2.3 adds a compiler that takes any MGCP intent + its linked workflow + the workflow's per-step lessons and renders all four layers into a single SKILL.md — turning MGCP's accumulated discipline into a portable artifact you can use even in Claude surfaces that don't have MGCP installed.
 
-The compiled skill is **purely additive**. The intent stays in `intent_config.json` and continues to drive the hook keyword gates and LLM intent classification. Backing lessons stay in the active query pool. Compiling does not remove, hide, or graduate anything. This is the inverse of the Phase 8 skill compilation that was removed for degrading reliability — Phase 8 graduated lessons out of `query_lessons`, which hid knowledge from the LLM. v2.3 keeps the source of truth in MGCP and treats the SKILL.md as a downstream export format that can be recompiled at any time.
+The compiled skill is **purely additive**. The intent stays in `intent_config.json` and continues to drive the hook keyword gates and LLM intent classification. Backing lessons stay in the active query pool. Compiling does not remove, hide, or graduate anything. This is the inverse of the Phase 8 *strategy*, which was dropped for degrading reliability — Phase 8 graduated lessons out of `query_lessons`, which hid knowledge from the LLM. The compiler was never the problem and was not removed. v2.3 keeps the source of truth in MGCP and treats the SKILL.md as a downstream export format that can be recompiled at any time.
 
 A new `compile_intent_to_skill` MCP tool, a `POST /api/intent-config/intents/{name}/compile` web endpoint, and a "Compile to skill" button on the `/intents` page all converge on the same `compile_intent_to_skill()` function. The web UI badges compiled skills as **fresh** (green) or **stale** (orange) by comparing the SKILL.md mtime against the backing lessons' `last_refined` timestamps and the `intent_config.json` mtime, so users know when to recompile.
 
@@ -430,7 +448,7 @@ If someone tries this, we'd be interested to hear how it goes.
 | Quality of Life | Complete |
 | Proactive Intelligence | Complete |
 | Feedback Loops (REM) | Complete |
-| Skill Compilation | Removed (degraded reliability) |
+| Skill Compilation | Complete (v2.3) — emits a SKILL.md file; never writes to the knowledge store. The *strategy* of graduating lessons out of `query_lessons` was dropped for degrading reliability. |
 
 ## Contributing
 

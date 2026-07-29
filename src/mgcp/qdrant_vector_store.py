@@ -114,7 +114,13 @@ class QdrantVectorStore:
                         "lesson_id": lesson.id,  # Store original ID for retrieval
                         "trigger": lesson.trigger,
                         "action": lesson.action,
-                        "tags": ",".join(lesson.tags),
+                        # A LIST, not a joined string. Qdrant's MatchValue is exact
+                        # equality on the whole field, so a payload of
+                        # "git,commits,workflow" could never match a filter for "git".
+                        # Every tag-filtered search in this system's history returned
+                        # empty, unnoticed because no shipped caller passed `tags`.
+                        # On a list payload MatchValue matches if any element equals.
+                        "tags": list(lesson.tags),
                         "parent_id": lesson.parent_id or "",
                         "usage_count": lesson.usage_count,
                         "text": text,  # Store for similarity search
@@ -376,7 +382,7 @@ class QdrantVectorStore:
                     "lesson_id": lesson.id,  # Store original ID for retrieval
                     "trigger": lesson.trigger,
                     "action": lesson.action,
-                    "tags": ",".join(lesson.tags),
+                    "tags": list(lesson.tags),  # list, not joined — see add_lesson
                     "parent_id": lesson.parent_id or "",
                     "usage_count": lesson.usage_count,
                     "text": texts[i],

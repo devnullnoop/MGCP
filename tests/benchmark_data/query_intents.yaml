@@ -1,0 +1,49 @@
+# Router intent per benchmark query, classified from the QUERY TEXT ALONE.
+#
+# PROVENANCE, and it matters: these were written and committed to disk BEFORE
+# the intent-gated measurement was run, and without consulting each query's
+# gold lesson. The first attempt at this measurement derived the intent from
+# the gold answer's tags (picking alphabetically on ties), which is not what a
+# caller does — a caller classifies the message, not the answer — and it
+# produced a gated P@3 of 0.556 against 0.600 unfiltered.
+#
+# Classifications follow the routing table in ~/.mgcp/intent_config.json:
+#   git_operation        commit, push, merge, deploy, release, PR
+#   catalogue_dependency adopting/installing a library
+#   catalogue_security   vulnerability, auth weakness, exploit risk
+#   catalogue_decision   a technical choice between options
+#   catalogue_arch_note  gotcha, quirk, caveat, surprising behaviour
+#   catalogue_convention coding rule, naming, style, process standard
+#   task_start           fix, implement, build, refactor, debug, set up
+#   session_end          wrapping up
+#
+# Where a query could plausibly take two, the one a router would pick from the
+# surface wording is used — debugging a symptom is task_start; a known quirk
+# you are being warned about is catalogue_arch_note.
+
+diff-size-discipline:        catalogue_convention
+when-to-stop-reviewing:      catalogue_convention
+port-in-use:                 task_start
+pytest-hangs:                task_start
+qdrant-lock:                 catalogue_arch_note
+password-storage:            catalogue_security
+idor:                        catalogue_security
+before-push:                 git_operation
+commit-message-attribution:  git_operation
+explain-register:            catalogue_convention
+about-to-apologise:          catalogue_convention
+wrap-up-report:              catalogue_convention
+sidebar-scroll:              task_start
+fastapi-object-object:       catalogue_arch_note
+read-a-pdf:                  task_start
+version-bump:                git_operation
+hook-template-edit:          catalogue_arch_note
+regex-vs-llm:                catalogue_decision
+retry-loop:                  catalogue_arch_note
+ui-claim-works:              catalogue_convention
+enforcement-blocked:         catalogue_arch_note
+big-feature-start:           task_start
+ux-gap-during-guide:         catalogue_convention
+vanity-metrics:              catalogue_decision
+sql-injection:               catalogue_security
+log-rotation:                catalogue_arch_note

@@ -118,3 +118,34 @@ def test_query_set_is_well_formed():
     assert len({c.id for c in cases}) == len(cases), "duplicate case id"
     for c in cases:
         assert c.query and c.paraphrase and c.query != c.paraphrase
+
+
+def test_tag_filter_actually_filters(store):
+    """The tag filter silently returned nothing for this system's whole history.
+
+    Tags were stored as a comma-joined string ("git,commits,workflow") and
+    queried with Qdrant's MatchValue, which is exact equality on the whole
+    field — so a filter for "git" could never match. Nobody noticed because no
+    shipped caller passed `tags`.
+
+    Non-vacuity: change the payload in add_lesson back to
+    ",".join(lesson.tags) and the first assertion fails.
+    """
+    from mgcp.models import Lesson
+
+    store.add_lesson(Lesson(
+        id="tagged-git", trigger="pushing a branch",
+        action="run the tests first", tags=["git", "testing"],
+    ))
+    store.add_lesson(Lesson(
+        id="tagged-other", trigger="picking a colour",
+        action="use the token", tags=["design"],
+    ))
+
+    ids = {i for i, _ in store.search("pushing a branch", limit=5,
+                                      min_score=0.0, tags=["git"])}
+    assert "tagged-git" in ids, (
+        "a lesson tagged 'git' was not returned by a tags=['git'] filter — "
+        "the payload is not a list, or the query is not MatchValue"
+    )
+    assert "tagged-other" not in ids, "the filter let an untagged lesson through"

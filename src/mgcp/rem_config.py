@@ -39,33 +39,37 @@ def is_due(schedule: OperationSchedule, current_session: int, last_run_session: 
     return False
 
 
-def next_due_session(schedule: OperationSchedule, current_session: int) -> int:
-    """Calculate the next session number when an operation will be due."""
-    if schedule.strategy == "linear":
-        # Next multiple of interval after current session
-        return ((current_session // schedule.interval) + 1) * schedule.interval
+MAX_LOOKAHEAD = 1000
 
-    elif schedule.strategy == "fibonacci":
-        for fib in _FIBONACCI:
-            if fib > current_session:
-                return fib
-        # Past our precomputed list - extend fibonacci
-        a, b = _FIBONACCI[-2], _FIBONACCI[-1]
-        while b <= current_session:
-            a, b = b, a + b
-        return b
 
-    elif schedule.strategy == "logarithmic":
-        # Find next session where the log check triggers
-        candidate = current_session + 1
-        while candidate < current_session + 1000:  # Safety bound
-            gap = max(1, int(math.log(max(1, candidate / schedule.base_interval)) * schedule.scale))
-            if candidate >= current_session + gap:
-                return candidate
-            candidate += 1
-        return current_session + schedule.base_interval
+def next_due_session(
+    schedule: OperationSchedule,
+    last_run_session: int,
+    lookahead: int = MAX_LOOKAHEAD,
+) -> int | None:
+    """The first session after ``last_run_session`` at which `is_due` fires.
 
-    return current_session + 10  # Fallback
+    Derived by asking `is_due` rather than by re-deriving the arithmetic,
+    because the two answers are one fact and a second implementation of a
+    schedule is a second opinion about it. The linear branch used to compute
+    the next multiple of the interval — a grid — while `is_due` measures
+    sessions elapsed since the last run. For `staleness_scan` (interval 5)
+    last run at 98, the grid said 100 and `is_due` did not fire until 103, so
+    `rem_status` published a due date three sessions early and SessionStart
+    warned "REM Operations Overdue" for operations that were not.
+
+    The parameter is `last_run_session`, not `current_session`: both callers
+    always passed the last run, and the old name is what made a grid look
+    like a reasonable reading.
+
+    Returns None when the schedule does not fire within ``lookahead``
+    sessions (e.g. a non-positive interval, which is never due). Callers and
+    the `next_due_session` column already treat that as unknown.
+    """
+    for session in range(last_run_session + 1, last_run_session + lookahead + 1):
+        if is_due(schedule, session, last_run_session):
+            return session
+    return None
 
 
 def _is_due_linear(interval: int, current: int, last_run: int) -> bool:

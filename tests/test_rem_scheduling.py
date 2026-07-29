@@ -1,5 +1,7 @@
 """Tests for REM cycle scheduling strategies."""
 
+import pytest
+
 from mgcp.rem_config import (
     DEFAULT_SCHEDULES,
     OperationSchedule,
@@ -28,9 +30,19 @@ class TestLinearSchedule:
         assert is_due(s, current_session=10, last_run_session=10) is False
 
     def test_next_due(self):
+        """Next due is last run + interval, not the next multiple of it.
+
+        These used to read 10 and 15 — the interval GRID — while is_due
+        measures sessions elapsed since the last run. A run at 7 does not
+        make the operation due at 10; it makes it due at 12.
+        """
         s = OperationSchedule(strategy="linear", interval=5)
-        assert next_due_session(s, current_session=7) == 10
-        assert next_due_session(s, current_session=10) == 15
+        assert next_due_session(s, last_run_session=7) == 12
+        assert next_due_session(s, last_run_session=10) == 15
+
+    def test_next_due_is_none_when_the_schedule_never_fires(self):
+        s = OperationSchedule(strategy="linear", interval=0)
+        assert next_due_session(s, last_run_session=5) is None
 
 
 class TestFibonacciSchedule:
@@ -50,9 +62,9 @@ class TestFibonacciSchedule:
 
     def test_next_due_fibonacci(self):
         s = OperationSchedule(strategy="fibonacci")
-        assert next_due_session(s, current_session=5) == 8
-        assert next_due_session(s, current_session=8) == 13
-        assert next_due_session(s, current_session=0) == 5
+        assert next_due_session(s, last_run_session=5) == 8
+        assert next_due_session(s, last_run_session=8) == 13
+        assert next_due_session(s, last_run_session=0) == 5
 
 
 class TestLogarithmicSchedule:
@@ -99,3 +111,22 @@ class TestDefaultSchedules:
     def test_extraction_uses_logarithmic(self):
         s = DEFAULT_SCHEDULES["knowledge_extraction"]
         assert s.strategy == "logarithmic"
+
+
+class TestNextDueAgreesWithIsDue:
+    """The published due date and the predicate that gates execution are one
+    fact. They were two implementations of it, and they disagreed."""
+
+    @pytest.mark.parametrize("schedule", list(DEFAULT_SCHEDULES.values()), ids=list(DEFAULT_SCHEDULES))
+    @pytest.mark.parametrize("last_run", [0, 1, 5, 10, 37, 98, 144])
+    def test_published_date_is_the_first_session_that_actually_fires(self, schedule, last_run):
+        nxt = next_due_session(schedule, last_run)
+        assert nxt is not None, "every shipped schedule must fire eventually"
+
+        assert is_due(schedule, nxt, last_run), (
+            f"published next due {nxt} is not actually due (last run {last_run})"
+        )
+        not_yet = [s for s in range(last_run + 1, nxt) if is_due(schedule, s, last_run)]
+        assert not not_yet, (
+            f"published next due {nxt} is late: {not_yet} fire earlier (last run {last_run})"
+        )

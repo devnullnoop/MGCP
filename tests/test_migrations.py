@@ -12,6 +12,7 @@ from mgcp.migrations import (
     deduplicate_project_contexts,
     ensure_unique_project_path,
     migrate_related_ids_to_relationships,
+    repair_rem_state_rows,
     run_all_migrations,
 )
 from mgcp.persistence import LessonStore
@@ -448,3 +449,80 @@ class TestMigrateRelatedIds:
         await store.get_all_lessons()  # the schema is created on first use
 
         assert await migrate_related_ids_to_relationships(temp_db) == 0
+
+
+class TestRepairRemStateRows:
+    """The stored due date is the one SessionStart reads, so fixing the
+    function that computes it does not fix the rows it already wrote."""
+
+    async def _store_with_rem_state(self, db_path, rows):
+        store = LessonStore(db_path)
+        await store.get_all_lessons()  # the schema is created on first use
+        async with aiosqlite.connect(db_path) as conn:
+            for project_id, operation, last_run, next_due in rows:
+                await conn.execute(
+                    "INSERT INTO rem_state (project_id, operation, last_run_session, "
+                    "last_run_timestamp, next_due_session) VALUES (?, ?, ?, ?, ?)",
+                    (project_id, operation, last_run, "2026-07-29T00:00:00+00:00", next_due),
+                )
+            await conn.commit()
+        return store
+
+    async def _rows(self, db_path):
+        async with aiosqlite.connect(db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute(
+                "SELECT operation, next_due_session FROM rem_state ORDER BY operation"
+            )
+            return {r["operation"]: r["next_due_session"] for r in await cursor.fetchall()}
+
+    @pytest.mark.asyncio
+    async def test_early_due_dates_are_recomputed(self, temp_db):
+        """staleness_scan is linear/5. Last run 98 was stored as due at 100 by
+        the old interval-grid arithmetic; is_due does not fire until 103."""
+        await self._store_with_rem_state(temp_db, [("p1", "staleness_scan", 98, 100)])
+
+        assert await repair_rem_state_rows(temp_db) == 1
+        assert (await self._rows(temp_db))["staleness_scan"] == 103
+
+    @pytest.mark.asyncio
+    async def test_rows_for_deleted_operations_are_dropped(self, temp_db):
+        """A row for an operation that no longer exists is not inert: the
+        SessionStart detector iterates rem_state without checking it against
+        the operations that ship, so it would report the dead one overdue."""
+        await self._store_with_rem_state(temp_db, [("p1", "action_effectiveness", 98, 100)])
+
+        assert await repair_rem_state_rows(temp_db) == 1
+        assert await self._rows(temp_db) == {}
+
+    @pytest.mark.asyncio
+    async def test_correct_rows_are_left_alone(self, temp_db):
+        """Idempotent — a second run changes nothing."""
+        await self._store_with_rem_state(temp_db, [("p1", "staleness_scan", 98, 103)])
+
+        assert await repair_rem_state_rows(temp_db) == 0
+        assert (await self._rows(temp_db))["staleness_scan"] == 103
+
+    @pytest.mark.asyncio
+    async def test_each_project_is_repaired_independently(self, temp_db):
+        await self._store_with_rem_state(temp_db, [
+            ("p1", "staleness_scan", 98, 100),
+            ("p2", "staleness_scan", 10, 15),
+        ])
+
+        assert await repair_rem_state_rows(temp_db) == 1  # p2 was already right
+
+        async with aiosqlite.connect(temp_db) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute(
+                "SELECT project_id, next_due_session FROM rem_state ORDER BY project_id"
+            )
+            got = {r["project_id"]: r["next_due_session"] for r in await cursor.fetchall()}
+        assert got == {"p1": 103, "p2": 15}
+
+    @pytest.mark.asyncio
+    async def test_missing_table_is_a_no_op(self, temp_db):
+        async with aiosqlite.connect(temp_db) as conn:
+            await conn.execute("CREATE TABLE placeholder (x INTEGER)")
+            await conn.commit()
+        assert await repair_rem_state_rows(temp_db) == 0

@@ -25,6 +25,7 @@ from .models import (
     WorkflowStep,
     reject_tool_call_envelope,
 )
+from .rem_config import DEFAULT_SCHEDULES, next_due_session
 
 logger = logging.getLogger("mgcp.persistence")
 
@@ -197,6 +198,71 @@ def _compute_catalogue_delta(prev_json: str, new_json: str) -> dict:
         if old_val != new_val:
             delta[key] = new_val
     return delta
+
+
+async def repair_rem_state(conn: aiosqlite.Connection) -> int:
+    """Recompute stored due dates, and drop rows for operations that are gone.
+
+    Runs on every store open, because the numbers this repairs were written
+    into the database by code that has since been fixed, and the stored
+    number is the one that matters: the SessionStart detector reads
+    ``rem_state.next_due_session`` straight out of the table and warns "REM
+    Operations Overdue" when ``session_count`` reaches it.
+
+    Two kinds of bad row:
+
+    * **Early due dates.** ``next_due_session`` used to return the next
+      multiple of the interval — a grid — while ``is_due`` measures sessions
+      elapsed since the last run. A linear/5 operation last run at 98 was
+      stored as due at 100 and does not actually fire until 103, so the
+      warning named operations that were not due.
+    * **Rows for operations that no longer exist.** The detector iterates
+      rem_state and never checks it against the operations that ship, so a
+      leftover row is not inert — it gets reported overdue by name.
+
+    Returns the number of rows changed.
+    """
+    cursor = await conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='rem_state'"
+    )
+    if not await cursor.fetchone():
+        return 0
+
+    cursor = await conn.execute("PRAGMA table_info(rem_state)")
+    columns = {row[1] for row in await cursor.fetchall()}
+    if "project_id" not in columns:
+        return 0  # pre-per-project layout; the re-key migration above handles it
+
+    cursor = await conn.execute(
+        "SELECT project_id, operation, last_run_session, next_due_session FROM rem_state"
+    )
+    rows = await cursor.fetchall()
+
+    changed = 0
+    for project_id, operation, last_run, stored_due in rows:
+        schedule = DEFAULT_SCHEDULES.get(operation)
+        if schedule is None:
+            await conn.execute(
+                "DELETE FROM rem_state WHERE project_id = ? AND operation = ?",
+                (project_id, operation),
+            )
+            logger.info("Dropped rem_state row for unknown operation: %s", operation)
+            changed += 1
+            continue
+
+        correct = next_due_session(schedule, last_run or 0)
+        if correct != stored_due:
+            await conn.execute(
+                "UPDATE rem_state SET next_due_session = ? "
+                "WHERE project_id = ? AND operation = ?",
+                (correct, project_id, operation),
+            )
+            logger.info(
+                "Repaired next_due for %s: %s -> %s", operation, stored_due, correct
+            )
+            changed += 1
+
+    return changed
 
 
 class LessonStore:
@@ -372,6 +438,8 @@ class LessonStore:
                 owner_row[1] if owner_row else "<no project>",
                 owner_row[2] if owner_row else "-",
             )
+
+        await repair_rem_state(conn)
 
     async def add_lesson(self, lesson: Lesson) -> str:
         """Add a new lesson, return its ID."""

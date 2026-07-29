@@ -197,6 +197,19 @@ whose clock the old `max()` scheduler was reading — and logged at WARNING. Eve
 other project starts with no row, which is the truth: REM has never been
 scheduled on its own clock there, so everything is immediately due.
 
+**The published due date is derived from `is_due`, not computed alongside it.**
+`next_due_session(schedule, last_run_session)` returns the first session at which
+`is_due` fires, by asking it. It used to do its own arithmetic — the next multiple
+of the interval — which is a different rule from "sessions elapsed since the last
+run": `staleness_scan` (linear, 5) last run at 98 was published as due at 100 and
+did not actually fire until 103. That number is not cosmetic; the SessionStart
+detector reads `rem_state.next_due_session` out of the table and warns "REM
+Operations Overdue" when `session_count` reaches it, so early dates produced
+warnings for operations that were not due. Rows written by the old arithmetic —
+and rows left behind by operations that no longer exist, which the detector would
+otherwise report overdue by name — are repaired on every store open
+(`persistence.repair_rem_state`).
+
 **Workflow State (1):**
 - `update_workflow_state` - Update active workflow, current step, and completion status
 

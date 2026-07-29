@@ -12,7 +12,7 @@ from pathlib import Path
 import aiosqlite
 
 from .models import Relationship
-from .persistence import DEFAULT_DB_PATH, SCHEMA, LessonStore
+from .persistence import DEFAULT_DB_PATH, SCHEMA, LessonStore, repair_rem_state
 
 logger = logging.getLogger(__name__)
 
@@ -520,6 +520,20 @@ async def ensure_soliloquies_table(db_path: str = DEFAULT_DB_PATH) -> bool:
         return True
 
 
+async def repair_rem_state_rows(db_path: str = DEFAULT_DB_PATH) -> int:
+    """Path-taking wrapper over `persistence.repair_rem_state`, for the CLI.
+
+    The repair itself runs automatically on every store open; this exists so
+    `mgcp-migrate` reports it alongside the other migrations. One
+    implementation, two entry points -- a second copy of the rule would be a
+    second opinion about when an operation is due.
+    """
+    async with aiosqlite.connect(db_path) as conn:
+        changed = await repair_rem_state(conn)
+        await conn.commit()
+    return changed
+
+
 async def run_all_migrations(db_path: str = DEFAULT_DB_PATH) -> dict:
     """Run all pending migrations."""
     results = {}
@@ -549,6 +563,9 @@ async def run_all_migrations(db_path: str = DEFAULT_DB_PATH) -> dict:
 
     # Migration 9: Create soliloquies table for LLM self-reflection
     results["soliloquies_created"] = await ensure_soliloquies_table(db_path)
+
+    # Migration 10: Repair rem_state rows written by the old scheduler
+    results["rem_state_repaired"] = await repair_rem_state_rows(db_path)
 
     logger.info(f"Migrations complete: {results}")
     return results

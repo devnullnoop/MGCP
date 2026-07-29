@@ -320,10 +320,6 @@ All prior hooks (SessionStart, UserPromptSubmit, PostToolUse, PreCompact) are **
 
 v2.3 adds a `PreToolUse` hook (`pre-tool-dispatcher.py`) that can actually refuse a tool call by returning `permissionDecision: "deny"`. First enforced rule: `git commit` / `git push` is blocked unless `mcp__mgcp__query_lessons` ran in the same turn. The detector uses quote-aware tokenization (`shlex` with `punctuation_chars=True`), so `grep 'git commit' docs/` and `echo "how to git commit"` correctly pass through while `make build && git push` correctly blocks. See `docs/mgcp-interception-flow.html` for the full interception map, the growth loop, and candidate improvement areas.
 
-**v2.10 — the detector holds for ordinary command shapes.** Quote-aware tokenization alone was not enough, and three shapes walked straight past the gate until 2026-07-29, when replaying a commit this repo's own gate had just allowed exposed all three. A newline is a command separator, but `shlex` with `whitespace_split` consumes it, so `cd /repo` ⏎ `git commit` tokenized as one command and `git` no longer sat at a command boundary — `&&` was handled, the newline every multi-line block uses was not. An unterminated quote made the detector report "not a git command", so any message containing an apostrophe (`the project's fix`) turned the git gates off. And global flags pushed the subcommand one slot along, so `git -C /path commit` read its subcommand as `-C` and matched nothing.
-
-Detection now runs per line, skips git's global flags, and **fails closed** when a line cannot be tokenized: a command the detector cannot parse is not evidence that the command is safe. Failing closed stays scoped to git — `echo don't` is still allowed — because blocking everything unparseable would stop unrelated work. Both `enforcement.py` and the stdlib-only hook carry the fix, and the shared contract suite now exercises every one of these shapes; it previously tested only single-line, balanced-quote commands, which is why one bug lived in two implementations and both suites stayed green. **Upgrading the package does not redeploy hooks** — run `mgcp-init --force` to pick this up, or an existing install keeps the vulnerable detector.
-
 ### v2.4: enforcement-as-data
 
 v2.3 introduced enforcement but the rule was **hardcoded** in the hook. Adding a new interrupt — "before `rm -rf`, require a confirmation tool", "if you staged `src/**.py`, you must also stage `CHANGELOG.md`" — meant editing Python and shipping a release. That's the same drift pattern v2.2 fixed for intent routing.
@@ -340,6 +336,15 @@ The `session-init.py` hook previously injected a full `<intent-routing>` + `<int
 
 v2.5 drops the SessionStart copy. The hook now carries only the bootstrap checklist (`read_soliloquy` / `get_project_context` / `query_lessons`) and the workflow execution discipline. SessionStart injection drops ~2500 → ~1050 chars. The dispatcher is unchanged. This walks back an earlier sketch of moving intent classification into the hook (keyword regex) — that direction would have regressed to the legacy hooks archived in `examples/claude-hooks/legacy/`; classification stays LLM-side and enforcement rules catch misclassification at tool-call time regardless.
 
+### v2.6: Stale hook reference self-detection
+
+Two coupled fixes for an upgrade-path bug. On installs that ran `mgcp-init` between v2.0/v2.1 (when `mgcp-reminder.py` was a real hook) and v2.2+ (where it was superseded by `post-tool-dispatcher.py`), the installer would delete the file from `~/.mgcp/hooks/` but leave the reference in `~/.claude/settings.json` — because the settings-scrub was gated behind `--force`. Every matching `PostToolUse` tool call then surfaced `hook returned blocking error` / `Errno 2: No such file` noise. The Write itself always succeeded — PostToolUse has no blocking authority — but the UI wording was misleading.
+
+1. **Fix the installer.** The legacy-command scrub now runs on every `mgcp-init`, not just `--force`. Removing a legacy hook file and removing the `settings.json` reference to it are two halves of the same cleanup; separating them was the bug.
+2. **Detect at session start.** `session-init.py` now scans `settings.json` for hook commands pointing at missing absolute `.py` paths and injects a `## ⚠️ Stale Hook References Detected` block telling me (and the user) to run `mgcp-init --force`. One `stat()` per hook command per session; fails open on parse errors.
+
+If you're upgrading from v2.0 or v2.1 and were ever seeing "hook returned blocking error" noise, run `mgcp-init --force` once to clean up.
+
 ### v2.7: REM enforcement gate + visibility
 
 REM cycles have no auto-trigger. The schedule lives in `rem_state` and operations move forward only when something calls `mcp__mgcp__rem_run`. On this project the schedule fell 13 sessions overdue (about 2 months) before anyone noticed, because the only way to surface that was to read `rem_status` manually. The advisory channel had failed silently. v2.7 closes both halves of that gap:
@@ -353,14 +358,11 @@ v2.7 also seeds `version-bump-requires-readme` in `DEFAULT_RULES`. That rule was
 
 **Existing installs do not auto-migrate the new defaults.** The seed in `init_project.py:720` writes `~/.mgcp/enforcement_rules.json` only when the file does not already exist (preserves user edits). Pick up the new rules on an existing install by calling `mcp__mgcp__add_enforcement_rule` for each, or delete the rules file (loses local edits) and re-run `mgcp-init`. The SessionStart REM-overdue detector activates immediately on upgrade because it reads the DB directly, not via the rules file.
 
-### v2.6: Stale hook reference self-detection
+### v2.10: the detector holds for ordinary command shapes
 
-Two coupled fixes for an upgrade-path bug. On installs that ran `mgcp-init` between v2.0/v2.1 (when `mgcp-reminder.py` was a real hook) and v2.2+ (where it was superseded by `post-tool-dispatcher.py`), the installer would delete the file from `~/.mgcp/hooks/` but leave the reference in `~/.claude/settings.json` — because the settings-scrub was gated behind `--force`. Every matching `PostToolUse` tool call then surfaced `hook returned blocking error` / `Errno 2: No such file` noise. The Write itself always succeeded — PostToolUse has no blocking authority — but the UI wording was misleading.
+The v2.3 gate's detector needed hardening. Quote-aware tokenization alone was not enough, and three shapes walked straight past the gate until 2026-07-29, when replaying a commit this repo's own gate had just allowed exposed all three. A newline is a command separator, but `shlex` with `whitespace_split` consumes it, so `cd /repo` ⏎ `git commit` tokenized as one command and `git` no longer sat at a command boundary — `&&` was handled, the newline every multi-line block uses was not. An unterminated quote made the detector report "not a git command", so any message containing an apostrophe (`the project's fix`) turned the git gates off. And global flags pushed the subcommand one slot along, so `git -C /path commit` read its subcommand as `-C` and matched nothing.
 
-1. **Fix the installer.** The legacy-command scrub now runs on every `mgcp-init`, not just `--force`. Removing a legacy hook file and removing the `settings.json` reference to it are two halves of the same cleanup; separating them was the bug.
-2. **Detect at session start.** `session-init.py` now scans `settings.json` for hook commands pointing at missing absolute `.py` paths and injects a `## ⚠️ Stale Hook References Detected` block telling me (and the user) to run `mgcp-init --force`. One `stat()` per hook command per session; fails open on parse errors.
-
-If you're upgrading from v2.0 or v2.1 and were ever seeing "hook returned blocking error" noise, run `mgcp-init --force` once to clean up.
+Detection now runs per line, skips git's global flags, and **fails closed** when a line cannot be tokenized: a command the detector cannot parse is not evidence that the command is safe. Failing closed stays scoped to git — `echo don't` is still allowed — because blocking everything unparseable would stop unrelated work. Both `enforcement.py` and the stdlib-only hook carry the fix, and the shared contract suite now exercises every one of these shapes; it previously tested only single-line, balanced-quote commands, which is why one bug lived in two implementations and both suites stayed green. **Upgrading the package does not redeploy hooks** — run `mgcp-init --force` to pick this up, or an existing install keeps the vulnerable detector.
 
 ### Current hooks
 

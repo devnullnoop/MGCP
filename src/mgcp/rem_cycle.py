@@ -61,8 +61,12 @@ class RemEngine:
                 due.append(op_name)
         return due
 
-    async def get_status(self) -> list[dict]:
-        """Get schedule status for all operations."""
+    async def get_status(self, session_number: int) -> list[dict]:
+        """Get schedule status for all operations at this session number.
+
+        ``is_due`` is the same predicate ``get_due_operations`` uses, so what
+        rem_status displays and what rem_run executes cannot disagree.
+        """
         states = await self.store.get_rem_state()
         state_map = {s["operation"]: s for s in states}
 
@@ -77,6 +81,7 @@ class RemEngine:
                 "strategy": schedule.strategy,
                 "last_run_session": last_run,
                 "next_due_session": next_session,
+                "is_due": is_due(schedule, session_number, last_run),
                 "last_run_timestamp": state["last_run_timestamp"] if state else None,
             }
 

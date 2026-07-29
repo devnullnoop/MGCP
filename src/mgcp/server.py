@@ -651,7 +651,29 @@ async def get_project_context(project_path: str) -> str:
     context.last_accessed = datetime.now(UTC)
     context.session_count += 1
     context.last_session_id = telemetry.session_id
-    await store.save_project_context(context)
+    try:
+        await store.save_project_context(context)
+    except ValueError as exc:
+        # Bookkeeping only — this write touches last_accessed, session_count
+        # and last_session_id, never the content. The envelope guard rejects
+        # NEW corruption at the door, but it must not brick session resume on
+        # content that is already stored: 7 of 24 saved contexts carry a
+        # serialised tool-call envelope in `notes` from before the guard
+        # existed, MGCP's own among them. Raising here would mean those
+        # projects cannot resume at all, which is a far worse failure than the
+        # corruption it is objecting to.
+        #
+        # The counter increment is lost for this session. That is the correct
+        # trade and it is why this logs rather than passing silently — run the
+        # cleanup script to make it stop.
+        logger.warning(
+            "project context for %s could not be updated (%s). "
+            "Stored content predates the tool-call-envelope guard; run "
+            "scripts/clean_tool_call_envelopes.py to repair it. "
+            "Session bookkeeping for this project is not being recorded.",
+            context.project_name,
+            exc,
+        )
 
     return context.to_context()
 
@@ -2015,9 +2037,25 @@ async def update_workflow_state(
 # ============================================================================
 
 
+async def _rem_project(store: LessonStore, project_path: str) -> ProjectContext | None:
+    """Resolve the project whose session count drives the REM cadence.
+
+    REM runs per project: a new project throws off a lot of raw material and
+    needs frequent early distillation, independent of how many sessions some
+    other project has accumulated. Explicit path wins, then the agent's project
+    dir, then cwd. Returns None when no context exists for that path — REM has
+    no session number to schedule against and the caller must say so.
+    """
+    import os
+
+    path = project_path or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    return await store.get_project_context_by_path(path)
+
+
 @mcp.tool()
 async def rem_run(
     operations: str = "",
+    project_path: str = "",
 ) -> str:
     """Trigger a REM (Recalibrate Everything in Memory) cycle.
 
@@ -2025,19 +2063,31 @@ async def rem_run(
     community detection, knowledge extraction. Each finding is returned for
     interactive review.
 
+    The cadence is per project — it follows THIS project's session count — but
+    the corpus is global: a cycle triggered here maintains the whole shared
+    knowledge store.
+
     Args:
         operations: Comma-separated list of operations to run. Empty = run all due.
                    Options: staleness_scan, duplicate_detection, community_detection,
                    knowledge_extraction, context_summary
+        project_path: Project root whose session count sets the cadence.
+                   Empty = CLAUDE_PROJECT_DIR, else the current directory.
     """
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
     from .rem_cycle import RemEngine
 
     engine = RemEngine(store=store)
 
-    # Get current session count from the first project context
-    projects = await store.get_all_project_contexts()
-    session_number = max((p.session_count for p in projects), default=1)
+    project = await _rem_project(store, project_path)
+    if project is None:
+        return (
+            "REM runs on a per-project cadence and there is no saved context for "
+            f"{project_path or 'the current directory'}, so there is no session "
+            "number to schedule against. Call save_project_context first, or pass "
+            "project_path explicitly."
+        )
+    session_number = project.session_count
 
     ops = [o.strip() for o in operations.split(",") if o.strip()] if operations else None
 
@@ -2045,7 +2095,7 @@ async def rem_run(
 
     # Format report as readable output
     lines = [
-        f"## REM Cycle Report (Session {report.session_number})",
+        f"## REM Cycle Report ({project.project_name}, Session {report.session_number})",
         f"Duration: {report.duration_ms:.0f}ms",
         f"Operations run: {', '.join(report.operations_run) or 'none'}",
         f"Operations skipped: {', '.join(report.operations_skipped) or 'none'}",
@@ -2101,24 +2151,33 @@ async def rem_report() -> str:
 
 
 @mcp.tool()
-async def rem_status() -> str:
+async def rem_status(project_path: str = "") -> str:
     """Show REM schedule state: what ran when, what's due next.
 
     Displays all configured operations with their scheduling strategy,
-    last run time, and next due session.
+    last run time, and next due session, for THIS project's session count.
+
+    Args:
+        project_path: Project root whose session count sets the cadence.
+                   Empty = CLAUDE_PROJECT_DIR, else the current directory.
     """
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
     from .rem_cycle import RemEngine
 
     engine = RemEngine(store=store)
-    status = await engine.get_status()
 
-    # Get current session number
-    projects = await store.get_all_project_contexts()
-    current = max((p.session_count for p in projects), default=0)
+    project = await _rem_project(store, project_path)
+    if project is None:
+        return (
+            "REM runs on a per-project cadence and there is no saved context for "
+            f"{project_path or 'the current directory'}, so nothing can be reported "
+            "as due. Call save_project_context first, or pass project_path explicitly."
+        )
+    current = project.session_count
+    status = await engine.get_status(current)
 
     lines = [
-        f"## REM Schedule (Current Session: {current})\n",
+        f"## REM Schedule for {project.project_name} (Current Session: {current})\n",
         "| Operation | Strategy | Last Run | Next Due | Status |",
         "|-----------|----------|----------|----------|--------|",
     ]
@@ -2126,8 +2185,7 @@ async def rem_status() -> str:
     for s in status:
         last = f"Session {s['last_run_session']}" if s["last_run_session"] else "Never"
         next_s = f"Session {s['next_due_session']}" if s.get("next_due_session") else "?"
-        is_due = s.get("next_due_session") and current >= s["next_due_session"]
-        status_str = "DUE" if is_due else "OK"
+        status_str = "DUE" if s["is_due"] else "OK"
         lines.append(
             f"| {s['operation']} | {s['strategy']} | {last} | {next_s} | {status_str} |"
         )
@@ -2144,6 +2202,7 @@ async def rem_status() -> str:
 async def write_soliloquy(
     content: str,
     mood: str = "",
+    project_path: str = "",
 ) -> str:
     """Write a reflective message to your future self.
 
@@ -2156,21 +2215,25 @@ async def write_soliloquy(
     Args:
         content: Your reflective message (free-form, any length)
         mood: Optional self-assessed tone (e.g., 'curious', 'focused', 'uncertain')
+        project_path: Project you are writing from. Empty = CLAUDE_PROJECT_DIR,
+            else the current directory. Entries stay in one global journal; the
+            tag only lets a later session on this project read its own train of
+            thought first.
     """
     store, _, _, _, _ = await _ensure_initialized()
     from .models import Soliloquy
 
-    # Get current session number from most active project
-    projects = await store.get_all_project_contexts()
-    session_num = max((p.session_count for p in projects), default=0)
+    project = await _rem_project(store, project_path)
 
     entry = Soliloquy(
         content=content,
-        session_number=session_num,
+        session_number=project.session_count if project else 0,
         mood=mood if mood else None,
     )
 
-    entry_id = await store.write_soliloquy(entry)
+    entry_id = await store.write_soliloquy(
+        entry, project_id=project.project_id if project else None
+    )
     total = await store.count_soliloquies()
     return f"Soliloquy #{entry_id} saved. ({len(content)} chars, {total} total entries)"
 
@@ -2178,30 +2241,56 @@ async def write_soliloquy(
 @mcp.tool()
 async def read_soliloquy(
     limit: int = 1,
+    project_path: str = "",
 ) -> str:
     """Read your most recent message(s) to yourself.
 
     Called at session start to reconnect with your prior train of thought.
+    Prefers this project's own last entry; when it has none, falls back to the
+    newest entry from anywhere and says where that came from — a reflection
+    about another codebase is noise unless you know it is about one.
 
     Args:
         limit: Number of recent entries to read (default: 1, just the latest)
+        project_path: Project you are reading in. Empty = CLAUDE_PROJECT_DIR,
+            else the current directory.
     """
     store, _, _, _, _ = await _ensure_initialized()
 
+    project = await _rem_project(store, project_path)
+    project_id = project.project_id if project else None
+
+    async def origin(entry_project_id: str | None) -> str:
+        """Label an entry that is not this project's own. Empty when it is."""
+        if entry_project_id == project_id:
+            return ""
+        if not entry_project_id:
+            return " *(from an untagged earlier session)*"
+        other = await store.get_project_context(entry_project_id)
+        name = other.project_name if other else entry_project_id
+        return f" *(from another project: {name})*"
+
     if limit == 1:
-        entry = await store.read_latest_soliloquy()
-        if not entry:
+        result = await store.read_latest_soliloquy(project_id=project_id)
+        if not result:
             return (
                 "No soliloquy found yet. This is your first session with the "
                 "reflection journal. Write one at session end to start the conversation "
                 "with yourself."
             )
+        entry, entry_project_id = result
+        elsewhere = await origin(entry_project_id)
         total = await store.count_soliloquies()
         lines = [
-            f"## Letter to Self (entry #{entry.id}, {total} total)\n",
+            f"## Letter to Self (entry #{entry.id}, {total} total){elsewhere}\n",
             f"*Written: {entry.timestamp.strftime('%Y-%m-%d %H:%M')} "
             f"| Session {entry.session_number}*",
         ]
+        if elsewhere:
+            lines.append(
+                "*This project has no soliloquy of its own yet — what follows is "
+                "about other work.*"
+            )
         if entry.mood:
             lines.append(f"*Mood: {entry.mood}*")
         lines.append(f"\n{entry.content}")
@@ -2213,8 +2302,11 @@ async def read_soliloquy(
 
     total = await store.count_soliloquies()
     lines = [f"## Recent Soliloquies ({len(entries)} of {total} total)\n"]
-    for entry in entries:
-        lines.append(f"### #{entry.id} — {entry.timestamp.strftime('%Y-%m-%d %H:%M')} (Session {entry.session_number})")
+    for entry, entry_project_id in entries:
+        lines.append(
+            f"### #{entry.id} — {entry.timestamp.strftime('%Y-%m-%d %H:%M')} "
+            f"(Session {entry.session_number}){await origin(entry_project_id)}"
+        )
         if entry.mood:
             lines.append(f"*Mood: {entry.mood}*")
         lines.append(entry.content)

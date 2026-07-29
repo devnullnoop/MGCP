@@ -59,12 +59,30 @@ class TestRemEngineScheduling:
     @pytest.mark.asyncio
     async def test_get_status(self, engine, store):
         await store.update_rem_state("staleness_scan", session_number=10)
-        status = await engine.get_status()
+        status = await engine.get_status(session_number=10)
         assert len(status) == 2  # Our test engine has 2 operations
 
         staleness = next(s for s in status if s["operation"] == "staleness_scan")
         assert staleness["last_run_session"] == 10
         assert staleness["strategy"] == "linear"
+
+    @pytest.mark.asyncio
+    async def test_status_is_due_matches_due_operations(self, engine, store):
+        """What rem_status displays and what rem_run executes cannot disagree.
+
+        Previously rem_status re-derived due-ness as
+        ``current >= next_due_session`` while rem_run used ``is_due()``.
+        Session 11 with staleness last run at 10 is the case that splits them:
+        next_due_session is 10 (last multiple boundary), so the old display
+        said DUE while the engine skipped it.
+        """
+        await store.update_rem_state("staleness_scan", session_number=10)
+
+        for session in range(1, 20):
+            status = await engine.get_status(session_number=session)
+            displayed = {s["operation"] for s in status if s["is_due"]}
+            executed = set(await engine.get_due_operations(session_number=session))
+            assert displayed == executed, f"disagreement at session {session}"
 
 
 class TestStalenessScan:

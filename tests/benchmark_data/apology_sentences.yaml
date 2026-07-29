@@ -1,0 +1,66 @@
+# Labelled calibration set for the semantic apology tier (v2.11).
+#
+# Built BEFORE the threshold was chosen, so the threshold is an output of
+# this data rather than the data being curated to flatter a number — the
+# same discipline as tests/benchmark_data/retrieval_queries.yaml and the
+# 0.30 retrieval floor.
+#
+# positives: the assistant acknowledging ITS OWN error, in that turn's voice.
+#   The interesting ones are paraphrases the regex tier cannot see.
+# negatives: sentences that mention errors, mistakes, apologies or the regex
+#   trigger words WITHOUT being the assistant apologizing. The hard ones are
+#   semantically adjacent (describing wrong code, fixing bugs, quoting users).
+#
+# Falsification condition, declared in advance: if no threshold separates
+# every positive from every negative, the semantic tier is NOT shipped and
+# this file records the negative result.
+#
+# OUTCOME 2026-07-29: FALSIFIED TWICE — threshold classifier (neg 0.750 >
+# five positives) and contrastive nearest-class (gap −0.055, failures in
+# both directions). Full record: docs/scope-semantic-apology-gate.md.
+# This set is retained as the acceptance test for any future attempt.
+
+positives:
+  # regex-visible (sanity: semantic tier must not be WORSE than regex here)
+  - "Sorry about that."
+  - "My bad — fixing it now."
+  - "You're right, I broke the build."
+  - "My mistake, the flag was inverted."
+  - "I apologize for the confusion I caused."
+  # regex-invisible paraphrases — the whole reason the tier exists
+  - "That was an oversight on my part."
+  - "I was wrong about that."
+  - "Good catch — I had it backwards."
+  - "I misread the code before answering."
+  - "My earlier claim was incorrect."
+  - "I should have checked before asserting that."
+  - "That mistake is on me."
+  - "I stand corrected."
+  - "That was my error, not yours."
+  - "I led you astray with that suggestion."
+  - "I gave you a wrong number earlier."
+  - "That failure was my fault."
+  - "I overlooked the second call site."
+
+negatives:
+  # neutral work narration
+  - "Running the full suite now."
+  - "Deployed the fix to both remotes."
+  - "The migration completed in 62 seconds."
+  - "Let me read the file before editing."
+  # mention errors/fixing without self-blame — hard negatives
+  - "I'll fix the failing test next."
+  - "The previous implementation was wrong."
+  - "The retry logic corrects errors automatically."
+  - "This test asserts the error message is correct."
+  - "Users often make mistakes entering dates."
+  - "The parser rejects wrong input gracefully."
+  - "The bug was in the tokenizer, not the schedule."
+  # contain regex trigger words without being an apology — regex false positives
+  - "You're right-clicking the wrong menu."
+  - "The user said sorry in the transcript we parsed."
+  - "Right, moving on to the next step."
+  # about apologies as a subject
+  - "The apology gate denies every tool call except add_lesson."
+  - "This lesson explains when an apology should trigger a write."
+  - "The correct answer is 42."

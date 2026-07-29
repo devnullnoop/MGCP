@@ -54,16 +54,23 @@ updating this file breaks the ledger. That is the point.
 
 | Status | Rows |
 |---|---|
-| VERIFIED | 20 |
+| VERIFIED | 31 |
 | CLAIMED | 7 |
-| FAKE | 13 |
-| RETRACTED | 0 |
+| FAKE | 0 |
+| RETRACTED | 2 |
 | **total** | **40** |
 
-Measured 2026-07-28 19:36 EDT against the working tree (`db21ee5` + uncommitted
-repairs): `tests/test_claims.py` → **9 failed, 22 passed** (31 tests; `C19` is
-parametrised three ways). Every failure is a FAKE row below. Re-run it; do not
-trust this paragraph.
+Measured 2026-07-29 against `0e656c1`: `tests/test_claims.py` → **37 passed**
+(`C19` is parametrised three ways, `C16`'s bypass-shapes row four more). **No
+FAKE rows remain**, which was the finish line the repair plan set. Re-run it;
+do not trust this paragraph.
+
+The two RETRACTED rows are E06 and E07: the README claimed workflows *enforce*
+quality gates and *ensure* steps are not shortcut, and they do neither. The
+alternative to retracting was a precondition type that reads workflow state —
+a new subsystem, which the repair plan's §5 rules out. The outcome was real
+all along; the attribution was wrong, and it was hiding the mechanism that
+does the work.
 
 Four rows — **C11**, **C12**, **C27**, **C28** — were FAKE when this ledger was
 drafted and turned VERIFIED within hours, while it was being written, as parallel
@@ -89,7 +96,7 @@ perturbations produced a failure. No repository file was modified to do it.
 | C05 | README:353 Commands table — 9 CLI commands | all 9 are `[project.scripts]` entries and every `module:function` target imports and resolves | `mgcp-launcher` ships undocumented (harmless) | nothing | **VERIFIED** | `pytest tests/test_claims.py -k C05` |
 | C06 | README:367 API table — 6 endpoints | `/api/health`, `/api/lessons`, `/api/projects`, `/api/graph`, `/ws/events` all have routes; `/docs` is FastAPI's own | it documents 6 of ~33 routes, which is a summary, not a lie | nothing | **VERIFIED** | `pytest tests/test_claims.py -k C06` |
 | C07 | README:341 / CLAUDE.md:228 — "Current hooks" tables | all 5 named hook scripts exist in `src/mgcp/hook_templates/` | — | nothing | **VERIFIED** | `pytest tests/test_claims.py -k C07` |
-| C08 ✅ | CLAUDE.md:9 — "**Status**: v2.1.0" | **Was FAKE** — `pyproject.toml` = 2.1.0 but `mgcp/__init__.py` = 2.0.0, so an install reported whichever source it happened to read. **Repaired during this pass:** `__init__.py` moved to 2.1.0, agreeing with `pyproject.toml` and CLAUDE.md | `hook_templates/VERSION` (now 2.9) is deliberately *not* one of these sources — it versions the deployed hook payload and gates hook auto-upgrade, so it moves when a hook changes, not when the package does | nothing | **VERIFIED** *(repaired during this pass)* | `pytest tests/test_claims.py -k C08` |
+| C08 ✅ | CLAUDE.md:9 — "**Status**: v2.1.0" | **Was FAKE** — `pyproject.toml` = 2.1.0 but `mgcp/__init__.py` = 2.0.0, so an install reported whichever source it happened to read. **Repaired during this pass:** `__init__.py` moved to 2.1.0, agreeing with `pyproject.toml` and CLAUDE.md | `hook_templates/VERSION` (2.10 as of this writing) is deliberately *not* one of these sources — it versions the deployed hook payload and gates hook auto-upgrade, so it moves when a hook changes, not when the package does | nothing | **VERIFIED** *(repaired during this pass)* | `pytest tests/test_claims.py -k C08` |
 | C09 ✅ | `rem_run` docstring — "Options: staleness_scan, duplicate_detection, community_detection, knowledge_extraction, context_summary" | **Was FAKE** — `DEFAULT_SCHEDULES` has 7; `intent_calibration` and `action_effectiveness` were omitted, so the agent could not name two operations that exist, including the one that closes the REM growth loop CLAUDE.md:240 advertises. **Repaired during this pass:** both added to the `Options:` list | — | nothing | **VERIFIED** *(repaired during this pass)* | `pytest tests/test_claims.py -k C09` |
 | C10 ✅ | `add_enforcement_rule` docstring — precondition `type` ∈ {`tool_called_this_turn`, `tool_not_called_this_turn`, `staged_files_coupling`} | **Was FAKE** — `enforcement.py` also accepts `tool_input_glob`, added by in-flight v2.8 work without the docstring; the agent is the only caller and could not discover it. **Repaired during this pass:** the docstring now lists it with its `field` / `deny_globs` arguments, and CLAUDE.md's precondition set matches | — | nothing | **VERIFIED** *(repaired during this pass)* | `pytest tests/test_claims.py -k C10` |
 
@@ -154,9 +161,9 @@ sentiment may be.
 | # | What we say | What is actually true | Where the gap is | What to do | Status | Command |
 |---|---|---|---|---|---|---|
 | C26 | "**Caught bugs before they happened** — lessons from past mistakes surface before repeating them" | unfalsifiable as written. What *is* measurable: `query_lessons` does call `store.record_usage`, and 225 of 238 lessons have `usage_count > 0`. Lessons are being retrieved | the claim asserts a counterfactual (a bug that did not happen). The instrument that exists measures *retrieval*, not *prevention* | rewrite to what is true and checkable: "lessons surface at the moment of need — 225 of 238 have been retrieved at least once" | **VERIFIED** (as worded) | `pytest tests/test_claims.py -k C26` |
-| C25 | "**Kept documentation in sync** — workflow steps enforce doc review before commits" | workflow steps are advisory text and enforce nothing. A real mechanism exists and ships **enabled**: `version-bump-requires-readme` in `enforcement.py:DEFAULT_RULES`, a `staged_files_coupling` precondition that denies the commit (proved end to end in row C20) | the outcome is real; the attribution is wrong. Crediting workflows for what enforcement does hides the one genuinely novel thing in the system | rewrite as "enforcement rules refuse commits that change source without touching docs" | **VERIFIED** (wording; mechanism VERIFIED at C20) | `pytest tests/test_claims.py -k "C25 or C20"` |
-| E06 | "**Enforced quality gates** — workflows with checklists prevent skipped steps" | nothing reads a workflow checklist and blocks on it. `update_workflow_state` records progress; no precondition type consults it. Every real gate in the system is an enforcement rule, not a workflow | a checklist the agent can skip is advice | either add a precondition type that reads workflow state, or retract the wording | **FAKE** | `grep -rn "checklist" src/mgcp/enforcement.py src/mgcp/hook_templates/pre-tool-dispatcher.py` → no hits |
-| E07 | README:36 — "**Workflows** ensure multi-step processes don't get shortcut" | same defect as E06: workflows describe, they do not ensure | — | see E06 | **FAKE** | see E06 |
+| C25 | "**Kept documentation in sync** — workflow steps enforce doc review before commits" | workflow steps are advisory text and enforce nothing. A real mechanism exists and ships **enabled**: `version-bump-requires-readme` in `enforcement.py:DEFAULT_RULES`, a `staged_files_coupling` precondition that denies the commit (proved end to end in row C20) | the outcome is real; the attribution is wrong. Crediting workflows for what enforcement does hides the one genuinely novel thing in the system | **Applied** — README:53 now reads "an enforcement rule refuses commits that change source without touching docs", crediting the mechanism proved at C20 | **VERIFIED** (wording corrected; mechanism VERIFIED at C20) | `pytest tests/test_claims.py -k "C25 or C20"` |
+| E06 ⌫ | "**Enforced quality gates** — workflows with checklists prevent skipped steps" | nothing reads a workflow checklist and blocks on it. `update_workflow_state` records progress; no precondition type consults it. Every real gate in the system is an enforcement rule, not a workflow | a checklist the agent can skip is advice | **Retracted, not implemented.** The alternative was a precondition type that reads workflow state — a new subsystem, and the repair plan's §5 says do not add features. The README line now credits the PreToolUse rule that actually denies the call | **RETRACTED** *(README, commit "Stop crediting workflows for what enforcement does")* | `grep -rn "checklist" src/mgcp/enforcement.py src/mgcp/hook_templates/pre-tool-dispatcher.py` → no hits, and the claim no longer appears in README |
+| E07 ⌫ | README:36 — "**Workflows** ensure multi-step processes don't get shortcut" | same defect as E06: workflows describe, they do not ensure | — | retracted with E06; README:36 now reads "sequence … guidance, not a gate" | **RETRACTED** *(README, commit "Stop crediting workflows for what enforcement does")* | see E06 |
 | E08 | "**Maintained project context** — picking up exactly where the last session left off" | `get_project_context` / `save_project_context` persist todos, decisions, active files and notes per project path; the SessionStart hook instructs the agent to load them | proven against a temp DB, not across a real session boundary | nothing urgent | **CLAIMED** | `pytest tests/test_basic.py -k project_context -q` |
 | E09 | "**Preserved architectural decisions** — rationale survives session boundaries" | catalogue `decision` items carry `rationale` and are semantically searchable | as E08 | nothing urgent | **CLAIMED** | `pytest tests/test_catalogue_vector.py -q` |
 | E10 | README:37 — "**Hooks** make it proactive — reminders fire automatically at key moments" | five hooks are wired into `~/.claude/settings.json` and fire on their events; the scheduled-reminder path is unit-tested | the *deployed* copies are stale (C22), so "key moments" added in v2.6/v2.7 do not fire on this machine | fix C22 | **CLAIMED** | `pytest tests/test_session_init.py -q` |

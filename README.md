@@ -33,7 +33,7 @@ Session 2: LLM has no memory of Session 1
 
 - **Semantic search** finds relevant lessons without exact keyword matches
 - **Graph relationships** surface connected knowledge together
-- **Workflows** ensure multi-step processes don't get shortcut
+- **Workflows** sequence multi-step processes and surface the right lessons at each step — guidance, not a gate
 - **Hooks** make it proactive - reminders fire automatically at key moments
 - **Project isolation** keeps context separate per codebase
 
@@ -50,12 +50,14 @@ Session 2: LLM has no memory of Session 1
 In active use, MGCP has:
 
 - **Caught bugs before they happened** - lessons from past mistakes surface before repeating them
-- **Kept documentation in sync** - workflow steps enforce doc review before commits
+- **Kept documentation in sync** - an enforcement rule refuses commits that change source without touching docs
 - **Maintained project context** - picking up exactly where the last session left off
-- **Enforced quality gates** - workflows with checklists prevent skipped steps
+- **Enforced quality gates** - PreToolUse rules deny the tool call outright, which is the one instruction an LLM cannot skim past
 - **Preserved architectural decisions** - rationale survives session boundaries
 
 The system isn't intelligent. But an LLM with accumulated context *behaves* more intelligently than one starting fresh every time.
+
+**On workflows specifically:** earlier versions of this list credited workflows with *enforcing* quality gates and *ensuring* steps are not shortcut. They do neither. `update_workflow_state` records progress and nothing reads a checklist to block on it — a checklist the LLM can skip is advice. Every gate in MGCP that actually holds is an enforcement rule, and crediting workflows for that hid the one genuinely novel thing in the system. Rows E06 and E07 in [docs/CAPABILITIES.md](docs/CAPABILITIES.md) record the retraction.
 
 ## How It Works
 

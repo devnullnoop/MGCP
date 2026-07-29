@@ -7,7 +7,11 @@ hack that was required for ChromaDB's background threads.
 
 import gc
 import re
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ledger import LEDGER_PATH, parse_rows  # noqa: E402
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -21,7 +25,7 @@ def pytest_sessionfinish(session, exitstatus):
 # The claim ledger must not lie about itself
 # ---------------------------------------------------------------------------
 
-_LEDGER = Path(__file__).resolve().parents[1] / "docs" / "CAPABILITIES.md"
+_LEDGER = LEDGER_PATH
 _CLAIM_OUTCOMES: dict[str, bool] = {}
 
 
@@ -59,19 +63,22 @@ def _assert_ledger_matches_its_tests(session):
     if not _CLAIM_OUTCOMES or not _LEDGER.exists():
         return
 
-    ledger: dict[str, str] = {}
-    for line in _LEDGER.read_text().splitlines():
-        m = re.match(r"\|\s*([CE]\d\d)\s*\|.*\*\*([A-Z]+)\*\*", line)
-        if m:
-            ledger[m.group(1)] = m.group(2)
+    ledger = parse_rows(_LEDGER.read_text())
 
     wrong = []
     for cid, passed in sorted(_CLAIM_OUTCOMES.items()):
         status = ledger.get(cid)
-        if status == "VERIFIED" and not passed:
+        if status is None:
+            # A test exists for a row the parser cannot see. That is how the
+            # check went blind before: rows tagged `| C08 ✅ |` failed to
+            # match and were silently exempted rather than reported.
+            wrong.append(f"{cid}: has a test but no row this checker can read")
+        elif status == "VERIFIED" and not passed:
             wrong.append(f"{cid}: ledger says VERIFIED, its test FAILS")
         elif status == "FAKE" and passed:
             wrong.append(f"{cid}: ledger says FAKE, its test PASSES — fixed and not recorded")
+        elif status == "RETRACTED" and passed:
+            wrong.append(f"{cid}: ledger says RETRACTED, its test still PASSES")
 
     if wrong:
         session.exitstatus = 1

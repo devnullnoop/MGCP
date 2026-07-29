@@ -60,6 +60,12 @@ updating this file breaks the ledger. That is the point.
 | RETRACTED | 2 |
 | **total** | **40** |
 
+These counts are checked against the rows below by
+`test_ledger_scoreboard_matches_its_rows`, because this table had already
+drifted to 20 / 7 / 13 while the rows said 31 / 7 / 0 — nothing read it. A
+summary nobody checks fails the same way a claim nobody tests does, which is
+the thing this document exists to stop.
+
 Measured 2026-07-29 against `0e656c1`: `tests/test_claims.py` → **37 passed**
 (`C19` is parametrised three ways, `C16`'s bypass-shapes row four more). **No
 FAKE rows remain**, which was the finish line the repair plan set. Re-run it;

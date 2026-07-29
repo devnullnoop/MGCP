@@ -46,6 +46,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from ledger import STATUSES, parse_rows, parse_scoreboard
 
 REPO = Path(__file__).resolve().parents[1]
 SRC = REPO / "src" / "mgcp"
@@ -809,3 +810,59 @@ def test_C28_skill_compilation_is_present_not_removed():
         "compile_intent_to_skill ships as an MCP tool and src/mgcp/skill_compiler.py "
         "is live code. The strategy was dropped; the feature was not."
     )
+
+
+# ===========================================================================
+# The ledger's own bookkeeping
+#
+# Deliberately not named test_C##_: these police the instrument, not a claim,
+# and conftest's drift check keys on that prefix.
+# ===========================================================================
+
+
+def test_ledger_scoreboard_matches_its_rows():
+    """The Scoreboard must count the rows that are actually in the file.
+
+    It drifted to 20 VERIFIED / 13 FAKE while the rows said 31 / 2, because
+    nothing read it. A summary nobody checks is the same failure mode as a
+    claim nobody tests — which is what this document exists to stop.
+    """
+    rows = parse_rows()
+    declared = parse_scoreboard()
+    actual = {status: sum(1 for s in rows.values() if s == status) for status in STATUSES}
+
+    assert declared, "the Scoreboard table is missing or unparseable"
+    mismatches = {
+        status: (declared.get(status), actual[status])
+        for status in STATUSES
+        if declared.get(status) != actual[status]
+    }
+    assert not mismatches, (
+        "Scoreboard disagrees with the rows below it "
+        f"(status: declared vs actual): {mismatches}"
+    )
+    assert declared.get("total") == len(rows), (
+        f"Scoreboard total says {declared.get('total')}, the file has {len(rows)} rows"
+    )
+
+
+def test_every_ledger_row_is_visible_to_the_drift_check():
+    """Every claim row must be readable by the parser conftest uses.
+
+    The check that holds VERIFIED rows to their tests could not see rows
+    tagged with a repair marker (`| C08 ✅ |`) — eleven rows, and precisely
+    the ones that had just been repaired and were most likely to regress.
+    """
+    ids_in_file = set(re.findall(r"^\|\s*([CE]\d\d)\b", LEDGER.read_text(), re.M))
+    parsed = set(parse_rows())
+    assert ids_in_file - parsed == set(), (
+        f"rows present but invisible to the drift check: {sorted(ids_in_file - parsed)}"
+    )
+
+
+def test_every_claim_test_has_a_ledger_row():
+    """No test_C##_ function without a row, so a row cannot be quietly
+    deleted while its test keeps passing and implying coverage."""
+    tested = set(re.findall(r"^def test_([CE]\d\d)_", Path(__file__).read_text(), re.M))
+    missing = tested - set(parse_rows())
+    assert not missing, f"tests with no ledger row: {sorted(missing)}"

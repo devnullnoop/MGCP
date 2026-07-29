@@ -29,8 +29,10 @@ When you discover a phrasing that should match but doesn't:
 """
 
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -569,21 +571,50 @@ class TestRealDataTriggers:
     Run with: pytest tests/test_trigger_coverage.py -v -m integration
     """
 
-    @pytest.fixture
-    def real_vector_store(self):
-        """Load the real MGCP vector store."""
-        # Use default MGCP data path
-        mgcp_dir = os.path.expanduser("~/.mgcp")
-        qdrant_path = os.path.join(mgcp_dir, "qdrant")
+    @pytest.fixture(scope="class")
+    def real_vector_store(self, tmp_path_factory):
+        """The operator's real corpus, opened as a COPY.
 
-        if not os.path.exists(qdrant_path):
-            pytest.skip("No MGCP data found at ~/.mgcp/qdrant")
+        Qdrant local mode takes an exclusive lock per path and the MCP server
+        holds it whenever a session is running, so opening the live directory
+        raised "already accessed by another instance" -- these four tests had
+        errored for as long as anyone had been running the suite during a
+        session, which is to say always. Copying is what
+        tests/retrieval_benchmark.py already tells you to do, and the store
+        is a few megabytes.
 
-        return QdrantVectorStore(persist_path=qdrant_path)
+        MGCP_LIVE_DATA_DIR is the operator's real install; conftest points
+        MGCP_DATA_DIR at a sandbox, and a sandbox has no corpus to test.
+        """
+        live = Path(os.environ.get("MGCP_LIVE_DATA_DIR") or Path.home() / ".mgcp") / "qdrant"
+        if not live.exists():
+            pytest.skip(f"No MGCP corpus at {live}")
 
-    @pytest.mark.parametrize("phrasing,expected_lessons", [
+        copy = tmp_path_factory.mktemp("live-corpus") / "qdrant"
+        shutil.copytree(live, copy)
+        return QdrantVectorStore(persist_path=str(copy))
+
+    @pytest.mark.parametrize("phrasing,expected_workflows", [
         ("fix the bug", ["bug-fix"]),
         ("something's broken", ["bug-fix"]),
+    ])
+    def test_real_workflow_matching(self, real_vector_store, phrasing, expected_workflows):
+        """These two used to sit in the lesson test expecting `bug-fix`, which
+        is a WORKFLOW id — there is no lesson by that name, so they could
+        never have passed. Nobody noticed because the fixture errored on the
+        Qdrant lock before any assertion ran. The intent was sound and holds
+        against the right collection: `fix the bug` matches the bug-fix
+        workflow at 0.75, `something's broken` at 0.57."""
+        results = real_vector_store.query_workflows(phrasing, limit=5)
+        if not results:
+            pytest.fail(f"No workflow results for '{phrasing}'")
+
+        found = [(wid, s) for wid, s, _ in results if wid in expected_workflows and s >= MIN_RELEVANCE]
+        if not found:
+            top = [(wid, f"{s:.0%}") for wid, s, _ in results[:3]]
+            pytest.fail(f"'{phrasing}' expected one of {expected_workflows} but got {top}")
+
+    @pytest.mark.parametrize("phrasing,expected_lessons", [
         ("commit this", ["no-claude-attribution-in-commits", "mgcp-save-before-commit", "query-before-git-operations"]),
         ("starting a new session", ["mgcp-session-start"]),
     ])

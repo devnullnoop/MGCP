@@ -57,7 +57,15 @@ LEDGER = REPO / "docs" / "CAPABILITIES.md"
 HOOK_TEMPLATES = SRC / "hook_templates"
 PRE_TOOL_HOOK = HOOK_TEMPLATES / "pre-tool-dispatcher.py"
 
-MGCP_HOME = Path(os.environ.get("MGCP_DATA_DIR", str(Path.home() / ".mgcp")))
+# The operator's real install, NOT the sandbox conftest points MGCP_DATA_DIR
+# at. These rows are graded against the store that has the history; they are
+# read-only, and pointing them at an empty sandbox would turn every one of
+# them into a silent skip.
+MGCP_HOME = Path(
+    os.environ.get("MGCP_LIVE_DATA_DIR")
+    or os.environ.get("MGCP_DATA_DIR")
+    or str(Path.home() / ".mgcp")
+)
 LIVE_DB = MGCP_HOME / "lessons.db"
 
 live_store_only = pytest.mark.skipif(

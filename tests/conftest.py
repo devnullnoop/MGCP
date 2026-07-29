@@ -1,14 +1,43 @@
 """Pytest configuration for MGCP tests.
 
-This module handles cleanup of resources after tests complete.
-With Qdrant (replacing ChromaDB), we no longer need the aggressive thread cleanup
-hack that was required for ChromaDB's background threads.
+This module handles cleanup of resources after tests complete, points the
+suite at a throwaway data directory, and holds the claim ledger to its tests.
+With Qdrant (replacing ChromaDB), we no longer need the aggressive thread
+cleanup hack that was required for ChromaDB's background threads.
 """
 
 import gc
+import os
 import re
+import shutil
 import sys
+import tempfile
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# The suite does not get to touch the operator's data
+#
+# MGCP_DATA_DIR selects the lessons DB, both Qdrant stores, the enforcement
+# rules and the intent config, and every DEFAULT_* path is bound at import
+# time -- so this has to happen before anything imports mgcp, which is why it
+# runs at conftest import rather than in a fixture.
+#
+# It was not theoretical. web_server.py calls LessonStore() with no path, and
+# test_api_ui_integration imports that app, so the suite opened
+# ~/.mgcp/lessons.db directly. That was survivable while it only ever read;
+# on 2026-07-29 a repair migration was added to store open, and a plain
+# `pytest` run silently rewrote the operator's REM schedule rows. The same
+# reach is why five tests failed whenever the MCP server held the Qdrant lock:
+# they were queueing for the live store.
+#
+# Tests that inspect the real install on purpose (the claim ledger, read-only)
+# read MGCP_LIVE_DATA_DIR, which still points where the operator's data
+# actually is. Redirecting them too would turn real verification into a
+# silent skip, which is worse than the disease.
+_LIVE_DATA_DIR = os.environ.get("MGCP_DATA_DIR") or str(Path.home() / ".mgcp")
+_SANDBOX_DATA_DIR = tempfile.mkdtemp(prefix="mgcp-tests-")
+os.environ["MGCP_LIVE_DATA_DIR"] = _LIVE_DATA_DIR
+os.environ["MGCP_DATA_DIR"] = _SANDBOX_DATA_DIR
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ledger import LEDGER_PATH, parse_rows  # noqa: E402
@@ -18,6 +47,7 @@ def pytest_sessionfinish(session, exitstatus):
     """Clean up resources, then hold the claim ledger to its own tests."""
     # Force garbage collection to clean up any lingering objects
     gc.collect()
+    shutil.rmtree(_SANDBOX_DATA_DIR, ignore_errors=True)
     _assert_ledger_matches_its_tests(session)
 
 

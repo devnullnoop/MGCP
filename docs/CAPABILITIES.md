@@ -66,6 +66,19 @@ drifted to 20 / 7 / 13 while the rows said 31 / 7 / 0 — nothing read it. A
 summary nobody checks fails the same way a claim nobody tests does, which is
 the thing this document exists to stop.
 
+**The suite no longer reaches the operator's data.** `web_server.py` calls
+`LessonStore()` with no path, and `test_api_ui_integration` imports that app,
+so a plain `pytest` run opened `~/.mgcp/lessons.db` and `~/.mgcp/qdrant`
+directly. That was survivable while it only ever read — it showed up as five
+tests that failed whenever the MCP server held the Qdrant lock, which everyone
+had learned to read as "pre-existing." It stopped being survivable the moment a
+repair migration was added to store open: a test run rewrote the operator's REM
+schedule rows. `conftest.py` now points `MGCP_DATA_DIR` at a throwaway
+directory before anything imports `mgcp`, and exports `MGCP_LIVE_DATA_DIR` for
+the rows here that inspect the real install on purpose, read-only. The full
+suite is now green — 885 passed, 0 failed, 0 errors — and the live database is
+byte-identical before and after a run.
+
 Measured 2026-07-29 against `0e656c1`: `tests/test_claims.py` → **37 passed**
 (`C19` is parametrised three ways, `C16`'s bypass-shapes row four more). **No
 FAKE rows remain**, which was the finish line the repair plan set. Re-run it;

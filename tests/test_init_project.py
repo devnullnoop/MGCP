@@ -1429,6 +1429,69 @@ class TestSettingsMerge:
         assert any("other-hook.py" in c for c in commands)
         assert any("session-init.py" in c for c in commands)
 
+    @staticmethod
+    def _commands(existing: dict, hook_type: str) -> list[str]:
+        return [
+            h.get("command", "")
+            for entry in existing["hooks"].get(hook_type, [])
+            for h in entry.get("hooks", []) or []
+        ]
+
+    def test_merge_under_a_different_interpreter_updates_instead_of_duplicating(self):
+        """Re-running the installer from another interpreter must not add a
+        second entry for the same hook script.
+
+        Observed on the operator's machine 2026-07-29: three installs
+        (``python3``, a project venv, framework python) had left three
+        SessionStart entries all pointing at ~/.mgcp/hooks/session-init.py,
+        so every hook fired three times per event. The old merge deduped on
+        the whole command string, and the interpreter is part of it.
+        """
+        mgcp_cmd = self._commands({"hooks": HOOK_SETTINGS["hooks"]}, "SessionStart")[0]
+        script_path = mgcp_cmd.split(" ", 1)[1]
+        existing = {
+            "hooks": {
+                "SessionStart": [
+                    {"hooks": [{"type": "command", "command": f"python3 {script_path}"}]}
+                ]
+            }
+        }
+        changed = _merge_settings(existing, HOOK_SETTINGS)
+
+        commands = self._commands(existing, "SessionStart")
+        assert len([c for c in commands if "session-init.py" in c]) == 1
+        assert commands == [mgcp_cmd], "the surviving entry should carry the new interpreter"
+        assert changed
+
+    def test_merge_heals_an_install_that_already_duplicated(self):
+        """An install that already grew duplicates collapses to one on the
+        next run, rather than growing a further copy."""
+        mgcp_cmd = self._commands({"hooks": HOOK_SETTINGS["hooks"]}, "PreToolUse")[0]
+        script_path = mgcp_cmd.split(" ", 1)[1]
+        existing = {
+            "hooks": {
+                "PreToolUse": [
+                    {"hooks": [{"type": "command", "command": f"python3 {script_path}"}]},
+                    {"hooks": [{"type": "command", "command": f"/venv/bin/python {script_path}"}]},
+                    {"hooks": [{"type": "command", "command": "python3 unrelated.py"}]},
+                ]
+            }
+        }
+        assert _merge_settings(existing, HOOK_SETTINGS)
+
+        commands = self._commands(existing, "PreToolUse")
+        assert len([c for c in commands if "pre-tool-dispatcher.py" in c]) == 1
+        assert any("unrelated.py" in c for c in commands), "foreign hooks are not ours to remove"
+
+    def test_merge_is_idempotent_on_a_clean_install(self):
+        """The second run of the same installer changes nothing."""
+        existing: dict = {}
+        _merge_settings(existing, HOOK_SETTINGS)
+        assert not _merge_settings(existing, HOOK_SETTINGS)
+        for hook_type in HOOK_SETTINGS["hooks"]:
+            commands = self._commands(existing, hook_type)
+            assert len(commands) == len(set(commands)) == len(HOOK_SETTINGS["hooks"][hook_type])
+
 
 # ============================================================================
 # Tests: Version Marker

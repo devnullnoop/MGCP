@@ -298,13 +298,77 @@ def _build_global_hook_settings() -> dict:
     }
 
 
+def _mgcp_hook_script(command: str) -> str | None:
+    """The MGCP hook script a settings command points at, if any.
+
+    This is the identity of a hook installation. The full command string is
+    not: it carries the interpreter, and ``_hook_python_command()`` returns
+    ``sys.executable``, which differs between a ``python3`` install, a venv
+    install, and a framework-python install of the same package.
+    """
+    for filename in V2_HOOK_FILES:
+        if filename in command:
+            return filename
+    return None
+
+
+def _sync_hook_entries(groups: list, entries: list) -> bool:
+    """Install ``entries`` into ``groups`` once each, keyed by hook script.
+
+    Re-running the installer under a different interpreter must update the
+    existing entry, not add a second one. Deduping on the whole command
+    string did the latter: three installs (``python3``, a venv, framework
+    python) left three settings entries pointing at the same hook file, so
+    every hook fired three times per event -- reminders triple-injected and
+    a single denial emitted three times.
+
+    Any extra entries for the same script are dropped, so an install that
+    already duplicated heals on the next run instead of growing again.
+    """
+    changed = False
+    for entry in entries:
+        for new_hook in entry.get("hooks", []):
+            script = _mgcp_hook_script(new_hook.get("command", ""))
+            if script is None:
+                continue
+            matches = [
+                h
+                for group in groups
+                if isinstance(group, dict)
+                for h in group.get("hooks", []) or []
+                if isinstance(h, dict) and _mgcp_hook_script(h.get("command", "")) == script
+            ]
+            if not matches:
+                groups.append(entry)
+                changed = True
+                continue
+            keep, extras = matches[0], matches[1:]
+            if keep.get("command") != new_hook.get("command"):
+                keep["command"] = new_hook["command"]
+                changed = True
+            if extras:
+                for group in groups:
+                    if not isinstance(group, dict):
+                        continue
+                    hooks_list = group.get("hooks", []) or []
+                    kept = [h for h in hooks_list if not any(h is x for x in extras)]
+                    if len(kept) != len(hooks_list):
+                        group["hooks"] = kept
+                changed = True
+    if changed:
+        # Drop groups this sync emptied; leave untouched ones alone.
+        groups[:] = [g for g in groups if not (isinstance(g, dict) and g.get("hooks") == [])]
+    return changed
+
+
 def _merge_settings(existing: dict, mgcp_settings: dict) -> bool:
     """Merge MGCP settings into existing settings.json.
 
     - Adds/updates mcpServers.mgcp without clobbering other servers
     - Adds mcp__mgcp__* to permissions.allow without clobbering existing perms
-    - Checks for MGCP hooks by command string, not just by hook type presence
-    - Appends MGCP hooks when the hook type exists but MGCP command is missing
+    - Installs each MGCP hook exactly once, keyed by hook script rather than
+      by full command string, so re-running under a different interpreter
+      updates the entry instead of duplicating it
 
     Returns True if any changes were made.
     """
@@ -337,19 +401,8 @@ def _merge_settings(existing: dict, mgcp_settings: dict) -> bool:
         if hook_type not in existing["hooks"]:
             existing["hooks"][hook_type] = hook_entries
             changed = True
-        else:
-            # Hook type exists - check if MGCP hooks are already present
-            existing_commands = set()
-            for group in existing["hooks"][hook_type]:
-                for h in group.get("hooks", []):
-                    existing_commands.add(h.get("command", ""))
-
-            for entry in hook_entries:
-                for h in entry.get("hooks", []):
-                    if h.get("command", "") not in existing_commands:
-                        existing["hooks"][hook_type].append(entry)
-                        changed = True
-                        break  # Only append the entry once
+        elif _sync_hook_entries(existing["hooks"][hook_type], hook_entries):
+            changed = True
 
     return changed
 

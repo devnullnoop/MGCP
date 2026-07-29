@@ -493,6 +493,36 @@ def test_C16_hook_denies_git_commit_without_query_lessons(tmp_path):
     assert "git-requires-query-lessons" in hso["permissionDecisionReason"]
 
 
+@pytest.mark.parametrize(
+    "label,command",
+    [
+        ("cd on its own line", "cd /repo\ngit commit -m x"),
+        (
+            "apostrophe in the message",
+            "git commit -F - <<'MSG'\nthe project's fix\nMSG",
+        ),
+        ("global -C flag", "git -C /repo commit -m x"),
+    ],
+)
+def test_C16_gate_is_not_defeated_by_ordinary_command_shapes(label, command, tmp_path):
+    """The gate must hold for the shapes people actually type, not only for
+    the single-line balanced-quote form the original test used.
+
+    All three of these were live bypasses, found by replaying a real commit
+    that this repo's own gate let through on 2026-07-29: a newline is a
+    command separator that shlex silently eats, an unterminated quote made
+    the detector report "not a git command", and global flags pushed the
+    subcommand one slot past where the detector looked.
+    """
+    payload = _run_hook(
+        {"tool_name": "Bash", "tool_input": {"command": command}},
+        state={"turn_tools_called": [], "turn_bypass_scopes": []},
+        rules=GIT_QUERY_RULE, tmp_path=tmp_path,
+    )
+    assert payload is not None, f"gate did not fire for {label}: {command!r}"
+    assert payload["hookSpecificOutput"]["permissionDecision"] == "deny", label
+
+
 def test_C17_hook_allows_git_commit_after_query_lessons(tmp_path):
     """The gate must open once its precondition is met, or it is a wall."""
     payload = _run_hook(

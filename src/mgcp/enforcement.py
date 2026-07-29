@@ -40,6 +40,16 @@ ENFORCEMENT_CONFIG_FILENAME = "enforcement_rules.json"
 BYPASS_ALL = "*"
 
 SHELL_SEPARATORS = {"&&", "||", "&", ";", ";;", "|", "(", ")", "{", "}"}
+# `git` at a command boundary. Applied to raw text only when tokenizing fails.
+_GIT_AT_BOUNDARY_RE = re.compile(r"(?:^|[\s;&|(){}])git(?=\s)")
+# Global flags that consume the NEXT token as their value, so the subcommand
+# sits one slot further along: `git -C /path commit` is still a commit.
+_GIT_VALUE_FLAGS = {
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace",
+    "--exec-path", "--config-env", "--super-prefix",
+}
+# How far past `git` to look for the subcommand in the raw-text fallback.
+_GIT_RAW_LOOKAHEAD = 6
 
 
 # ============================================================================
@@ -274,23 +284,70 @@ def tokenize_command(command: str) -> list[str]:
     return list(lexer)
 
 
+def _scan_git_subcommand_raw(line: str, subcommands: list[str]) -> str | None:
+    """Last-resort scan of raw text for ``git <sub>`` at a command boundary.
+
+    Used only when the line cannot be tokenized. Detection must not depend on
+    the command being well-formed: an unterminated quote is author-controlled
+    text, so treating it as "not a git command" turns any apostrophe in a
+    commit message into a way through the gate.
+    """
+    for match in _GIT_AT_BOUNDARY_RE.finditer(line):
+        for tok in line[match.end():].split()[:_GIT_RAW_LOOKAHEAD]:
+            if tok in subcommands:
+                return tok
+    return None
+
+
+def _subcommand_after_git(tokens: list[str], i: int) -> str | None:
+    """The subcommand token following ``git`` at index ``i``, skipping global
+    flags. Without this, ``git -C /path commit`` read as subcommand ``-C`` and
+    matched nothing, so prefixing any gated command with ``-C .`` skipped it."""
+    j = i + 1
+    while j < len(tokens) and tokens[j].startswith("-"):
+        flag = tokens[j]
+        j += 1
+        if flag in _GIT_VALUE_FLAGS and j < len(tokens):
+            j += 1
+    return tokens[j] if j < len(tokens) else None
+
+
 def detect_git_subcommand(command: str, subcommands: list[str]) -> str | None:
     """Return the matched subcommand if ``command`` invokes
-    ``git <sub>`` at a command boundary for any sub in ``subcommands``."""
-    try:
-        tokens = tokenize_command(command)
-    except ValueError:
-        return None
+    ``git <sub>`` at a command boundary for any sub in ``subcommands``.
 
-    at_command_start = True
-    for i, tok in enumerate(tokens):
-        if tok in SHELL_SEPARATORS:
-            at_command_start = True
+    Scanned line by line. A newline is a command separator in shell, but
+    ``shlex`` with ``whitespace_split`` consumes it as ordinary whitespace, so
+    a single token stream cannot tell ``cd /x`` NEWLINE ``git commit`` from
+    ``cd /x git commit`` -- and in the token stream ``git`` no longer sits at a
+    command boundary, so the trigger silently stopped matching. Splitting first
+    keeps every line's first word a real command start.
+
+    Lines that fail to tokenize fall back to a raw scan rather than being
+    skipped: both paths fail closed, because a command this function cannot
+    read is not evidence that the command is safe.
+    """
+    for line in command.splitlines():
+        if not line.strip():
             continue
-        if at_command_start and tok == "git":
-            if i + 1 < len(tokens) and tokens[i + 1] in subcommands:
-                return tokens[i + 1]
-        at_command_start = False
+        try:
+            tokens = tokenize_command(line)
+        except ValueError:
+            found = _scan_git_subcommand_raw(line, subcommands)
+            if found:
+                return found
+            continue
+
+        at_command_start = True
+        for i, tok in enumerate(tokens):
+            if tok in SHELL_SEPARATORS:
+                at_command_start = True
+                continue
+            if at_command_start and tok == "git":
+                sub = _subcommand_after_git(tokens, i)
+                if sub in subcommands:
+                    return sub
+            at_command_start = False
     return None
 
 

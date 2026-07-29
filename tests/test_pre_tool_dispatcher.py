@@ -71,6 +71,15 @@ class TestCommandDetector:
             "make build && git push origin main",
             "run_tests.sh; git commit -am 'ok'",
             "(cd subdir && git commit -m msg)",
+            # A newline separates commands just as `&&` does, but shlex with
+            # whitespace_split consumes it, which left `git` looking like an
+            # argument to the previous command instead of a command start.
+            "cd /repo\ngit commit -m foo",
+            "echo starting\ngit push origin main",
+            "cd /a\ncd /b\n\ngit commit -am x",
+            "git -C /repo commit -m x",
+            "git -c user.name=x commit -m y",
+            "git --git-dir=/r/.git push origin main",
         ],
     )
     def test_matches_real_git_invocations(self, hook_module, command):
@@ -86,13 +95,34 @@ class TestCommandDetector:
             "git log --oneline",
             "python3 train.py",
             "echo git commit",
+            "echo hi\npython3 train.py",
+            "cd /repo\ngit status",
+            "git -C /repo status",
         ],
     )
     def test_does_not_match_non_invocations(self, hook_module, command):
         assert hook_module._detect_git_subcommand(command, ["commit", "push"]) is False
 
-    def test_unparseable_command_fails_open(self, hook_module):
-        assert hook_module._detect_git_subcommand("git commit -m 'oops", ["commit"]) is False
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git commit -m 'oops",
+            "git commit -F - <<'MSG'\nthe project's fix\nMSG",
+            "cd /repo\ngit commit -F - <<'M'\ndon't\nM",
+        ],
+    )
+    def test_unparseable_command_fails_closed(self, hook_module, command):
+        """An unterminated quote is author-controlled text, not proof of
+        safety. Failing open here made every git gate optional for anyone
+        who wrote an apostrophe in a commit message."""
+        assert hook_module._detect_git_subcommand(command, ["commit", "push"]) is True
+
+    @pytest.mark.parametrize(
+        "command",
+        ["echo don't", "grep -r can't src/", "python -c \"print('unclosed\""],
+    )
+    def test_failing_closed_stays_scoped_to_git(self, hook_module, command):
+        assert hook_module._detect_git_subcommand(command, ["commit", "push"]) is False
 
 
 class TestApologyDetector:

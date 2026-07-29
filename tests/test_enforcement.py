@@ -42,13 +42,54 @@ class TestGitSubcommandDetector:
             ('echo "how to git commit" > f', None),
             ("git status", None),
             ("python train.py", None),
+            # A newline is a command separator. shlex with whitespace_split
+            # eats it, so before this was split per line the token stream read
+            # `cd /tmp git commit` and `git` was no longer at a command start
+            # -- every multi-line block slipped the gate.
+            ("cd /tmp\ngit commit -m x", "commit"),
+            ("echo hi\ngit push origin main", "push"),
+            ("cd /a\ncd /b\n\ngit commit -am x", "commit"),
+            # Still no false positives across lines.
+            ("echo hi\npython train.py", None),
+            ("cd /tmp\ngit status", None),
+            # Global flags push the subcommand one slot along; without
+            # skipping them `git -C . commit` read as subcommand "-C".
+            ("git -C /repo commit -m x", "commit"),
+            ("git -c user.name=x commit -m y", "commit"),
+            ("git --git-dir=/r/.git push origin main", "push"),
+            ("cd /a\ngit -C /repo push", "push"),
+            ("git -C /repo status", None),
         ],
     )
     def test_detection(self, command, expected):
         assert detect_git_subcommand(command, ["commit", "push"]) == expected
 
-    def test_unterminated_quote_fails_open(self):
-        assert detect_git_subcommand("git commit -m 'oops", ["commit"]) is None
+    @pytest.mark.parametrize(
+        "command,expected",
+        [
+            # Unterminated quote: the command cannot be tokenized, which is
+            # not evidence that it is safe. An apostrophe is ordinary English
+            # in a commit message, so failing open here made every git gate
+            # optional for anyone who wrote "the project's fix".
+            ("git commit -m 'oops", "commit"),
+            ("git commit -F - <<'MSG'\nthe project's fix\nMSG", "commit"),
+            ("cd /repo\ngit commit -F - <<'M'\ndon't\nM", "commit"),
+        ],
+    )
+    def test_untokenizable_command_fails_closed(self, command, expected):
+        assert detect_git_subcommand(command, ["commit", "push"]) == expected
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "echo don't",
+            "grep -r can't src/",
+            "python -c \"print('unclosed\"",
+        ],
+    )
+    def test_failing_closed_does_not_over_block(self, command):
+        """Failing closed is scoped to git, not to everything unparseable."""
+        assert detect_git_subcommand(command, ["commit", "push"]) is None
 
 
 class TestTriggerMatches:

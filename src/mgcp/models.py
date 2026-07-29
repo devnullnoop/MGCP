@@ -31,6 +31,106 @@ def sanitize_tool_call_xml(text: str) -> str:
     return _TOOL_CALL_TAG_RE.sub(lambda m: f"\u2039{m.group(1)}\u203a", text)
 
 
+# --------------------------------------------------------------------------
+# Rejection of serialised tool-call envelopes (the write-time guard)
+#
+# Sanitizing is a read-path safety net: it stops already-stored XML from being
+# re-interpreted as a tool call when the record is loaded back into a context
+# window. It does NOT stop the corruption arriving. An agent that serialises its
+# own tool-call wrapper into a parameter value writes text like
+#     ...text</action> <parameter name="rationale">why...
+# and sanitizing turns that into an unreadable but permanent
+#     ...text</action> ‹parameter name="rationale"›why...
+# Nothing rejected it, so it is in the store forever and in the lesson's
+# embedding, where it degrades retrieval. Reject it at write time instead.
+#
+# DETECTION RULE: match the ENVELOPE SHAPE - a structural tag from the tool-call
+# grammar (`function_calls`, `invoke`, `parameter`, with or without the `antml:`
+# prefix), open or close, in raw `<>` form or in the `‹›` form the sanitizer
+# leaves behind. Angle brackets alone are not a hit; `<div>`, `a < b` and the
+# word "parameter" all pass.
+#
+# FALSE-POSITIVE RISK: a lesson that legitimately quotes the syntax - "never
+# write <parameter name="x"> into a field" - is textually identical to the
+# corruption. The escape hatch is code quoting: fenced blocks and inline
+# backticks are stripped before the search, so `<parameter name="x">` in
+# backticks is accepted, and the rejection message says so. Residual risk is a
+# lesson that discusses the syntax in bare prose with no backticks; that write
+# is refused and the agent is told exactly how to re-send it. Refusing a
+# re-sendable write is cheaper than a permanently corrupt record.
+_TOOL_CALL_ENVELOPE_RE = re.compile(
+    r"[<‹]\s*/?\s*(?:antml:)?(?:function_calls|invoke|parameter)\b"
+    r"[^>›]*[>›]",
+    re.IGNORECASE,
+)
+
+_CODE_SPAN_RE = re.compile(r"```.*?```|`[^`]*`", re.DOTALL)
+
+
+def find_tool_call_envelope(text: Any) -> re.Match | None:
+    """Return the match for the first tool-call envelope tag in `text`.
+
+    Code spans are blanked with same-length filler rather than removed, so the
+    returned match's offsets index the ORIGINAL string - the cleanup script
+    relies on that to split a record at the envelope.
+    """
+    if not isinstance(text, str) or not text:
+        return None
+    masked = _CODE_SPAN_RE.sub(lambda m: " " * len(m.group(0)), text)
+    return _TOOL_CALL_ENVELOPE_RE.search(masked)
+
+
+def _find_envelope(value: Any, path: str) -> tuple[str, str] | None:
+    """Depth-first search for the first envelope. Returns (field_path, tag)."""
+    if isinstance(value, str):
+        found = find_tool_call_envelope(value)
+        return (path, found.group(0)) if found else None
+    if isinstance(value, dict):
+        items = ((f"{path}.{key}" if path else str(key), val) for key, val in value.items())
+    elif isinstance(value, list | tuple):
+        items = ((f"{path}[{i}]", val) for i, val in enumerate(value))
+    else:
+        return None
+    for sub_path, sub_value in items:
+        hit = _find_envelope(sub_value, sub_path)
+        if hit:
+            return hit
+    return None
+
+
+def reject_tool_call_envelope(model: BaseModel) -> None:
+    """Raise ValueError if any string on `model` carries a tool-call envelope.
+
+    Called from the persistence write methods, not from model construction:
+    records written before this guard existed are still in the store, and
+    loading one must keep working. Only writes are refused.
+
+    The writer here is a language model, so the message is a UI - it names the
+    field, quotes the offending fragment, and says what to send instead.
+    """
+    hit = _find_envelope(model.model_dump(), "")
+    if hit is None:
+        return
+    field, fragment = hit
+    # Show the raw form even if the sanitizer already swapped the brackets -
+    # the agent needs to recognise what it sent.
+    fragment = fragment.replace("‹", "<").replace("›", ">")
+    raise ValueError(
+        f"{type(model).__name__} write rejected: field '{field}' contains a "
+        f"serialised tool-call envelope ({fragment!r}).\n"
+        "That is your own tool-call wrapper leaking into a parameter value, not "
+        "content. Re-send this field as plain text: no <function_calls>, "
+        "<invoke> or <parameter> tags, and no stray closing tag such as "
+        "'</action>' at the end of the value. Put each field's text in its own "
+        "parameter.\n"
+        "If you meant to write ABOUT this syntax, wrap it in backticks - "
+        "`<parameter name=\"x\">` - and it will be accepted.\n"
+        "If this is an existing record you loaded and are writing back, it was "
+        "already stored corrupt: run scripts/clean_tool_call_envelopes.py "
+        "(dry-run by default) to see the repair."
+    )
+
+
 def _sanitize_value(value: Any) -> Any:
     """Recursively sanitize strings inside dicts and lists.
 

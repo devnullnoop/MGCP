@@ -24,6 +24,7 @@ from .models import (
     Soliloquy,
     Workflow,
     WorkflowStep,
+    reject_tool_call_envelope,
 )
 
 logger = logging.getLogger("mgcp.persistence")
@@ -183,7 +184,8 @@ CREATE TABLE IF NOT EXISTS soliloquies (
     timestamp TEXT NOT NULL,
     content TEXT NOT NULL,
     session_number INTEGER NOT NULL DEFAULT 0,
-    mood TEXT
+    mood TEXT,
+    project_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_soliloquies_timestamp ON soliloquies(timestamp DESC);
@@ -307,6 +309,15 @@ class LessonStore:
             )
 
         # Migration: Add catalogue column to project_contexts
+        # Migration: Tag soliloquies with the project they were written in.
+        # Storage stays global (one continuous inner voice); the tag only lets
+        # the read prefer this project's own train of thought. Existing rows
+        # keep project_id NULL and read as "untagged earlier session".
+        cursor = await conn.execute("PRAGMA table_info(soliloquies)")
+        soliloquy_columns = [row[1] for row in await cursor.fetchall()]
+        if soliloquy_columns and "project_id" not in soliloquy_columns:
+            await conn.execute("ALTER TABLE soliloquies ADD COLUMN project_id TEXT")
+
         cursor = await conn.execute("PRAGMA table_info(project_contexts)")
         project_columns = [row[1] for row in await cursor.fetchall()]
         if project_columns and "catalogue" not in project_columns:
@@ -316,6 +327,7 @@ class LessonStore:
 
     async def add_lesson(self, lesson: Lesson) -> str:
         """Add a new lesson, return its ID."""
+        reject_tool_call_envelope(lesson)
         async with self._connection(commit=True) as conn:
             await conn.execute(
                 """
@@ -394,6 +406,7 @@ class LessonStore:
         self, lesson: Lesson, refinement_reason: str | None = None
     ) -> None:
         """Update an existing lesson, snapshotting previous version first."""
+        reject_tool_call_envelope(lesson)
         async with self._connection(commit=True) as conn:
             # Snapshot current state into lesson_versions before overwriting
             cursor = await conn.execute(
@@ -541,6 +554,7 @@ class LessonStore:
 
     async def save_project_context(self, context: ProjectContext) -> None:
         """Save or update project context and append to history."""
+        reject_tool_call_envelope(context)
         catalogue_json = json.dumps(context.catalogue.model_dump(mode="json"))
         todos_json = json.dumps([t.model_dump(mode="json") for t in context.todos])
         active_files_json = json.dumps(context.active_files)
@@ -1003,45 +1017,83 @@ class LessonStore:
     # Soliloquy Methods (LLM self-reflection journal)
     # =========================================================================
 
-    async def write_soliloquy(self, soliloquy: Soliloquy) -> int:
-        """Write a soliloquy entry. Returns the auto-assigned row ID."""
+    async def write_soliloquy(
+        self, soliloquy: Soliloquy, project_id: str | None = None
+    ) -> int:
+        """Write a soliloquy entry. Returns the auto-assigned row ID.
+
+        Args:
+            soliloquy: The entry to store.
+            project_id: Project the entry was written in. Storage stays global;
+                this only tags the row so a later read can prefer the project's
+                own entries. None when the project could not be resolved.
+        """
+        reject_tool_call_envelope(soliloquy)
         async with self._connection(commit=True) as conn:
             cursor = await conn.execute(
                 """
-                INSERT INTO soliloquies (timestamp, content, session_number, mood)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO soliloquies (timestamp, content, session_number, mood, project_id)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     soliloquy.timestamp.isoformat(),
                     soliloquy.content,
                     soliloquy.session_number,
                     soliloquy.mood,
+                    project_id,
                 ),
             )
             row_id = cursor.lastrowid
             logger.info(f"Wrote soliloquy #{row_id} ({len(soliloquy.content)} chars)")
             return row_id
 
-    async def read_latest_soliloquy(self) -> Soliloquy | None:
-        """Read the most recent soliloquy entry."""
+    async def read_latest_soliloquy(
+        self, project_id: str | None = None
+    ) -> tuple[Soliloquy, str | None] | None:
+        """Read the most recent soliloquy, preferring this project's own.
+
+        Storage is global — the soliloquy is one continuous inner voice — so
+        the read does the scoping: this project's newest entry wins, and the
+        newest entry from anywhere is the fallback when this project has none.
+
+        Returns (entry, entry_project_id) so the caller can label a fallback
+        that came from somewhere else. entry_project_id is None for rows
+        written before entries were tagged.
+        """
         async with self._connection() as conn:
+            if project_id:
+                cursor = await conn.execute(
+                    "SELECT * FROM soliloquies WHERE project_id = ? "
+                    "ORDER BY timestamp DESC LIMIT 1",
+                    (project_id,),
+                )
+                row = await cursor.fetchone()
+                if row:
+                    return self._row_to_soliloquy(row), row["project_id"]
+
             cursor = await conn.execute(
                 "SELECT * FROM soliloquies ORDER BY timestamp DESC LIMIT 1"
             )
             row = await cursor.fetchone()
             if not row:
                 return None
-            return self._row_to_soliloquy(row)
+            return self._row_to_soliloquy(row), row["project_id"]
 
-    async def read_soliloquies(self, limit: int = 10) -> list[Soliloquy]:
-        """Read recent soliloquy entries."""
+    async def read_soliloquies(
+        self, limit: int = 10
+    ) -> list[tuple[Soliloquy, str | None]]:
+        """Read recent soliloquy entries, newest first, across all projects.
+
+        Returns (entry, entry_project_id) pairs so the caller can mark which
+        entries came from a different project.
+        """
         async with self._connection() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM soliloquies ORDER BY timestamp DESC LIMIT ?",
                 (limit,),
             )
             rows = await cursor.fetchall()
-            return [self._row_to_soliloquy(row) for row in rows]
+            return [(self._row_to_soliloquy(row), row["project_id"]) for row in rows]
 
     async def count_soliloquies(self) -> int:
         """Count total soliloquy entries."""

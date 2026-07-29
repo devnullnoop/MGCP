@@ -140,11 +140,83 @@ class QdrantVectorStore:
             logger.warning(f"Failed to remove lesson '{lesson_id}' from vector store: {e}")
             return False
 
+    # Calibrated, not chosen. BGE cosine on normalised English prose almost never
+    # falls below ~0.45 for any two texts, so the old 0.3 floor admitted
+    # everything and `limit` did all the filtering. 0.30 and 0.43 return
+    # byte-identical results: the old value was not a threshold at all.
+    #
+    # KNOWN LIMIT, measured on the live 238-lesson store: the score tracks query
+    # LENGTH as much as relevance. Top-1 for full-sentence queries runs
+    # 0.586-0.791; for 2-4 word phrases ("it crashed", "make it faster") it runs
+    # 0.486-0.725; for queries with no right answer at all it still reaches
+    # 0.580. The short-query band overlaps the noise band, so NO single floor
+    # separates them. Closing that needs length normalisation or a reranker,
+    # not a different constant.
+    #
+    # Measured on the 26 positives / 8 hard negatives in
+    # tests/benchmark_data/retrieval_queries.yaml, PLUS the 2-4 word shapes
+    # query_lessons' own docstring instructs agents to send:
+    #
+    #   floor   P@1    P@3   posEmpty  negEmpty   documented short queries lost
+    #   0.30    0.96   0.56    0.00      0.00      0/10
+    #   0.52    0.96   0.59    0.00      0.50      0/10
+    #   0.55    0.96   0.67    0.00      0.62      1/10
+    #   0.58    0.96   0.71    0.00      0.88      2/10
+    #
+    # THE FLOOR STAYS AT 0.30, AND THE TABLE ABOVE IS WHY — it is the evidence
+    # that raising it does not work, not evidence for a better number.
+    #
+    # The decisive measurement, top-1 against the live 238-lesson store:
+    #
+    #   0.486  "clean up the architecture"           RELEVANT
+    #   0.491  "it crashed"                          RELEVANT
+    #   0.506  "my sourdough loaf will not rise"      OFF-TOPIC
+    #   0.533  "make it faster"                      RELEVANT
+    #   0.547  "performance optimization"            RELEVANT
+    #
+    # An off-topic query outscores two genuinely relevant ones. The bands are
+    # interleaved, not merely adjacent, so there is no constant that admits the
+    # relevant queries and rejects the noise — any floor <= 0.486 lets sourdough
+    # through, any floor >= 0.507 silences "it crashed". This is a property of
+    # the scores, not a tuning problem.
+    #
+    # It also matches a contract the codebase already tests:
+    # tests/test_trigger_coverage.py asserts that short natural phrasings return
+    # a match. 52 pass at 0.30; 8 fail at 0.52; 13 at 0.55. And P@1 is 0.96 at
+    # EVERY floor — raising it buys nothing at rank 1 and costs recall at the
+    # shape agents actually send.
+    #
+    # TESTED AND REJECTED, so nobody retries it: score PEAKEDNESS (top-1 minus
+    # the mean of the tail, absolute or relative) does not separate them either.
+    # Relative gap runs 0.042-0.140 for relevant queries and 0.046-0.135 for
+    # off-topic ones — fully overlapping. "best hiking trails in the pacific
+    # northwest" is more peaked (0.135) than "error handling" (0.065). The
+    # distribution shape carries no signal here.
+    #
+    # The errors are also asymmetric. A lesson wrongly withheld is invisible —
+    # the agent never learns it existed and repeats the mistake the lesson was
+    # written to prevent. A lesson wrongly included costs one line of context
+    # the agent discards.
+    #
+    # So: 0.30 is honestly not a threshold (it returns byte-identical results to
+    # 0.43, and rejects none of the hard negatives), and that is a REAL defect —
+    # the system cannot currently answer "nothing relevant". But a constant is
+    # the wrong instrument to fix it with, because the short-query band and the
+    # noise band overlap. The fix is length normalisation or a reranker. Until
+    # one of those lands, leaving the floor open and accepting noise is the
+    # lesser harm.
+    #
+    # Do not raise this without re-running BOTH `python -m tests.retrieval_benchmark`
+    # AND tests/test_trigger_coverage.py. A set of long queries alone will
+    # happily justify a floor that starves the shape agents actually send —
+    # that is exactly how 0.55 got picked.
+    DEFAULT_MIN_SCORE = 0.30
+
     def search(
         self,
         query: str,
         limit: int = 5,
-        min_score: float = 0.3,
+        min_score: float = DEFAULT_MIN_SCORE,
         tags: list[str] | None = None,
     ) -> list[tuple[str, float]]:
         """Search for relevant lessons.
@@ -152,7 +224,7 @@ class QdrantVectorStore:
         Args:
             query: Search query text
             limit: Max results
-            min_score: Minimum similarity score
+            min_score: Minimum similarity score (see DEFAULT_MIN_SCORE)
             tags: Optional tag filter
 
         Returns:

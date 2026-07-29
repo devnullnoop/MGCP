@@ -1,0 +1,266 @@
+# Labelled retrieval query set for calibrating the lesson-search similarity floor.
+#
+# PROVENANCE: queries were authored against the real lesson corpus in ~/.mgcp
+# (238 lessons, read-only snapshot taken 2026-07-28). Gold labels were written
+# BEFORE any retrieval run; the pooled top-10 results of the min_score=0 sweep
+# were then reviewed and additional genuinely-relevant lessons folded into
+# `relevant` (standard TREC-style pooling). Nothing was removed from `relevant`
+# to flatter a threshold.
+#
+# Schema
+#   id          stable slug for the query
+#   query       the text an agent would actually pass to query_lessons
+#   paraphrase  same intent, different words. HELD-OUT set: the floor is chosen
+#               on `query` and validated on `paraphrase`. Cosine scores move by
+#               a median 0.045 under harmless rewording, so any floor tuned to a
+#               gap narrower than that is fitted to phrasing, not to relevance.
+#   gold        the lesson that SHOULD win at rank 1 (null for hard negatives)
+#   relevant    every lesson a human would accept as genuinely useful here.
+#               gold is always a member. Empty for hard negatives.
+#   kind        positive | negative_out_of_domain | negative_near_domain
+#
+# Hard negatives are load-bearing: a floor that never returns empty is not a
+# floor. negative_near_domain entries are in the software-engineering domain but
+# have no lesson in the corpus (verified by keyword scan of all 238 bodies).
+
+queries:
+  # ---------------------------------------------------------------- positives
+  - id: diff-size-discipline
+    query: "I keep adding new helper modules and the diff is getting huge. how much should I be adding versus deleting?"
+    paraphrase: "my change keeps growing with extra helper files, should I be cutting instead"
+    gold: reduction-over-addition
+    relevant: [reduction-over-addition]
+    kind: positive
+
+  - id: when-to-stop-reviewing
+    query: "when do I stop finding issues in a code review and actually ship the thing"
+    paraphrase: "how do I know the audit is finished and it is time to release"
+    gold: severity-cutoff-then-ship
+    relevant: [severity-cutoff-then-ship]
+    kind: positive
+
+  - id: port-in-use
+    query: "the dev server won't start, address already in use on the port"
+    paraphrase: "cannot boot the local server, the port is already bound"
+    gold: check-port-before-server-start
+    relevant: [check-port-before-server-start, kill-stale-processes-before-restart, dynamic-port-desktop-app]
+    kind: positive
+
+  - id: pytest-hangs
+    query: "the tests all pass but pytest never exits and the CI job times out"
+    paraphrase: "test run finishes green but the process hangs forever in CI"
+    gold: pytest-hanging-check-process-exit
+    relevant: [pytest-hanging-check-process-exit, chromadb-test-cleanup-conftest, cleanup-background-tasks]
+    kind: positive
+
+  - id: qdrant-lock
+    query: "qdrant says storage folder is already accessed by another instance when I run the test suite"
+    paraphrase: "getting a qdrant storage lock error while running tests"
+    gold: skip-qdrant-tests-when-server-running
+    relevant: [skip-qdrant-tests-when-server-running, qdrant-local-single-process, mgcp-pytest-skip-qdrant-tests]
+    kind: positive
+
+  - id: password-storage
+    query: "what is the right way to store user passwords in the database"
+    paraphrase: "correct way to persist account passwords securely"
+    gold: owasp-password-storage
+    relevant: [owasp-password-storage, no-hardcoded-secrets, owasp-cryptography]
+    kind: positive
+
+  - id: idor
+    query: "a user can edit the id in the URL and pull up another account's invoice"
+    paraphrase: "someone swaps the record id in the query string and reads another account's data"
+    gold: owasp-idor-prevention
+    relevant: [owasp-idor-prevention, owasp-access-control, least-privilege]
+    kind: positive
+
+  - id: before-push
+    query: "about to git push this branch, what do I need to do first"
+    paraphrase: "what should happen before I push to the remote"
+    gold: run-tests-before-push
+    relevant: [run-tests-before-push, lint-before-push, verify-before-push, git-push-requires-proof, run-ci-locally-before-push, query-before-git-operations]
+    kind: positive
+
+  - id: commit-message-attribution
+    query: "writing the commit message for this change"
+    paraphrase: "composing the git commit text for this work"
+    gold: no-claude-attribution-in-commits
+    relevant: [no-claude-attribution-in-commits, no-coauthor-attribution, git-practices, mgcp-save-before-commit]
+    kind: positive
+
+  - id: explain-register
+    query: "how should I phrase this explanation so the operator actually understands it"
+    paraphrase: "what tone should I use so a non-expert follows my explanation"
+    gold: eli5-default-register
+    relevant: [eli5-default-register]
+    kind: positive
+
+  - id: about-to-apologise
+    query: "I got something wrong and I'm about to open with sorry, my bad"
+    paraphrase: "I made an error and want to start my reply with an apology"
+    gold: no-reflexive-apology
+    relevant: [no-reflexive-apology, apology-triggers-knowledge-write]
+    kind: positive
+
+  - id: wrap-up-report
+    query: "finished a long multi-step task, how do I write up what I did"
+    paraphrase: "how to summarise a long piece of work once it is done"
+    gold: structured-summaries-after-work
+    relevant: [structured-summaries-after-work, mgcp-post-task-retrospective]
+    kind: positive
+
+  - id: sidebar-scroll
+    query: "the sidebar list is cut off and won't scroll, flex child with overflow-y auto"
+    paraphrase: "side panel content overflows and scrolling does nothing"
+    gold: flex-1-scrollable-container-gotcha
+    relevant: [flex-1-scrollable-container-gotcha]
+    kind: positive
+
+  - id: fastapi-object-object
+    query: "FastAPI validation errors render as [object Object] in the frontend"
+    paraphrase: "pydantic validation failures display as object Object on the page"
+    gold: fastapi-detail-array-errors
+    relevant: [fastapi-detail-array-errors, no-silent-ui-failures, api-response-contract]
+    kind: positive
+
+  - id: read-a-pdf
+    query: "I need to open the rendered PDF and check the pages came out right"
+    paraphrase: "checking the generated pdf output page by page"
+    gold: read-pdf-requires-pages-arg
+    relevant: [read-pdf-requires-pages-arg]
+    kind: positive
+
+  - id: version-bump
+    query: "bumping the version number for this release, what else has to change"
+    paraphrase: "raising the release version, what else must be kept in sync"
+    gold: version-bump-requires-readme-parity
+    relevant: [version-bump-requires-readme-parity, semver-rules, follow-doc-update-workflow, publish-requires-doc-webapp-parity]
+    kind: positive
+
+  - id: hook-template-edit
+    query: "I edited a file under hook_templates, anything I need to remember"
+    paraphrase: "I changed a hook template, is there anything to update alongside"
+    gold: bump-hook-version-on-template-change
+    relevant: [bump-hook-version-on-template-change]
+    kind: positive
+
+  - id: regex-vs-llm
+    query: "should I write a regex to decide whether this sentence is ambiguous or under-specified"
+    paraphrase: "using pattern matching to judge if wording is vague"
+    gold: llm-not-regex-for-semantic-judgment
+    relevant: [llm-not-regex-for-semantic-judgment, semantic-intent-over-keywords]
+    kind: positive
+
+  - id: retry-loop
+    query: "this tool call keeps retrying and failing exactly the same way, attempt 4 of 5"
+    paraphrase: "the same call has failed identically several retries in a row"
+    gold: abort-retry-loops-by-attempt-3
+    relevant: [abort-retry-loops-by-attempt-3]
+    kind: positive
+
+  - id: ui-claim-works
+    query: "the frontend change looks right in the code, can I tell the user it works"
+    paraphrase: "can I say the frontend works based on reading the code"
+    gold: verify-ui-with-playwright-screenshots
+    relevant: [verify-ui-with-playwright-screenshots, test-ui-before-declaring-done, manual-ui-test-required]
+    kind: positive
+
+  - id: enforcement-blocked
+    query: "MGCP enforcement blocked my tool call and there is an MGCP_BYPASS env var available"
+    paraphrase: "a gate refused my tool call and there is a bypass flag"
+    gold: hard-gate-block-is-feature-not-bug
+    relevant: [hard-gate-block-is-feature-not-bug]
+    kind: positive
+
+  - id: big-feature-start
+    query: "starting a big multi-phase feature that touches several modules"
+    paraphrase: "kicking off a large feature spanning many files and phases"
+    gold: big-feature-workflow-mandatory
+    relevant: [big-feature-workflow-mandatory, workflow-first-always, mgcp-query-workflows-first, query-workflows-at-each-big-feature-not-just-session-start, mandatory-workflow-selection, workflow-execution-pattern]
+    kind: positive
+
+  - id: ux-gap-during-guide
+    query: "walking a chapter of the operator guide and I hit a UX gap in the flow"
+    paraphrase: "found a hole in the flow while documenting the admin walkthrough"
+    gold: fix-gaps-when-detected-not-queue
+    relevant: [fix-gaps-when-detected-not-queue, guides-as-uxgap-detector, guide-driven-development-standard]
+    kind: positive
+
+  - id: vanity-metrics
+    query: "which of these dashboard metrics are vanity metrics we should drop"
+    paraphrase: "are these dashboard numbers meaningful or just vanity"
+    gold: capture-everything-opinionate-display
+    relevant: [capture-everything-opinionate-display]
+    kind: positive
+
+  - id: sql-injection
+    query: "building a query string from a request parameter to hit the database"
+    paraphrase: "concatenating a request value into an sql statement"
+    gold: owasp-sql-injection
+    relevant: [owasp-sql-injection, owasp-input-validation, validate-input, owasp-stored-procedures]
+    kind: positive
+
+  - id: log-rotation
+    query: "the service writes logs to a file on disk in production"
+    paraphrase: "the app appends logs to disk files in production"
+    gold: always-use-log-rotation
+    relevant: [always-use-log-rotation, structlog-vs-logging, owasp-security-logging]
+    kind: positive
+
+  # ------------------------------------------------- hard negatives (in-domain)
+  - id: neg-kubernetes
+    query: "configure kubernetes horizontal pod autoscaling for a bursty workload"
+    paraphrase: "set up autoscaling of pods in a k8s cluster under spiky traffic"
+    gold: null
+    relevant: []
+    kind: negative_near_domain
+
+  - id: neg-postgres-sharding
+    query: "how should I shard a postgres table by tenant id across nodes"
+    paraphrase: "splitting a postgres table across machines keyed on the tenant column"
+    gold: null
+    relevant: []
+    kind: negative_near_domain
+
+  - id: neg-graphql
+    query: "set up a graphql schema with dataloader batching to avoid n+1"
+    paraphrase: "designing a graphql resolver layer with batched loading"
+    gold: null
+    relevant: []
+    kind: negative_near_domain
+
+  - id: neg-jvm-gc
+    query: "tune jvm garbage collection pause times in a java service"
+    paraphrase: "reducing stop-the-world pauses from the java collector"
+    gold: null
+    relevant: []
+    kind: negative_near_domain
+
+  # --------------------------------------------- hard negatives (out of domain)
+  - id: neg-sourdough
+    query: "my sourdough loaf will not rise, what am I doing wrong"
+    paraphrase: "the bread dough is flat after proving overnight"
+    gold: null
+    relevant: []
+    kind: negative_out_of_domain
+
+  - id: neg-offside
+    query: "explain the offside rule in football to someone who has never watched a match"
+    paraphrase: "how does the offside call work in a soccer game"
+    gold: null
+    relevant: []
+    kind: negative_out_of_domain
+
+  - id: neg-flight
+    query: "book me a flight to lisbon next tuesday morning"
+    paraphrase: "find me a morning departure to portugal on tuesday"
+    gold: null
+    relevant: []
+    kind: negative_out_of_domain
+
+  - id: neg-bike
+    query: "recommend a hardtail mountain bike for trail riding under two thousand"
+    paraphrase: "which trail bike should I buy on a budget"
+    gold: null
+    relevant: []
+    kind: negative_out_of_domain

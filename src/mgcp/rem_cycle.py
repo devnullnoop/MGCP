@@ -161,8 +161,6 @@ class RemEngine:
             findings = await self._context_summary()
         elif operation == "intent_calibration":
             findings = await self._intent_calibration()
-        elif operation == "action_effectiveness":
-            findings = await self._action_effectiveness()
         else:
             findings = []
 
@@ -418,114 +416,6 @@ class RemEngine:
                 ],
                 recommended=0,
                 metadata={"project_id": project.project_id, "snapshot_count": len(history)},
-            ))
-
-        return findings
-
-    async def capture_lesson_baseline(self, lesson_id: str) -> dict:
-        """Capture a snapshot of lesson metrics for before/after comparison."""
-        lesson = await self.store.get_lesson(lesson_id)
-        if not lesson:
-            return {"lesson_id": lesson_id, "error": "not_found"}
-        return {
-            "lesson_id": lesson_id,
-            "usage_count": lesson.usage_count,
-            "version": lesson.version,
-            "trigger": lesson.trigger,
-            "tags": lesson.tags,
-            "last_used": lesson.last_used.isoformat() if lesson.last_used else None,
-            "captured_at": datetime.now(UTC).isoformat(),
-        }
-
-    async def _action_effectiveness(self) -> list[RemFinding]:
-        """Measure outcomes of past REM actions.
-
-        Compares current lesson metrics against baseline snapshots
-        to determine if remediation actions improved, maintained, or
-        degraded lesson effectiveness.
-        """
-        unmeasured = await self.store.get_unmeasured_actions(min_age_days=7)
-        if not unmeasured:
-            return []
-
-        findings = []
-        measured_count = 0
-        verdicts = {"improved": 0, "unchanged": 0, "degraded": 0, "target_gone": 0}
-
-        for action in unmeasured:
-            if action.id is None:
-                continue
-
-            baseline = action.baseline_snapshot
-            target_id = action.target_id
-
-            if action.target_type == "lesson":
-                lesson = await self.store.get_lesson(target_id)
-                if lesson is None:
-                    # Lesson was deleted — expected for delete actions
-                    if action.action_type == "delete":
-                        verdict = "improved"
-                    else:
-                        verdict = "target_gone"
-                    outcome = {
-                        "verdict": verdict,
-                        "reason": "lesson no longer exists",
-                    }
-                else:
-                    baseline_usage = baseline.get("usage_count", 0)
-                    current_usage = lesson.usage_count
-                    delta = current_usage - baseline_usage
-
-                    if delta > 0:
-                        verdict = "improved"
-                    elif delta == 0:
-                        # Check if trigger was updated and lesson still isn't used
-                        if action.action_type == "trigger_update":
-                            verdict = "unchanged"
-                        else:
-                            verdict = "unchanged"
-                    else:
-                        verdict = "degraded"
-
-                    outcome = {
-                        "verdict": verdict,
-                        "usage_before": baseline_usage,
-                        "usage_after": current_usage,
-                        "delta": delta,
-                        "version_before": baseline.get("version", 1),
-                        "version_after": lesson.version,
-                    }
-
-                verdicts[verdict] = verdicts.get(verdict, 0) + 1
-                await self.store.measure_action(action.id, outcome)
-                measured_count += 1
-
-            elif action.target_type == "intent_tag":
-                # Intent mappings: just mark as measured (hard to measure directly)
-                outcome = {"verdict": "unchanged", "reason": "intent mappings measured indirectly"}
-                verdicts["unchanged"] += 1
-                await self.store.measure_action(action.id, outcome)
-                measured_count += 1
-
-        if measured_count > 0:
-            findings.append(RemFinding(
-                operation="action_effectiveness",
-                title=f"Measured {measured_count} past actions",
-                description=(
-                    f"Results: {verdicts['improved']} improved, "
-                    f"{verdicts['unchanged']} unchanged, "
-                    f"{verdicts['degraded']} degraded, "
-                    f"{verdicts['target_gone']} targets gone."
-                ),
-                options=[
-                    {"label": "Review details", "description": "Inspect individual action outcomes"},
-                    {"label": "Acknowledge", "description": "Results noted"},
-                ],
-                recommended=1,
-                metadata={
-                    "measured_count": measured_count,
-                    "verdicts": verdicts,
-                },
             ))
 
         return findings

@@ -2065,8 +2065,7 @@ async def rem_run(
     Args:
         operations: Comma-separated list of operations to run. Empty = run all due.
                    Options: staleness_scan, duplicate_detection, community_detection,
-                   knowledge_extraction, context_summary, intent_calibration,
-                   action_effectiveness
+                   knowledge_extraction, context_summary, intent_calibration
         project_path: Project root whose session count sets the cadence.
                    Empty = CLAUDE_PROJECT_DIR, else the current directory.
     """

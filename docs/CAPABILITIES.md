@@ -103,7 +103,7 @@ perturbations produced a failure. No repository file was modified to do it.
 | C06 | README:367 API table — 6 endpoints | `/api/health`, `/api/lessons`, `/api/projects`, `/api/graph`, `/ws/events` all have routes; `/docs` is FastAPI's own | it documents 6 of ~33 routes, which is a summary, not a lie | nothing | **VERIFIED** | `pytest tests/test_claims.py -k C06` |
 | C07 | README:341 / CLAUDE.md:228 — "Current hooks" tables | all 5 named hook scripts exist in `src/mgcp/hook_templates/` | — | nothing | **VERIFIED** | `pytest tests/test_claims.py -k C07` |
 | C08 ✅ | CLAUDE.md:9 — "**Status**: v2.1.0" | **Was FAKE** — `pyproject.toml` = 2.1.0 but `mgcp/__init__.py` = 2.0.0, so an install reported whichever source it happened to read. **Repaired during this pass:** `__init__.py` moved to 2.1.0, agreeing with `pyproject.toml` and CLAUDE.md | `hook_templates/VERSION` (2.10 as of this writing) is deliberately *not* one of these sources — it versions the deployed hook payload and gates hook auto-upgrade, so it moves when a hook changes, not when the package does | nothing | **VERIFIED** *(repaired during this pass)* | `pytest tests/test_claims.py -k C08` |
-| C09 ✅ | `rem_run` docstring — "Options: staleness_scan, duplicate_detection, community_detection, knowledge_extraction, context_summary" | **Was FAKE** — `DEFAULT_SCHEDULES` has 7; `intent_calibration` and `action_effectiveness` were omitted, so the agent could not name two operations that exist, including the one that closes the REM growth loop CLAUDE.md:240 advertises. **Repaired during this pass:** both added to the `Options:` list | — | nothing | **VERIFIED** *(repaired during this pass)* | `pytest tests/test_claims.py -k C09` |
+| C09 ✅ | `rem_run` docstring — "Options: staleness_scan, duplicate_detection, community_detection, knowledge_extraction, context_summary" | **Was FAKE** — `DEFAULT_SCHEDULES` has 7; `intent_calibration` and `action_effectiveness` were omitted, so the agent could not name two operations that exist, including the one that closes the REM growth loop CLAUDE.md:240 advertises. **Repaired during this pass:** both added to the `Options:` list. *(Later the same day, `action_effectiveness` was deleted at the operator's call — it read a table only tests ever wrote — so the list is now 6. The test compares the docstring against `DEFAULT_SCHEDULES` rather than a fixed number, which is why it stayed green through both changes.)* | — | nothing | **VERIFIED** *(repaired during this pass)* | `pytest tests/test_claims.py -k C09` |
 | C10 ✅ | `add_enforcement_rule` docstring — precondition `type` ∈ {`tool_called_this_turn`, `tool_not_called_this_turn`, `staged_files_coupling`} | **Was FAKE** — `enforcement.py` also accepts `tool_input_glob`, added by in-flight v2.8 work without the docstring; the agent is the only caller and could not discover it. **Repaired during this pass:** the docstring now lists it with its `field` / `deny_globs` arguments, and CLAUDE.md's precondition set matches | — | nothing | **VERIFIED** *(repaired during this pass)* | `pytest tests/test_claims.py -k C10` |
 
 ## B. REM — a subsystem that reports success while doing nothing
@@ -215,9 +215,11 @@ Blocking. Not guessable.
   per-tool counting, which is a feature. Statically, all 49 are referenced
   outside `server.py`; the four enforcement-rule CRUD tools have docs but no
   test, hook, or UI.
-- `action_effectiveness` (REM) reads `rem_actions`, and `record_rem_action` is
-  called only from tests — 0 live rows, so the operation cannot produce a
-  finding in real use. Deletion candidate; needs the operator's call.
+- ~~`action_effectiveness` (REM) cannot produce a finding in real use~~ —
+  **deleted 2026-07-29** at the operator's call, along with the whole
+  `rem_actions` apparatus it was the only production consumer of: the table,
+  the `RemAction` model, five store methods, `capture_lesson_baseline`, and the
+  migration that created the table. REM now has 6 operations.
 - The community bridge inside `query_lessons` appends lessons with a hardcoded
   score of `0.0` and applies no relevance floor of its own.
 - `mgcp-launcher` ships as a console script and is documented nowhere.

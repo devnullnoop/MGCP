@@ -130,9 +130,11 @@ REST API for managing lessons, projects, and viewing telemetry.
 
 - **Lessons**: CRUD operations for lessons (`/api/lessons`)
 - **Projects**: Project context management (`/api/projects`)
-- **Catalogue**: Project-specific knowledge (`/api/projects/{id}/catalogue`)
+- **Catalogue**: Project-specific knowledge (`/api/projects/{project_id}/catalogue`)
 - **Telemetry**: Session and usage data (`/api/sessions`, `/api/timeline`)
-- **Skills**: Compiled skill management (`/api/compiled-skills`)
+- **Intents & Skills**: Intent routing config and skill compilation
+  (`/api/intent-config`, `/api/intent-config/intents/{name}/skill-status`,
+  `/api/intent-config/intents/{name}/compile`)
 
 ### WebSocket
 
@@ -142,7 +144,7 @@ Real-time events at `/ws/events`
 
 - `/` - Dashboard
 - `/lessons` - Lesson browser
-- `/skills` - Compiled skills
+- `/intents` - Intent config and compiled-skill status
 - `/projects` - Project contexts
 - `/docs` - This API documentation
 """,

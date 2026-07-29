@@ -874,3 +874,33 @@ def test_every_claim_test_has_a_ledger_row():
     tested = set(re.findall(r"^def test_([CE]\d\d)_", Path(__file__).read_text(), re.M))
     missing = tested - set(parse_rows())
     assert not missing, f"tests with no ledger row: {sorted(missing)}"
+
+
+def test_C30_web_api_self_description_names_only_real_routes():
+    """The FastAPI app description — rendered at /docs and /openapi.json — is
+    documentation the dashboard publishes about itself. It advertised
+    `/api/compiled-skills` and a `/skills` UI page for which no route ever
+    existed; both 404'd when used as documented (caught by the 2026-07-29
+    verification sweep). Every path the description names must resolve.
+    """
+    from mgcp.web_server import app
+
+    real = set()
+    for route in app.routes:
+        path = getattr(route, "path", "")
+        real.add(path)
+        # a mounted app (e.g. /static) serves everything under its prefix
+        if type(route).__name__ == "Mount":
+            real.add(path.rstrip("/") + "/*")
+
+    def resolves(path):
+        if path in real:
+            return True
+        return any(path.startswith(m[:-1]) for m in real if m.endswith("/*"))
+
+    mentioned = set(re.findall(r"`(/[A-Za-z0-9_\-/{}.]*)`", app.description))
+    ghosts = sorted(p for p in mentioned if not resolves(p))
+    assert not ghosts, (
+        f"the /docs self-description advertises routes that do not exist: {ghosts}. "
+        "A documented endpoint that 404s is a false claim published by the app itself."
+    )

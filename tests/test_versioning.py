@@ -230,13 +230,14 @@ class TestRemState:
         store = LessonStore(temp_db)
 
         await store.update_rem_state(
+            "proj-a",
             "staleness_scan",
             session_number=10,
             result={"stale_count": 3},
             next_due=15,
         )
 
-        states = await store.get_rem_state()
+        states = await store.get_rem_state("proj-a")
         assert len(states) == 1
         assert states[0]["operation"] == "staleness_scan"
         assert states[0]["last_run_session"] == 10
@@ -249,10 +250,131 @@ class TestRemState:
         """Updating the same operation should overwrite."""
         store = LessonStore(temp_db)
 
-        await store.update_rem_state("staleness_scan", session_number=10)
-        await store.update_rem_state("staleness_scan", session_number=20, next_due=25)
+        await store.update_rem_state("proj-a", "staleness_scan", session_number=10)
+        await store.update_rem_state("proj-a", "staleness_scan", session_number=20, next_due=25)
 
-        states = await store.get_rem_state()
+        states = await store.get_rem_state("proj-a")
         assert len(states) == 1
         assert states[0]["last_run_session"] == 20
         assert states[0]["next_due_session"] == 25
+
+    @pytest.mark.asyncio
+    async def test_rem_state_is_per_project(self, temp_db):
+        """The same operation in two projects keeps two independent cursors.
+
+        This is the whole point of the key: with `operation TEXT PRIMARY KEY`
+        the second write overwrote the first, and every project read back
+        whichever one ran most recently.
+        """
+        store = LessonStore(temp_db)
+
+        await store.update_rem_state("veteran", "staleness_scan", session_number=98)
+        await store.update_rem_state("newcomer", "staleness_scan", session_number=3)
+
+        veteran = await store.get_rem_state("veteran")
+        newcomer = await store.get_rem_state("newcomer")
+
+        assert len(veteran) == 1
+        assert len(newcomer) == 1
+        assert veteran[0]["last_run_session"] == 98
+        assert newcomer[0]["last_run_session"] == 3
+
+        # A project that has never run REM sees an empty schedule, not
+        # somebody else's.
+        assert await store.get_rem_state("never-run") == []
+
+
+class TestRemStatePerProjectMigration:
+    """Opening a pre-migration DB must re-key rem_state without losing rows."""
+
+    @staticmethod
+    def _seed_pre_migration_db(db_path: str):
+        """Build a DB with the OLD `operation TEXT PRIMARY KEY` rem_state."""
+        import sqlite3
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("""
+                CREATE TABLE project_contexts (
+                    project_id TEXT PRIMARY KEY,
+                    project_name TEXT NOT NULL,
+                    project_path TEXT NOT NULL UNIQUE,
+                    catalogue JSON NOT NULL DEFAULT '{}',
+                    todos JSON NOT NULL DEFAULT '[]',
+                    active_files JSON NOT NULL DEFAULT '[]',
+                    recent_decisions JSON NOT NULL DEFAULT '[]',
+                    last_session_id TEXT,
+                    last_accessed TEXT NOT NULL,
+                    session_count INTEGER DEFAULT 0,
+                    notes TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE rem_state (
+                    operation TEXT PRIMARY KEY,
+                    last_run_session INTEGER NOT NULL DEFAULT 0,
+                    last_run_timestamp TEXT NOT NULL,
+                    last_run_result JSON,
+                    next_due_session INTEGER
+                )
+            """)
+            conn.executemany(
+                "INSERT INTO project_contexts "
+                "(project_id, project_name, project_path, last_accessed, session_count) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    ("veteran-id", "Veteran", "/tmp/veteran", "2026-01-01T00:00:00Z", 98),
+                    ("newcomer-id", "Newcomer", "/tmp/newcomer", "2026-01-02T00:00:00Z", 12),
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO rem_state "
+                "(operation, last_run_session, last_run_timestamp, next_due_session) "
+                "VALUES (?, ?, ?, ?)",
+                [
+                    ("staleness_scan", 98, "2026-01-01T00:00:00Z", 100),
+                    ("duplicate_detection", 98, "2026-01-01T00:00:00Z", 100),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    @pytest.mark.asyncio
+    async def test_global_rows_go_to_the_busiest_project(self, temp_db):
+        """The old scheduler used max(session_count), so those rows are the
+        busiest project's history — they are handed to it, not dropped."""
+        self._seed_pre_migration_db(temp_db)
+        store = LessonStore(temp_db)
+
+        veteran = await store.get_rem_state("veteran-id")
+        assert {s["operation"] for s in veteran} == {
+            "staleness_scan",
+            "duplicate_detection",
+        }
+        assert all(s["last_run_session"] == 98 for s in veteran)
+
+    @pytest.mark.asyncio
+    async def test_younger_project_starts_clean(self, temp_db):
+        """The newcomer never had a schedule of its own; it must not inherit
+        the veteran's cursor, which is what kept it suppressed for 89 days."""
+        self._seed_pre_migration_db(temp_db)
+        store = LessonStore(temp_db)
+
+        assert await store.get_rem_state("newcomer-id") == []
+
+    @pytest.mark.asyncio
+    async def test_migration_is_idempotent(self, temp_db):
+        """Re-opening an already-migrated DB must not rebuild or duplicate."""
+        self._seed_pre_migration_db(temp_db)
+        first = LessonStore(temp_db)
+        await first.get_rem_state("veteran-id")
+        await first.close_pool()
+
+        second = LessonStore(temp_db)
+        veteran = await second.get_rem_state("veteran-id")
+        assert len(veteran) == 2
+
+        # Writes still work against the rebuilt table.
+        await second.update_rem_state("newcomer-id", "staleness_scan", session_number=12)
+        assert len(await second.get_rem_state("newcomer-id")) == 1

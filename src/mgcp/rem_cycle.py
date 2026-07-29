@@ -45,13 +45,22 @@ class RemReport:
 class RemEngine:
     """Orchestrates REM cycle operations."""
 
-    def __init__(self, store: LessonStore, schedules: dict[str, OperationSchedule] | None = None):
+    def __init__(
+        self,
+        store: LessonStore,
+        schedules: dict[str, OperationSchedule] | None = None,
+        *,
+        project_id: str,
+    ):
         self.store = store
         self.schedules = schedules or DEFAULT_SCHEDULES
+        # Which project's schedule cursor this engine reads and writes. The
+        # corpus it maintains is global; only the cadence is per project.
+        self.project_id = project_id
 
     async def get_due_operations(self, session_number: int) -> list[str]:
         """Determine which operations are due at this session number."""
-        states = await self.store.get_rem_state()
+        states = await self.store.get_rem_state(self.project_id)
         state_map = {s["operation"]: s["last_run_session"] for s in states}
 
         due = []
@@ -67,7 +76,7 @@ class RemEngine:
         ``is_due`` is the same predicate ``get_due_operations`` uses, so what
         rem_status displays and what rem_run executes cannot disagree.
         """
-        states = await self.store.get_rem_state()
+        states = await self.store.get_rem_state(self.project_id)
         state_map = {s["operation"]: s for s in states}
 
         status = []
@@ -161,6 +170,7 @@ class RemEngine:
         schedule = self.schedules.get(operation)
         next_session = next_due_session(schedule, session_number) if schedule else None
         await self.store.update_rem_state(
+            project_id=self.project_id,
             operation=operation,
             session_number=session_number,
             result={"finding_count": len(findings)},

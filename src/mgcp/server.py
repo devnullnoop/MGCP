@@ -2070,14 +2070,13 @@ async def rem_run(
     Args:
         operations: Comma-separated list of operations to run. Empty = run all due.
                    Options: staleness_scan, duplicate_detection, community_detection,
-                   knowledge_extraction, context_summary
+                   knowledge_extraction, context_summary, intent_calibration,
+                   action_effectiveness
         project_path: Project root whose session count sets the cadence.
                    Empty = CLAUDE_PROJECT_DIR, else the current directory.
     """
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
     from .rem_cycle import RemEngine
-
-    engine = RemEngine(store=store)
 
     project = await _rem_project(store, project_path)
     if project is None:
@@ -2088,6 +2087,8 @@ async def rem_run(
             "project_path explicitly."
         )
     session_number = project.session_count
+
+    engine = RemEngine(store=store, project_id=project.project_id)
 
     ops = [o.strip() for o in operations.split(",") if o.strip()] if operations else None
 
@@ -2120,19 +2121,35 @@ async def rem_run(
 
 
 @mcp.tool()
-async def rem_report() -> str:
+async def rem_report(project_path: str = "") -> str:
     """View the last REM cycle's findings without running a new one.
 
-    Shows schedule state and results from the most recent run of each operation.
+    Shows schedule state and results from the most recent run of each operation,
+    for THIS project's schedule. Another project's cycles are not reported here.
+
+    Args:
+        project_path: Project root whose schedule to report.
+                   Empty = CLAUDE_PROJECT_DIR, else the current directory.
     """
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
 
-    states = await store.get_rem_state()
+    project = await _rem_project(store, project_path)
+    if project is None:
+        return (
+            "REM state is tracked per project and there is no saved context for "
+            f"{project_path or 'the current directory'}, so there is nothing to "
+            "report. Call save_project_context first, or pass project_path explicitly."
+        )
+
+    states = await store.get_rem_state(project.project_id)
 
     if not states:
-        return "No REM cycles have been run yet. Use rem_run to trigger one."
+        return (
+            f"No REM cycles have been run for {project.project_name} yet. "
+            "Use rem_run to trigger one."
+        )
 
-    lines = ["## REM Cycle Status\n"]
+    lines = [f"## REM Cycle Status ({project.project_name})\n"]
     for state in states:
         lines.append(f"**{state['operation']}**")
         lines.append(f"  Last run: session {state['last_run_session']} ({state['last_run_timestamp'][:19]})")
@@ -2164,8 +2181,6 @@ async def rem_status(project_path: str = "") -> str:
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
     from .rem_cycle import RemEngine
 
-    engine = RemEngine(store=store)
-
     project = await _rem_project(store, project_path)
     if project is None:
         return (
@@ -2174,6 +2189,8 @@ async def rem_status(project_path: str = "") -> str:
             "as due. Call save_project_context first, or pass project_path explicitly."
         )
     current = project.session_count
+
+    engine = RemEngine(store=store, project_id=project.project_id)
     status = await engine.get_status(current)
 
     lines = [
@@ -2675,9 +2692,11 @@ async def add_enforcement_rule(
             command_match.type ∈ {"git_subcommand", "regex", "contains"}.
         preconditions: list of dicts. Each has "type" ∈
             {"tool_called_this_turn", "tool_not_called_this_turn",
-             "staged_files_coupling"}. The first two take "tool_name";
-            the coupling type takes "couplings" — a list of
-            {"when_staged": [glob,...], "require_one_of": [glob,...]}.
+             "staged_files_coupling", "tool_input_glob"}. The first two
+            take "tool_name"; the coupling type takes "couplings" — a list
+            of {"when_staged": [glob,...], "require_one_of": [glob,...]};
+            tool_input_glob takes "field" (which tool_input key to read)
+            and "deny_globs", and denies when any glob matches that field.
         bypass_scope: short token (e.g. 'git', 'docs') the user can name
             in MGCP_BYPASS:<scope> to disable this rule for one turn.
         deny_reason: text shown to the LLM when the rule blocks a call.

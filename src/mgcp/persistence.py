@@ -156,12 +156,18 @@ CREATE TABLE IF NOT EXISTS context_history (
 CREATE INDEX IF NOT EXISTS idx_context_history_project ON context_history(project_id);
 CREATE INDEX IF NOT EXISTS idx_context_history_time ON context_history(timestamp);
 
+-- The REM cadence is per project, so the cursor it is compared against must be
+-- too. Keyed on operation alone, one project's run recorded a last_run_session
+-- that every other project inherited, and is_due() refuses anything <= that --
+-- so the busiest project silently suppressed all the younger ones.
 CREATE TABLE IF NOT EXISTS rem_state (
-    operation TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
     last_run_session INTEGER NOT NULL DEFAULT 0,
     last_run_timestamp TEXT NOT NULL,
     last_run_result JSON,
-    next_due_session INTEGER
+    next_due_session INTEGER,
+    PRIMARY KEY (project_id, operation)
 );
 
 CREATE TABLE IF NOT EXISTS rem_actions (
@@ -323,6 +329,65 @@ class LessonStore:
         if project_columns and "catalogue" not in project_columns:
             await conn.execute(
                 "ALTER TABLE project_contexts ADD COLUMN catalogue JSON NOT NULL DEFAULT '{}'"
+            )
+
+        # Migration: give rem_state a project_id and re-key it on
+        # (project_id, operation). This one cannot be an ALTER — the primary key
+        # itself is changing — so the table is rebuilt.
+        #
+        # Attribution of the pre-existing rows is a judgement call, and it is
+        # made here rather than left to the operator because the alternative
+        # (dropping them) would make every project instantly due, including the
+        # one whose runs those rows actually record. The old scheduler fed
+        # itself max(session_count) across every project, so the busiest project
+        # is precisely the one whose clock wrote these numbers; the rows are
+        # handed to it. Every other project starts with no row at all, which is
+        # the truth: REM has never been scheduled on its own clock.
+        cursor = await conn.execute("PRAGMA table_info(rem_state)")
+        rem_columns = [row[1] for row in await cursor.fetchall()]
+        if rem_columns and "project_id" not in rem_columns:
+            cursor = await conn.execute(
+                "SELECT project_id, project_name, session_count FROM project_contexts "
+                "ORDER BY session_count DESC, last_accessed DESC LIMIT 1"
+            )
+            owner_row = await cursor.fetchone()
+            owner_id = owner_row[0] if owner_row else ""
+
+            await conn.execute("DROP TABLE IF EXISTS rem_state_pre_project")
+            await conn.execute("ALTER TABLE rem_state RENAME TO rem_state_pre_project")
+            await conn.execute("""
+                CREATE TABLE rem_state (
+                    project_id TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    last_run_session INTEGER NOT NULL DEFAULT 0,
+                    last_run_timestamp TEXT NOT NULL,
+                    last_run_result JSON,
+                    next_due_session INTEGER,
+                    PRIMARY KEY (project_id, operation)
+                )
+            """)
+            await conn.execute(
+                """
+                INSERT INTO rem_state
+                    (project_id, operation, last_run_session, last_run_timestamp,
+                     last_run_result, next_due_session)
+                SELECT ?, operation, last_run_session, last_run_timestamp,
+                       last_run_result, next_due_session
+                FROM rem_state_pre_project
+                """,
+                (owner_id,),
+            )
+            cursor = await conn.execute("SELECT COUNT(*) FROM rem_state")
+            moved = (await cursor.fetchone())[0]
+            await conn.execute("DROP TABLE rem_state_pre_project")
+            logger.warning(
+                "Re-keyed rem_state on (project_id, operation). %d schedule row(s) "
+                "were global; they are attributed to '%s' (session_count %s), the "
+                "project whose clock the old scheduler used. Every other project "
+                "now starts its own REM schedule from zero.",
+                moved,
+                owner_row[1] if owner_row else "<no project>",
+                owner_row[2] if owner_row else "-",
             )
 
     async def add_lesson(self, lesson: Lesson) -> str:
@@ -718,34 +783,45 @@ class LessonStore:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
-    async def get_rem_state(self) -> list[dict]:
-        """Get the current state of all REM operations."""
+    async def get_rem_state(self, project_id: str) -> list[dict]:
+        """Get the current state of all REM operations for one project.
+
+        ``project_id`` is required rather than defaulted: a caller that forgets
+        it is exactly the bug this key exists to prevent, and a default would
+        quietly restore the shared-cursor behaviour.
+        """
         async with self._connection() as conn:
-            cursor = await conn.execute("SELECT * FROM rem_state ORDER BY operation")
+            cursor = await conn.execute(
+                "SELECT * FROM rem_state WHERE project_id = ? ORDER BY operation",
+                (project_id,),
+            )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
     async def update_rem_state(
         self,
+        project_id: str,
         operation: str,
         session_number: int,
         result: dict | None = None,
         next_due: int | None = None,
     ) -> None:
-        """Update the state of a REM operation after it runs."""
+        """Update the state of a REM operation after it runs, for one project."""
         async with self._connection(commit=True) as conn:
             await conn.execute(
                 """
                 INSERT INTO rem_state
-                    (operation, last_run_session, last_run_timestamp, last_run_result, next_due_session)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(operation) DO UPDATE SET
+                    (project_id, operation, last_run_session, last_run_timestamp,
+                     last_run_result, next_due_session)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(project_id, operation) DO UPDATE SET
                     last_run_session = excluded.last_run_session,
                     last_run_timestamp = excluded.last_run_timestamp,
                     last_run_result = excluded.last_run_result,
                     next_due_session = excluded.next_due_session
                 """,
                 (
+                    project_id,
                     operation,
                     session_number,
                     datetime.now(UTC).isoformat(),

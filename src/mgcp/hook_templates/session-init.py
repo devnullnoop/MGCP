@@ -80,8 +80,10 @@ def _find_overdue_rem_operations():
     """Return overdue REM operations for the current project.
 
     Reads ``~/.mgcp/lessons.db`` (override with ``MGCP_DATA_DIR``). For each
-    rem_state row, an operation is overdue when
-    ``project_contexts.session_count >= rem_state.next_due_session``.
+    rem_state row *belonging to this project*, an operation is overdue when
+    ``project_contexts.session_count >= rem_state.next_due_session``. Rows are
+    scoped by project_id: another project's schedule says nothing about this
+    one's, and reading them unscoped reported whichever project ran REM last.
 
     Stdlib sqlite3 only, opens in read-only URI mode with a 2-second
     timeout to avoid blocking the live MCP server's writer. Fails open
@@ -104,7 +106,8 @@ def _find_overdue_rem_operations():
     try:
         try:
             ctx_row = conn.execute(
-                "SELECT session_count FROM project_contexts WHERE project_path = ?",
+                "SELECT project_id, session_count FROM project_contexts "
+                "WHERE project_path = ?",
                 (project_path,),
             ).fetchone()
         except sqlite3.Error:
@@ -115,9 +118,12 @@ def _find_overdue_rem_operations():
         try:
             rows = conn.execute(
                 "SELECT operation, last_run_session, next_due_session "
-                "FROM rem_state"
+                "FROM rem_state WHERE project_id = ?",
+                (ctx_row["project_id"],),
             ).fetchall()
         except sqlite3.Error:
+            # Includes a pre-migration rem_state with no project_id column:
+            # fail open rather than report another project's schedule as ours.
             return []
     finally:
         conn.close()

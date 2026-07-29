@@ -384,7 +384,7 @@ class TestIntentCalibration:
                             )
                     await store.update_lesson(lesson)
 
-                engine = RemEngine(store=store)
+                engine = RemEngine(store=store, project_id="test-project")
                 findings = await engine._intent_calibration()
                 return findings
 
@@ -413,7 +413,7 @@ class TestIntentCalibration:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
             store = LessonStore(db_path=db_path)
-            engine = RemEngine(store=store)
+            engine = RemEngine(store=store, project_id="test-project")
 
             async def run():
                 findings = await engine._run_operation("intent_calibration", session_number=10)

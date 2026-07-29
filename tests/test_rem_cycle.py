@@ -24,6 +24,9 @@ def store(temp_db):
     return LessonStore(temp_db)
 
 
+PROJECT = "test-project"
+
+
 @pytest.fixture
 def engine(store):
     """Create a REM engine with short intervals for testing."""
@@ -31,7 +34,7 @@ def engine(store):
         "staleness_scan": OperationSchedule(strategy="linear", interval=2),
         "knowledge_extraction": OperationSchedule(strategy="linear", interval=3),
     }
-    return RemEngine(store=store, schedules=schedules)
+    return RemEngine(store=store, schedules=schedules, project_id=PROJECT)
 
 
 class TestRemEngineScheduling:
@@ -46,7 +49,7 @@ class TestRemEngineScheduling:
     @pytest.mark.asyncio
     async def test_respects_schedule_after_run(self, engine, store):
         # Run staleness at session 5
-        await store.update_rem_state("staleness_scan", session_number=5, next_due=7)
+        await store.update_rem_state(PROJECT, "staleness_scan", session_number=5, next_due=7)
 
         # At session 6, staleness shouldn't be due yet (interval=2)
         due = await engine.get_due_operations(session_number=6)
@@ -58,7 +61,7 @@ class TestRemEngineScheduling:
 
     @pytest.mark.asyncio
     async def test_get_status(self, engine, store):
-        await store.update_rem_state("staleness_scan", session_number=10)
+        await store.update_rem_state(PROJECT, "staleness_scan", session_number=10)
         status = await engine.get_status(session_number=10)
         assert len(status) == 2  # Our test engine has 2 operations
 
@@ -76,7 +79,7 @@ class TestRemEngineScheduling:
         next_due_session is 10 (last multiple boundary), so the old display
         said DUE while the engine skipped it.
         """
-        await store.update_rem_state("staleness_scan", session_number=10)
+        await store.update_rem_state(PROJECT, "staleness_scan", session_number=10)
 
         for session in range(1, 20):
             status = await engine.get_status(session_number=session)
@@ -198,7 +201,7 @@ class TestRemReport:
     @pytest.mark.asyncio
     async def test_updates_rem_state(self, engine, store):
         await engine.run(session_number=10, operations=["staleness_scan"])
-        states = await store.get_rem_state()
+        states = await store.get_rem_state(PROJECT)
         assert len(states) == 1
         assert states[0]["operation"] == "staleness_scan"
         assert states[0]["last_run_session"] == 10
@@ -324,7 +327,7 @@ class TestRemActionTracking:
         schedules = {
             "action_effectiveness": OperationSchedule(strategy="linear", interval=1),
         }
-        engine = RemEngine(store=store, schedules=schedules)
+        engine = RemEngine(store=store, schedules=schedules, project_id=PROJECT)
         report = await engine.run(session_number=1, operations=["action_effectiveness"])
 
         assert len(report.findings) == 1
@@ -350,7 +353,7 @@ class TestRemActionTracking:
         )
         await store.add_lesson(lesson)
 
-        engine = RemEngine(store=store, schedules={})
+        engine = RemEngine(store=store, schedules={}, project_id=PROJECT)
         baseline = await engine.capture_lesson_baseline("baseline-test")
 
         assert baseline["lesson_id"] == "baseline-test"
@@ -362,6 +365,6 @@ class TestRemActionTracking:
     @pytest.mark.asyncio
     async def test_capture_baseline_missing_lesson(self, store):
         """Baseline for nonexistent lesson returns error dict."""
-        engine = RemEngine(store=store, schedules={})
+        engine = RemEngine(store=store, schedules={}, project_id=PROJECT)
         baseline = await engine.capture_lesson_baseline("nonexistent")
         assert baseline["error"] == "not_found"

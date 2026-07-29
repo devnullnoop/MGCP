@@ -171,10 +171,31 @@ All source files are in `src/mgcp/`:
 - `save_community_summary` - Persist LLM-generated summary for a community
 - `search_communities` - Semantic search across community summaries
 
-**REM Cycle (3):**
+**REM Cycle (3):** All three take an optional `project_path` (empty = `CLAUDE_PROJECT_DIR`, else cwd) and report an error rather than a guess when that project has no saved context.
 - `rem_run` - Run consolidation operations (staleness, duplicates, communities)
-- `rem_report` - View last cycle's findings
-- `rem_status` - Show schedule state and what's due
+- `rem_report` - View last cycle's findings for this project
+- `rem_status` - Show schedule state and what's due for this project
+
+**The REM cadence is per project; the corpus is global.** A cycle triggered from
+any project maintains the whole shared knowledge store, but *when* it is due
+follows that project's own session count. Both halves of that have to be per
+project, and for a long time only one was: `server.py` fed the scheduler
+`max(session_count)` across every project (fixed in v2.5), while `rem_state`
+stayed keyed `operation TEXT PRIMARY KEY` — one row for the entire machine. Since
+`is_due()` opens by refusing anything `<= last_run_session`, this repo's own
+session 98 was written into the single shared row and every younger project
+inherited it; BoltMob at session 36 could not become due until it reached 100.
+`rem_state` is now keyed `PRIMARY KEY (project_id, operation)`, and
+`get_rem_state`/`update_rem_state` take a required `project_id` — deliberately
+not defaulted, because a caller that forgets it is exactly the bug the key
+exists to prevent.
+
+Opening a store written before this change rebuilds the table automatically and
+idempotently (`LessonStore._run_migrations`). The pre-existing global rows are
+attributed to the project with the highest `session_count` — that is literally
+whose clock the old `max()` scheduler was reading — and logged at WARNING. Every
+other project starts with no row, which is the truth: REM has never been
+scheduled on its own clock there, so everything is immediately due.
 
 **Workflow State (1):**
 - `update_workflow_state` - Update active workflow, current step, and completion status
@@ -274,7 +295,7 @@ The dispatcher falls back to a minimal hard-coded intent set if the JSON file is
 }
 ```
 
-Trigger `command_match.type` ∈ {`git_subcommand`, `regex`, `contains`}. Precondition `type` ∈ {`tool_called_this_turn`, `tool_not_called_this_turn`, `staged_files_coupling`}. The staged-file coupling type takes `couplings: [{"when_staged": [glob,...], "require_one_of": [glob,...]}]` — if any staged file matches `when_staged`, at least one must match `require_one_of` or the tool call is denied. Use it to enforce doc-coupling, test-coupling, or changelog discipline on commits.
+Trigger `command_match.type` ∈ {`git_subcommand`, `regex`, `contains`}. Precondition `type` ∈ {`tool_called_this_turn`, `tool_not_called_this_turn`, `staged_files_coupling`, `tool_input_glob`}. The staged-file coupling type takes `couplings: [{"when_staged": [glob,...], "require_one_of": [glob,...]}]` — if any staged file matches `when_staged`, at least one must match `require_one_of` or the tool call is denied. Use it to enforce doc-coupling, test-coupling, or changelog discipline on commits. The `tool_input_glob` type takes `field` (which `tool_input` key to read) and `deny_globs`, and denies when any glob matches that field — use it to gate Edit/Write against sensitive paths (settings.json, secrets) or to gate URL targets on web fetches. It fails open on a missing field or a non-string value.
 
 Per-turn state flows through `workflow_state.json`: UserPromptSubmit resets `turn_tools_called=[]` and parses `MGCP_BYPASS[:scope]` tokens into `turn_bypass_scopes`. PostToolUse appends every tool name to `turn_tools_called`. PreToolUse reads both. Schema + evaluator + defaults live in `src/mgcp/enforcement.py`; the hook re-implements the same semantics stdlib-only (no `mgcp` import). Both sides are tested against the same behavioral contract.
 

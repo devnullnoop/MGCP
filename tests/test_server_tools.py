@@ -1279,8 +1279,43 @@ class TestUpdateWorkflowState:
 class TestRemReport:
     @pytest.mark.asyncio
     async def test_no_cycles(self, server_stores):
-        result = await rem_report()
+        """A saved project that has never run REM reports exactly that."""
+        await save_project_context(
+            project_path="/tmp/rem-report-fresh",
+            project_name="Report Fresh",
+        )
+        result = await rem_report(project_path="/tmp/rem-report-fresh")
         assert "No REM cycles" in result
+        assert "Report Fresh" in result
+
+    @pytest.mark.asyncio
+    async def test_without_a_saved_project_it_says_so(self, server_stores):
+        """rem_report is project-scoped like rem_run and rem_status. With no
+        context there is no schedule to report, and reporting some other
+        project's cycles as this one's is the bug the key exists to prevent."""
+        result = await rem_report(project_path="/tmp/rem-report-never-saved")
+        assert "tracked per project" in result
+        assert "save_project_context" in result
+
+    @pytest.mark.asyncio
+    async def test_reports_only_this_projects_cycles(self, server_stores):
+        """A neighbour's completed cycle must not show up in our report."""
+        await save_project_context(
+            project_path="/tmp/rem-report-runner", project_name="Runner"
+        )
+        await save_project_context(
+            project_path="/tmp/rem-report-bystander", project_name="Bystander"
+        )
+        await rem_run(
+            operations="staleness_scan", project_path="/tmp/rem-report-runner"
+        )
+
+        runner = await rem_report(project_path="/tmp/rem-report-runner")
+        assert "staleness_scan" in runner
+
+        bystander = await rem_report(project_path="/tmp/rem-report-bystander")
+        assert "No REM cycles" in bystander
+        assert "staleness_scan" not in bystander
 
 
 class TestRemStatus:
@@ -1401,17 +1436,6 @@ class TestRemPerProjectSessionNumber:
         assert due_sessions, f"no next-due sessions parsed from:\n{result}"
         assert max(due_sessions) <= 20, f"fresh project waiting on {due_sessions}"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "rem_state is keyed `operation TEXT PRIMARY KEY` — one row shared by "
-            "every project — so a run recorded by one project still suppresses "
-            "every younger project. Needs (project_id, operation) in "
-            "persistence.py, which is owned by another agent this pass. "
-            "When that lands, this test starts passing and strict xfail fails "
-            "loudly so the marker gets removed."
-        ),
-    )
     @pytest.mark.asyncio
     async def test_projects_keep_independent_last_run_sessions(self, server_stores):
         """Two projects must not share one scheduling cursor."""
@@ -1427,8 +1451,9 @@ class TestRemPerProjectSessionNumber:
         assert "staleness_scan" in veteran.split("Operations run: ")[1]
 
         # The newcomer is at session 12 with no REM history OF ITS OWN, so
-        # staleness_scan (linear, interval 5) is due for it. With one shared
-        # rem_state row it inherits last_run_session = 98 and is suppressed.
+        # staleness_scan (linear, interval 5) is due for it. Back when one
+        # rem_state row was shared by every project, it inherited the veteran's
+        # last_run_session = 98 and is_due() suppressed it forever.
         result = await rem_run(project_path="/tmp/rem-newcomer")
         ran = result.split("Operations run: ")[1].split("\n")[0].strip()
         assert ran != "none", f"newcomer inherited the veteran's cursor:\n{result}"

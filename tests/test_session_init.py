@@ -198,11 +198,13 @@ def _seed_rem_db(home: Path, project_path: str, session_count: int, rows: list[d
         conn.execute(
             """
             CREATE TABLE rem_state (
-                operation TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
                 last_run_session INTEGER NOT NULL DEFAULT 0,
                 last_run_timestamp TEXT NOT NULL,
                 last_run_result JSON,
-                next_due_session INTEGER
+                next_due_session INTEGER,
+                PRIMARY KEY (project_id, operation)
             )
             """
         )
@@ -215,9 +217,11 @@ def _seed_rem_db(home: Path, project_path: str, session_count: int, rows: list[d
         for r in rows:
             conn.execute(
                 "INSERT INTO rem_state "
-                "(operation, last_run_session, last_run_timestamp, next_due_session) "
-                "VALUES (?, ?, ?, ?)",
+                "(project_id, operation, last_run_session, last_run_timestamp, "
+                " next_due_session) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (
+                    r.get("project_id", "test-id"),
                     r["operation"],
                     r.get("last_run_session", 0),
                     "2026-01-01T00:00:00Z",
@@ -308,6 +312,36 @@ def test_rem_warning_lists_all_overdue(tmp_path):
     assert "staleness_scan" in ctx
     assert "duplicate_detection" in ctx
     assert "context_summary" not in ctx
+
+
+def test_no_rem_warning_from_another_projects_schedule(tmp_path):
+    """This project IS in the DB, but the overdue row belongs to someone else.
+
+    The rows are scoped by project_id, so a neighbouring project being nine
+    sessions overdue must not raise a warning here.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    project = tmp_path / "proj"
+    project.mkdir()
+    _seed_rem_db(
+        home,
+        str(project),
+        session_count=20,
+        rows=[
+            {
+                "project_id": "some-other-project",
+                "operation": "staleness_scan",
+                "last_run_session": 5,
+                "next_due_session": 11,
+            },
+        ],
+    )
+
+    output = _run_hook(home, project)
+    ctx = output["hookSpecificOutput"]["additionalContext"]
+    assert "REM Operations Overdue" not in ctx
+    assert "staleness_scan" not in ctx
 
 
 def test_no_rem_warning_when_project_not_in_db(tmp_path):

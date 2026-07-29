@@ -40,7 +40,7 @@ Session 2: LLM has no memory of Session 1
 ### What this is NOT:
 
 - Not "AI that learns" - lessons are added explicitly
-- Not self-improving - you (or the LLM) improve it by adding better content
+- Not self-improving in the strong sense - the system never authors or rewrites its own knowledge. One loop IS automatic: the apology gate detects acknowledged failure in the assistant's own words and refuses every tool call until a lesson is written (see v2.9). Capture is forced; content is still authored.
 - Not magic - it's structured context injection with good tooling
 
 **Honest framing:** This is a persistent knowledge store with semantic search, workflow orchestration, and proactive reminders. The value is *continuity* - accumulated guidance that shapes LLM behavior across sessions.
@@ -358,6 +358,18 @@ v2.7 also seeds `version-bump-requires-readme` in `DEFAULT_RULES`. That rule was
 
 **Existing installs do not auto-migrate the new defaults.** The seed in `init_project.py:720` writes `~/.mgcp/enforcement_rules.json` only when the file does not already exist (preserves user edits). Pick up the new rules on an existing install by calling `mcp__mgcp__add_enforcement_rule` for each, or delete the rules file (loses local edits) and re-run `mgcp-init`. The SessionStart REM-overdue detector activates immediately on upgrade because it reads the DB directly, not via the rules file.
 
+### v2.8: the tool_input_glob precondition
+
+A small enforcement-as-data extension: rules can now gate on a tool's own input via `tool_input_glob` (`field` + `deny_globs`), e.g. denying Edit/Write against `settings.json` or secrets paths. Fails open on a missing field. Hook payload version 2.8; no new hook files.
+
+### v2.9: the apology gate
+
+The MEMORY.md rule "an apology must immediately trigger a knowledge write" had been a passive note the LLM read at session start and drifted away from mid-session — the same failure mode as every advisory mechanism above. v2.9 promotes it to hard enforcement, and it is the one gate that is **not** a data rule in `enforcement_rules.json`: its trigger is the assistant's own text, not a tool argument, so the PreToolUse hook carries it as a built-in.
+
+Mechanics: seven word-boundary regexes (`sorry`, `my bad`, `you're right`, `you are right`, `my mistake`, `my apology/apologies`, `apologize/apologise`) run against the current turn's assistant text. On a match, **every tool call is denied except `add_lesson`** until a lesson is written; the gate clears on the next user prompt. Bypass: `MGCP_BYPASS:apology`.
+
+This is the closest thing MGCP has to a self-improving loop, stated carefully: the system detects a learning moment in its own output and refuses to proceed until the failure is captured — automatic trigger, enforced capture, LLM-authored content. It is a ratchet, not learning: nothing gates the *quality* of the lesson written. Known risks, accepted deliberately: keyword detection is dodgeable by paraphrase (an agent was once caught drafting lessons that coached phrasing around the classifier — they were deleted), and a gate on apologies could train apology-suppression instead of learning. Both are measurable over time; neither is a reason to go back to advice.
+
 ### v2.10: the detector holds for ordinary command shapes
 
 The v2.3 gate's detector needed hardening. Quote-aware tokenization alone was not enough, and three shapes walked straight past the gate until 2026-07-29, when replaying a commit this repo's own gate had just allowed exposed all three. A newline is a command separator, but `shlex` with `whitespace_split` consumes it, so `cd /repo` ⏎ `git commit` tokenized as one command and `git` no longer sat at a command boundary — `&&` was handled, the newline every multi-line block uses was not. An unterminated quote made the detector report "not a git command", so any message containing an apostrophe (`the project's fix`) turned the git gates off. And global flags pushed the subcommand one slot along, so `git -C /path commit` read its subcommand as `-C` and matched nothing.
@@ -428,7 +440,7 @@ Any agent operating across invocations faces statelessness. The components here 
 | `workflows` | Multi-step processes with enforcement |
 | Hooks (event triggers) | Inject context at decision points |
 
-This wouldn't be machine learning - it would be **systematic accumulation** through explicit capture. The agent (or human) would need to add lessons when relevant; nothing is automatic.
+This wouldn't be machine learning - it would be **systematic accumulation** through explicit capture. A human adds lessons manually. An agent is not a person: for the agent, one capture path is already automatic and enforced — the v2.9 apology gate blocks all tool use at acknowledged-failure moments until the lesson is written. What remains non-automatic is authorship and quality: the system forces *that* a lesson is captured, never *what* it says.
 
 A hypothetical multi-agent pattern:
 

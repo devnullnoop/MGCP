@@ -54,11 +54,11 @@ updating this file breaks the ledger. That is the point.
 
 | Status | Rows |
 |---|---|
-| VERIFIED | 36 |
+| VERIFIED | 37 |
 | CLAIMED | 3 |
 | FAKE | 0 |
 | RETRACTED | 2 |
-| **total** | **41** |
+| **total** | **42** |
 
 These counts are checked against the rows below by
 `test_ledger_scoreboard_matches_its_rows`, because this table had already
@@ -119,6 +119,7 @@ perturbations produced a failure. No repository file was modified to do it.
 | C09 ✅ | `rem_run` docstring — "Options: staleness_scan, duplicate_detection, community_detection, knowledge_extraction, context_summary" | **Was FAKE** — `DEFAULT_SCHEDULES` has 7; `intent_calibration` and `action_effectiveness` were omitted, so the agent could not name two operations that exist, including the one that closes the REM growth loop CLAUDE.md:240 advertises. **Repaired during this pass:** both added to the `Options:` list. *(Later the same day, `action_effectiveness` was deleted at the operator's call — it read a table only tests ever wrote — so the list is now 6. The test compares the docstring against `DEFAULT_SCHEDULES` rather than a fixed number, which is why it stayed green through both changes.)* | — | nothing | **VERIFIED** *(repaired during this pass)* | `pytest tests/test_claims.py -k C09` |
 | C10 ✅ | `add_enforcement_rule` docstring — precondition `type` ∈ {`tool_called_this_turn`, `tool_not_called_this_turn`, `staged_files_coupling`} | **Was FAKE** — `enforcement.py` also accepts `tool_input_glob`, added by in-flight v2.8 work without the docstring; the agent is the only caller and could not discover it. **Repaired during this pass:** the docstring now lists it with its `field` / `deny_globs` arguments, and CLAUDE.md's precondition set matches | — | nothing | **VERIFIED** *(repaired during this pass)* | `pytest tests/test_claims.py -k C10` |
 | C30 | the FastAPI self-description at `/docs` / `/openapi.json` presents itself as the API's endpoint map | it advertised `/api/compiled-skills` and a `/skills` UI page — **routes that never existed**; both returned 404 when used as documented. A third ghost, `/api/projects/{id}/catalogue`, was the wrong parameter template for the real `/api/projects/{project_id}/catalogue` — caught by this row's own test the day it was written | the description block was prose nobody parsed, so it rotted independently of the routes | description now names only real routes, and the test extracts every backtick path from it and resolves each against `app.routes` | **VERIFIED** *(repaired 2026-07-29)* | `pytest tests/test_claims.py -k C30` |
+| C31 | README v2.9 / CLAUDE.md hook table — the apology gate: an apology in the assistant's turn denies every tool except `add_lesson` until a lesson is written | true, and until 2026-07-29 it was true **and completely undocumented** — the gate shipped in the deployed hook (April, `523dd60`) with zero mentions in README or CLAUDE.md. The operator's question about "nothing is automatic" surfaced the gap. Detection is seven word-boundary regexes on the current turn's assistant text — keyword, not semantic; README now says exactly that | the docs claimed "nothing is automatic" while the most self-referential mechanism in the system enforced automatic capture at failure moments | documented as v2.9; the test pins the README's stated trigger list to `APOLOGY_PATTERNS` in the shipped hook so prose and gate cannot drift apart | **VERIFIED** | `pytest tests/test_claims.py -k C31` |
 
 ## B. REM — a subsystem that reports success while doing nothing
 

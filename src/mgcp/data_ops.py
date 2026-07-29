@@ -149,6 +149,19 @@ async def import_lessons(
                 # Create Lesson object
                 from .models import Example, Relationship
 
+                relationships = [Relationship(**r) for r in lesson_data.get("relationships", [])]
+
+                # Exports written before related_ids was removed carry their
+                # cross-links only in that key. Pydantic would drop it
+                # silently, so fold it in the way the DB migration does.
+                known_targets = {r.target for r in relationships}
+                relationships += [
+                    Relationship(target=rid, type="related", weight=0.5,
+                                 context=[], bidirectional=True)
+                    for rid in lesson_data.get("related_ids", [])
+                    if rid not in known_targets
+                ]
+
                 lesson = Lesson(
                     id=lesson_data["id"],
                     trigger=lesson_data["trigger"],
@@ -157,7 +170,7 @@ async def import_lessons(
                     examples=[Example(**e) for e in lesson_data.get("examples", [])],
                     tags=lesson_data.get("tags", []),
                     parent_id=lesson_data.get("parent_id"),
-                    relationships=[Relationship(**r) for r in lesson_data.get("relationships", [])],
+                    relationships=relationships,
                     version=lesson_data.get("version", 1),
                 )
 

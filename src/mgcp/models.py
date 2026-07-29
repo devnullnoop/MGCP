@@ -225,8 +225,13 @@ class Lesson(SanitizedModel):
     last_used: datetime | None = Field(None, description="Last retrieval time")
     usage_count: int = Field(default=0, description="Times retrieved")
     tags: list[str] = Field(default_factory=list)
-    parent_id: str | None = Field(None, description="Parent lesson (deprecated, use relationships)")
-    related_ids: list[str] = Field(default_factory=list, description="Cross-links (deprecated, use relationships)")
+    # Not deprecated, despite what this field was labelled for a long time:
+    # parent_id IS the category hierarchy. list_categories,
+    # get_lessons_by_category, the NetworkX parent edges and the web graph's
+    # category tree all read it, and 84 of 241 live lessons carry one.
+    # relationships models peer links between lessons; it does not express
+    # "this lesson belongs under that category".
+    parent_id: str | None = Field(None, description="Parent lesson — the category this lesson sits under")
     relationships: list[Relationship] = Field(default_factory=list, description="Typed relationships to other lessons")
 
     def to_context(self) -> str:

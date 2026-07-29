@@ -205,10 +205,19 @@ Blocking. Not guessable.
 
 ## Named once and dropped — backlog, not this pass
 
-- `Lesson.parent_id` and `Lesson.related_ids` are marked deprecated in favour of
-  `relationships` but still carry dozens of live references.
-- 49 tools is a large surface for one agent to hold. Rank by `usage_count` and put
-  the never-called list in front of the operator; delete nothing unilaterally.
+- ~~`Lesson.parent_id` and `Lesson.related_ids` are marked deprecated~~ — done
+  2026-07-29. `related_ids` is gone (every live id was already in
+  `relationships`); `parent_id` stays because it is the category hierarchy and
+  was mislabelled, not deprecated. See the plan's §4 outcome table.
+- ~~Rank 49 tools by `usage_count`~~ — **not computable.** `usage_count` is a
+  `Lesson` field; nothing counts tool invocations, and telemetry logs only 7
+  lesson-centric event types. The list cannot be produced without first adding
+  per-tool counting, which is a feature. Statically, all 49 are referenced
+  outside `server.py`; the four enforcement-rule CRUD tools have docs but no
+  test, hook, or UI.
+- `action_effectiveness` (REM) reads `rem_actions`, and `record_rem_action` is
+  called only from tests — 0 live rows, so the operation cannot produce a
+  finding in real use. Deletion candidate; needs the operator's call.
 - The community bridge inside `query_lessons` appends lessons with a hardcoded
   score of `0.0` and applies no relevance floor of its own.
 - `mgcp-launcher` ships as a console script and is documented nowhere.

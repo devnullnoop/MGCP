@@ -295,17 +295,6 @@ async def get_graph_data() -> dict[str, Any]:
                 "bidirectional": rel.bidirectional,
             })
 
-        # Add legacy related links (for backwards compatibility)
-        existing_targets = {r.target for r in lesson.relationships}
-        for related_id in lesson.related_ids:
-            if related_id not in existing_targets:
-                links.append({
-                    "source": lesson.id,
-                    "target": related_id,
-                    "relation": "related",
-                    "weight": 0.5,
-                })
-
     # Add workflow nodes and their lesson connections
     workflows = await store.get_all_workflows()
     for workflow in workflows:

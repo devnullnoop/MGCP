@@ -540,9 +540,6 @@ async def link_lessons(
     existing_targets = [r.target for r in lesson_a.relationships]
     if lesson_id_b not in existing_targets:
         lesson_a.relationships.append(new_rel)
-        # Also maintain legacy related_ids for backwards compatibility
-        if lesson_id_b not in lesson_a.related_ids:
-            lesson_a.related_ids.append(lesson_id_b)
         await store.update_lesson(lesson_a)
 
     # Add reverse relationship if bidirectional
@@ -569,8 +566,6 @@ async def link_lessons(
         existing_targets_b = [r.target for r in lesson_b.relationships]
         if lesson_id_a not in existing_targets_b:
             lesson_b.relationships.append(reverse_rel)
-            if lesson_id_a not in lesson_b.related_ids:
-                lesson_b.related_ids.append(lesson_id_a)
             await store.update_lesson(lesson_b)
 
     # Update graph

@@ -11,8 +11,10 @@ import pytest
 from mgcp.migrations import (
     deduplicate_project_contexts,
     ensure_unique_project_path,
+    migrate_related_ids_to_relationships,
     run_all_migrations,
 )
+from mgcp.persistence import LessonStore
 
 
 @pytest.fixture
@@ -391,3 +393,58 @@ class TestRunAllMigrations:
             cursor = await conn.execute("SELECT COUNT(*) FROM project_contexts")
             count = (await cursor.fetchone())[0]
             assert count == 1  # Duplicates merged
+
+
+class TestMigrateRelatedIds:
+    """``related_ids`` was dropped from the Lesson model; this migration is
+    the only path that gets an older store's cross-links across, so it reads
+    the column with raw SQL rather than through the model."""
+
+    async def _legacy_store(self, db_path, related_ids, relationships="[]"):
+        store = LessonStore(db_path)
+        await store.get_all_lessons()  # the schema is created on first use
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.execute("ALTER TABLE lessons ADD COLUMN related_ids JSON NOT NULL DEFAULT '[]'")
+            await conn.execute(
+                """INSERT INTO lessons (id, trigger, action, examples, tags, relationships,
+                                        version, created_at, last_refined, usage_count, related_ids)
+                   VALUES ('legacy', 't', 'a', '[]', '[]', ?, 1,
+                           '2024-01-01T00:00:00', '2024-01-01T00:00:00', 0, ?)""",
+                (relationships, json.dumps(related_ids)),
+            )
+            await conn.commit()
+        return store
+
+    @pytest.mark.asyncio
+    async def test_legacy_column_is_folded_into_relationships(self, temp_db):
+        await self._legacy_store(temp_db, ["peer-a", "peer-b"])
+
+        assert await migrate_related_ids_to_relationships(temp_db) == 1
+
+        lesson = await LessonStore(temp_db).get_lesson("legacy")
+        assert {r.target for r in lesson.relationships} == {"peer-a", "peer-b"}
+        assert all(r.type == "related" for r in lesson.relationships)
+
+    @pytest.mark.asyncio
+    async def test_ids_already_present_are_not_duplicated(self, temp_db):
+        existing = json.dumps([
+            {"target": "peer-a", "type": "complements", "weight": 0.9,
+             "context": [], "bidirectional": True}
+        ])
+        await self._legacy_store(temp_db, ["peer-a"], relationships=existing)
+
+        assert await migrate_related_ids_to_relationships(temp_db) == 0
+
+        lesson = await LessonStore(temp_db).get_lesson("legacy")
+        assert len(lesson.relationships) == 1
+        assert lesson.relationships[0].type == "complements", "existing type must survive"
+
+    @pytest.mark.asyncio
+    async def test_store_without_the_column_is_a_no_op(self, temp_db):
+        """A store created after the removal has no column to read, and the
+        migration must not error on it -- run_all_migrations calls this on
+        every open."""
+        store = LessonStore(temp_db)
+        await store.get_all_lessons()  # the schema is created on first use
+
+        assert await migrate_related_ids_to_relationships(temp_db) == 0

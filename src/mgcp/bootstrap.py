@@ -101,8 +101,6 @@ async def seed_relationships(relationships: list, store: LessonStore, graph: Les
             bidirectional=True,
         )
         source.relationships.append(new_rel)
-        if target_id not in source.related_ids:
-            source.related_ids.append(target_id)
         await store.update_lesson(source)
 
         # Add reverse relationship to target lesson
@@ -121,8 +119,6 @@ async def seed_relationships(relationships: list, store: LessonStore, graph: Les
         )
         if source_id not in [r.target for r in target.relationships]:
             target.relationships.append(reverse_rel)
-            if source_id not in target.related_ids:
-                target.related_ids.append(source_id)
             await store.update_lesson(target)
 
         # Update graph

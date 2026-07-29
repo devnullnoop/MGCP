@@ -19,36 +19,55 @@ logger = logging.getLogger(__name__)
 
 async def migrate_related_ids_to_relationships(db_path: str = DEFAULT_DB_PATH) -> int:
     """
-    Migrate legacy related_ids to typed relationships.
+    Fold the legacy ``related_ids`` column into typed relationships.
 
-    This converts the flat related_ids list to the new Relationship model
-    with type='related', weight=0.5, bidirectional=True.
+    Converts each flat id to a Relationship with type='related', weight=0.5,
+    bidirectional=True.
+
+    ``related_ids`` is no longer on the Lesson model: it duplicated
+    ``relationships`` and every writer maintained both, so the two could
+    disagree. Stores written before its removal still carry the column, and
+    this is the path that gets their cross-links across — so it reads the
+    column with raw SQL instead of through the model, and does nothing when
+    the column is already gone.
 
     Returns the number of lessons updated.
     """
-    store = LessonStore(db_path)
-    lessons = await store.get_all_lessons()
+    async with aiosqlite.connect(db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute("PRAGMA table_info(lessons)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "related_ids" not in columns:
+            return 0
+        cursor = await conn.execute(
+            "SELECT id, related_ids FROM lessons "
+            "WHERE related_ids IS NOT NULL AND related_ids NOT IN ('', '[]')"
+        )
+        legacy = {row["id"]: json.loads(row["related_ids"] or "[]") for row in await cursor.fetchall()}
 
+    if not legacy:
+        return 0
+
+    store = LessonStore(db_path)
     updated_count = 0
 
-    for lesson in lessons:
-        # Skip if no legacy related_ids
-        if not lesson.related_ids:
+    for lesson_id, related_ids in legacy.items():
+        lesson = await store.get_lesson(lesson_id)
+        if lesson is None:
             continue
 
-        # Check which related_ids are not already in relationships
         existing_targets = {r.target for r in lesson.relationships}
-        new_relationships = []
-
-        for related_id in lesson.related_ids:
-            if related_id not in existing_targets:
-                new_relationships.append(Relationship(
-                    target=related_id,
-                    type="related",
-                    weight=0.5,
-                    context=[],
-                    bidirectional=True
-                ))
+        new_relationships = [
+            Relationship(
+                target=related_id,
+                type="related",
+                weight=0.5,
+                context=[],
+                bidirectional=True,
+            )
+            for related_id in related_ids
+            if related_id not in existing_targets
+        ]
 
         if new_relationships:
             lesson.relationships.extend(new_relationships)

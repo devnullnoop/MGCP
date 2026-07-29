@@ -162,10 +162,10 @@ class TestInvalidData:
             # Insert a row with invalid JSON in examples column
             # Must provide all NOT NULL fields to satisfy schema constraints
             cursor.execute("""
-                INSERT INTO lessons (id, trigger, action, examples, tags, related_ids, relationships,
+                INSERT INTO lessons (id, trigger, action, examples, tags, relationships,
                                      version, created_at, last_refined, usage_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, ("corrupted", "test", "test", "not valid json {{{", "[]", "[]", "[]",
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, ("corrupted", "test", "test", "not valid json {{{", "[]", "[]",
                   1, "2024-01-01T00:00:00", "2024-01-01T00:00:00", 0))
             conn.commit()
             conn.close()
@@ -205,10 +205,10 @@ class TestInvalidData:
             cursor = conn.cursor()
 
             cursor.execute("""
-                INSERT INTO lessons (id, trigger, action, rationale, examples, tags, related_ids, relationships,
+                INSERT INTO lessons (id, trigger, action, rationale, examples, tags, relationships,
                                      version, created_at, last_refined, usage_count)
-                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, ("null-rationale", "test", "test", "[]", "[]", "[]", "[]",
+                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
+            """, ("null-rationale", "test", "test", "[]", "[]", "[]",
                   1, "2024-01-01T00:00:00", "2024-01-01T00:00:00", 0))
             conn.commit()
             conn.close()
@@ -234,10 +234,10 @@ class TestInvalidData:
 
             # tags should be a JSON array, not a string
             cursor.execute("""
-                INSERT INTO lessons (id, trigger, action, examples, tags, related_ids, relationships,
+                INSERT INTO lessons (id, trigger, action, examples, tags, relationships,
                                      version, created_at, last_refined, usage_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, ("wrong-types", "test", "test", "[]", '"not a list"', "[]", "[]",
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, ("wrong-types", "test", "test", "[]", '"not a list"', "[]",
                   1, "2024-01-01T00:00:00", "2024-01-01T00:00:00", 0))
             conn.commit()
             conn.close()

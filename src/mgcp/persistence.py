@@ -54,7 +54,6 @@ CREATE TABLE IF NOT EXISTS lessons (
     usage_count INTEGER NOT NULL DEFAULT 0,
     tags JSON NOT NULL DEFAULT '[]',
     parent_id TEXT,
-    related_ids JSON NOT NULL DEFAULT '[]',
     relationships JSON NOT NULL DEFAULT '[]',
     FOREIGN KEY (parent_id) REFERENCES lessons(id)
 );
@@ -308,11 +307,11 @@ class LessonStore:
                 "ALTER TABLE lessons ADD COLUMN relationships JSON NOT NULL DEFAULT '[]'"
             )
 
-        # Migration: Add graduated_to column to lessons
-        if "graduated_to" not in columns:
-            await conn.execute(
-                "ALTER TABLE lessons ADD COLUMN graduated_to TEXT"
-            )
+        # `graduated_to` is deliberately NOT created. It was Phase 8's marker
+        # for lessons graduated out of the query pool — the strategy that
+        # degraded reliability and was dropped. Nothing has ever read or
+        # written it (0 of 241 live rows are populated), so stores that
+        # already have the column simply carry an unused one.
 
         # Migration: Add catalogue column to project_contexts
         # Migration: Tag soliloquies with the project they were written in.
@@ -399,8 +398,8 @@ class LessonStore:
                 INSERT INTO lessons (
                     id, trigger, action, rationale, examples, version,
                     created_at, last_refined, last_used, usage_count,
-                    tags, parent_id, related_ids, relationships
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tags, parent_id, relationships
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     lesson.id,
@@ -415,7 +414,6 @@ class LessonStore:
                     lesson.usage_count,
                     json.dumps(lesson.tags),
                     lesson.parent_id,
-                    json.dumps(lesson.related_ids),
                     json.dumps([rel.model_dump() for rel in lesson.relationships]),
                 ),
             )
@@ -505,7 +503,7 @@ class LessonStore:
                 UPDATE lessons SET
                     trigger = ?, action = ?, rationale = ?, examples = ?,
                     version = ?, last_refined = ?, last_used = ?, usage_count = ?,
-                    tags = ?, parent_id = ?, related_ids = ?, relationships = ?
+                    tags = ?, parent_id = ?, relationships = ?
                 WHERE id = ?
                 """,
                 (
@@ -519,7 +517,6 @@ class LessonStore:
                     lesson.usage_count,
                     json.dumps(lesson.tags),
                     lesson.parent_id,
-                    json.dumps(lesson.related_ids),
                     json.dumps([rel.model_dump() for rel in lesson.relationships]),
                     lesson.id,
                 ),
@@ -587,7 +584,6 @@ class LessonStore:
             usage_count=row["usage_count"],
             tags=json.loads(row["tags"]),
             parent_id=row["parent_id"],
-            related_ids=json.loads(row["related_ids"]),
             relationships=relationships,
         )
 

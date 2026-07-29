@@ -39,12 +39,6 @@ class LessonGraph:
                 bidirectional=rel.bidirectional,
             )
 
-        # Add legacy related edges (backwards compatibility)
-        for related_id in lesson.related_ids:
-            # Only add if not already covered by typed relationships
-            if not any(r.target == related_id for r in lesson.relationships):
-                self.graph.add_edge(lesson.id, related_id, relation="related")
-
     def remove_graph_lesson(self, lesson_id: str) -> None:
         """Remove a lesson from the graph (NetworkX)."""
         if lesson_id in self.graph:

@@ -369,7 +369,6 @@ class TestIntentCalibration:
                         trigger=f"workflow management {i}",
                         action=f"Follow workflow step {i}",
                         tags=["workflow", "process-management"],
-                        related_ids=[f"workflow-lesson-{j}" for j in range(4) if j != i],
                     )
                     await store.add_lesson(lesson)
 

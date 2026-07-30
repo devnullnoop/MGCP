@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit dispatcher for MGCP v2.2.
+"""UserPromptSubmit dispatcher for MGCP v2.4.
 
 Responsibilities:
 1. Read keyword gates and the terse routing block from intent_config.json.
@@ -8,6 +8,9 @@ Responsibilities:
    context compaction.
 4. Surface scheduled reminders (counter/timer-based).
 5. Inject active workflow state.
+6. Reset per-turn enforcement state (``turn_tools_called=[]`` consumed by
+   the PreToolUse evaluator) and parse the ``MGCP_BYPASS[:scope]`` opt-out
+   tokens into ``turn_bypass_scopes``.
 
 The intent gates and routing prompt are loaded from
 ``~/.mgcp/intent_config.json`` (override with ``MGCP_DATA_DIR``). Editing
@@ -170,6 +173,46 @@ def main():
 
     state = _load_state()
     state["current_call_count"] = state.get("current_call_count", 0) + 1
+
+    # Per-turn enforcement state (consumed by pre-tool-dispatcher.py).
+    # Resets every message so each turn gets fresh accounting.
+    # - turn_tools_called: list of tool_name strings; PostToolUse appends
+    #   to this list. Preconditions of type "tool_called_this_turn" check
+    #   membership.
+    # - turn_bypass_scopes: list of scope strings. "*" disables all rules;
+    #   named scopes ("git", "docs") disable rules with matching
+    #   bypass_scope. Parsed from MGCP_BYPASS and MGCP_BYPASS:<scope>
+    #   tokens in the prompt.
+    state["turn_tools_called"] = []
+    bypass_scopes = []
+    for match in re.finditer(
+        r"MGCP_BYPASS(?::([A-Za-z0-9_-]+))?", prompt, re.IGNORECASE
+    ):
+        scope = match.group(1)
+        bypass_scopes.append(scope if scope else "*")
+    state["turn_bypass_scopes"] = bypass_scopes
+    # v2.11: an adjudication only ever opens the gate for ITS turn.
+    state.pop("turn_apology_adjudication", None)
+
+    if bypass_scopes:
+        # A bypass token is a human decision; it goes on the gate audit
+        # record like every other gate event. Fails silently.
+        try:
+            import datetime as _dt
+
+            audit_path = Path(
+                os.environ.get("MGCP_DATA_DIR", str(Path.home() / ".mgcp"))
+            ) / "gate_audit.jsonl"
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(audit_path, "a") as f:
+                f.write(json.dumps({
+                    "event": "human_bypass",
+                    "scopes": bypass_scopes,
+                    "ts": _dt.datetime.now(_dt.UTC).isoformat(),
+                }) + "\n")
+        except Exception:
+            pass
+
     _save_state(state)
 
     # 2. Check scheduled reminders

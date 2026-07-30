@@ -1,17 +1,56 @@
 #!/usr/bin/env python3
-"""PostToolUse dispatcher for MGCP.
+"""PostToolUse dispatcher for MGCP v2.4.
 
 Routes post-tool actions by tool_name:
 - Edit/Write: knowledge-capture checkpoint (patterns, gotchas, couplings)
 - Bash: error detection with cooldown (self-correction + lesson capture)
+- *ANY* tool: append tool_name to ``turn_tools_called`` on
+  workflow_state.json so the generic PreToolUse evaluator can satisfy
+  ``tool_called_this_turn`` preconditions for arbitrary rules.
 
 Single hook, single matcher (no filter — handles all tools internally).
 """
 import json
+import os
 import re
 import sys
 import time
 from pathlib import Path
+
+WORKFLOW_STATE_FILE = Path(
+    os.environ.get(
+        "MGCP_STATE_FILE",
+        str(Path.home() / ".mgcp" / "workflow_state.json"),
+    )
+)
+
+
+def _append_tool_called(tool_name: str) -> None:
+    """Append ``tool_name`` to ``turn_tools_called`` on workflow_state.json.
+
+    Consumed by the generic PreToolUse evaluator to check
+    ``tool_called_this_turn`` preconditions. Fails silently — losing
+    enforcement is preferable to crashing the hook.
+    """
+    if not tool_name:
+        return
+    try:
+        if WORKFLOW_STATE_FILE.exists():
+            with open(WORKFLOW_STATE_FILE) as f:
+                state = json.load(f)
+        else:
+            state = {}
+        called = state.get("turn_tools_called")
+        if not isinstance(called, list):
+            called = []
+        if tool_name not in called:
+            called.append(tool_name)
+        state["turn_tools_called"] = called
+        WORKFLOW_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(WORKFLOW_STATE_FILE, "w") as f:
+            json.dump(state, f, indent=2)
+    except (json.JSONDecodeError, OSError):
+        pass
 
 # --- Bash error detection ---
 
@@ -125,6 +164,10 @@ def main():
         sys.exit(0)
 
     tool_name = hook_input.get("tool_name", "")
+
+    # Track every tool call in this turn so PreToolUse rules can check
+    # "tool_called_this_turn" against any tool (not just query_lessons).
+    _append_tool_called(tool_name)
 
     if tool_name in ("Edit", "Write"):
         handle_edit_write()

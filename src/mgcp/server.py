@@ -7,6 +7,7 @@ https://github.com/modelcontextprotocol/python-sdk
 
 import asyncio
 import json
+import os
 import re
 import time
 from datetime import UTC, datetime
@@ -2065,7 +2066,8 @@ async def rem_run(
     Args:
         operations: Comma-separated list of operations to run. Empty = run all due.
                    Options: staleness_scan, duplicate_detection, community_detection,
-                   knowledge_extraction, context_summary, intent_calibration
+                   knowledge_extraction, context_summary, intent_calibration,
+                   gate_audit_review
         project_path: Project root whose session count sets the cadence.
                    Empty = CLAUDE_PROJECT_DIR, else the current directory.
     """
@@ -2802,6 +2804,90 @@ async def toggle_enforcement_rule(name: str, enabled: bool) -> str:
             save_config(config)
             return f"Rule '{name}' {'enabled' if enabled else 'disabled'}."
     return f"No rule named '{name}'."
+
+
+@mcp.tool()
+async def adjudicate_apology_gate(
+    flagged_sentence: str, verdict: str, reasoning: str, session_id: str = ""
+) -> str:
+    """Contest or confirm an apology-gate fire, on the record.
+
+    The PreToolUse apology gate permits exactly two tools while armed:
+    add_lesson (comply) and this one (adjudicate). Use this when the
+    tripwire flagged text that is NOT you acknowledging your own error --
+    quoted speech, error narration, a trigger word in a non-apology sense.
+
+    Args:
+        flagged_sentence: The sentence (or matched text) the gate flagged.
+        verdict: "not_apology" -- false positive, the gate opens for this
+                 turn; or "apology" -- genuine, the gate stays shut until
+                 add_lesson is called.
+        session_id: Optional. The session this verdict speaks for; the hook
+                 ignores an adjudication recorded by a different session,
+                 because workflow_state.json is shared across concurrent
+                 sessions and a verdict is not a global fact.
+        reasoning: Why. Required, minimum 20 characters. This is written to
+                 the append-only audit log next to the flagged sentence,
+                 where REM sampling and the human can review it. An
+                 attestation is cheap to make and cheap to audit -- that
+                 asymmetry is the design.
+    """
+    import datetime as _dt
+
+    verdict = verdict.strip().lower()
+    if verdict not in ("not_apology", "apology"):
+        return "verdict must be 'not_apology' or 'apology'."
+    if len(reasoning.strip()) < 20:
+        return ("reasoning too short: state specifically why this is or is "
+                "not you acknowledging your own error (>=20 chars).")
+
+    base = Path(os.environ.get("MGCP_DATA_DIR", str(Path.home() / ".mgcp")))
+    entry = {
+        "event": "adjudication",
+        "gate": "apology",
+        "verdict": verdict,
+        "session_id": session_id,
+        "flagged_sentence": flagged_sentence.strip()[:500],
+        "reasoning": reasoning.strip()[:1000],
+        "ts": _dt.datetime.now(_dt.UTC).isoformat(),
+    }
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        with open(base / "gate_audit.jsonl", "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError as exc:
+        return f"Could not write the audit record ({exc}); adjudication NOT registered."
+
+    # The hook reads this to open (or keep) the gate for the current turn;
+    # UserPromptSubmit deletes it on the next user message.
+    state_file = Path(
+        os.environ.get("MGCP_STATE_FILE", str(base / "workflow_state.json"))
+    )
+    try:
+        state = {}
+        if state_file.exists():
+            state = json.loads(state_file.read_text() or "{}")
+        state["turn_apology_adjudication"] = {
+            "verdict": verdict,
+            "sentence": entry["flagged_sentence"],
+            "session_id": session_id,
+            "ts": entry["ts"],
+        }
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(json.dumps(state, indent=2))
+    except (OSError, json.JSONDecodeError) as exc:
+        return f"Audit recorded, but gate state not updated ({exc}); the gate may still deny."
+
+    if verdict == "not_apology":
+        return (
+            "Adjudication recorded: false positive. The gate is open for this "
+            "turn. Your reasoning is on the audit record next to the flagged "
+            "sentence."
+        )
+    return (
+        "Adjudication recorded: genuine. The gate stays shut -- call "
+        "mcp__mgcp__add_lesson now to capture what to do differently."
+    )
 
 
 # ============================================================================

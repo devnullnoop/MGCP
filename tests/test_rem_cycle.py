@@ -223,3 +223,52 @@ class TestRemFinding:
         )
         assert len(f.options) == 2
         assert f.options[f.recommended]["label"] == "Option A"
+
+
+class TestGateAuditReview:
+    """The v2.11 audit-review operation: the attest-or-comply design is only
+    honest if somebody reads the record; this operation is that somebody's
+    assistant."""
+
+    def _seed(self, monkeypatch, tmp_path, events):
+        import json as j
+        monkeypatch.setenv("MGCP_DATA_DIR", str(tmp_path))
+        (tmp_path / "gate_audit.jsonl").write_text(
+            "\n".join(j.dumps(e) for e in events)
+        )
+
+    @pytest.mark.asyncio
+    async def test_summarizes_fires_complies_and_contests(self, store, monkeypatch, tmp_path):
+        self._seed(monkeypatch, tmp_path, [
+            {"event": "deny", "gate": "apology", "tier": "apology-regex", "matched": "sorry"},
+            {"event": "comply", "gate": "apology", "lesson_id": "x"},
+            {"event": "adjudication", "gate": "apology", "verdict": "not_apology",
+             "flagged_sentence": "The user said sorry.", "reasoning": "quoted speech, not my own apology"},
+            {"event": "deny", "gate": "rules", "rules": ["git-requires-query-lessons"]},
+            {"event": "human_bypass", "scopes": ["apology"]},
+        ])
+        engine = RemEngine(store=store, schedules={}, project_id=PROJECT)
+        findings = await engine._gate_audit_review()
+        assert len(findings) == 1
+        meta = findings[0].metadata
+        assert (meta["fires"], meta["complies"], meta["contests"], meta["bypasses"], meta["rule_denies"]) == (1, 1, 1, 1, 1)
+        assert "quoted speech" in findings[0].description
+
+    @pytest.mark.asyncio
+    async def test_high_contest_rate_raises_second_finding(self, store, monkeypatch, tmp_path):
+        events = []
+        for i in range(4):
+            events.append({"event": "deny", "gate": "apology", "tier": "apology-regex", "matched": "sorry"})
+            events.append({"event": "adjudication", "gate": "apology", "verdict": "not_apology",
+                           "flagged_sentence": f"s{i}", "reasoning": "r" * 25})
+        self._seed(monkeypatch, tmp_path, events)
+        engine = RemEngine(store=store, schedules={}, project_id=PROJECT)
+        findings = await engine._gate_audit_review()
+        assert len(findings) == 2
+        assert "contest rate" in findings[1].title.lower()
+
+    @pytest.mark.asyncio
+    async def test_no_audit_file_is_silent(self, store, monkeypatch, tmp_path):
+        monkeypatch.setenv("MGCP_DATA_DIR", str(tmp_path))
+        engine = RemEngine(store=store, schedules={}, project_id=PROJECT)
+        assert await engine._gate_audit_review() == []

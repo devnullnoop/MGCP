@@ -167,6 +167,48 @@ if stale:
     )
     warning_blocks.append("\n".join(lines))
 
+def _gate_contest_stats(window: int = 50):
+    """(fires, contests) over the last `window` apology-gate audit events.
+
+    Reads ~/.mgcp/gate_audit.jsonl (MGCP_DATA_DIR-aware). A contest is an
+    adjudication with verdict "not_apology". An agent that suddenly contests
+    most fires is gaming the gate; the human should see that trend at
+    session start, not discover it in the log later. Fails open.
+    """
+    path = Path(
+        os.environ.get("MGCP_DATA_DIR", str(Path.home() / ".mgcp"))
+    ) / "gate_audit.jsonl"
+    if not path.exists():
+        return (0, 0)
+    fires = contests = 0
+    try:
+        lines = path.read_text().splitlines()[-window:]
+        for line in lines:
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("gate") == "apology" and ev.get("event") == "deny":
+                fires += 1
+            elif (ev.get("event") == "adjudication"
+                  and ev.get("verdict") == "not_apology"):
+                contests += 1
+    except OSError:
+        return (0, 0)
+    return (fires, contests)
+
+
+_fires, _contests = _gate_contest_stats()
+if _contests >= 3 and _contests * 2 >= max(_fires, 1):
+    warning_blocks.append(
+        "## ⚠️ Apology-Gate Contest Rate\n\n"
+        f"In the last window the agent contested {_contests} apology-gate "
+        f"fire(s) against {_fires} denial(s). A high contest rate can mean "
+        "noisy tripwires — or an agent talking its way past the gate. "
+        "Review `~/.mgcp/gate_audit.jsonl`: every contest carries the "
+        "flagged sentence next to the recorded reasoning."
+    )
+
 overdue = _find_overdue_rem_operations()
 if overdue:
     lines = ["## ⚠️ REM Operations Overdue", ""]

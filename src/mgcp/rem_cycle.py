@@ -161,6 +161,8 @@ class RemEngine:
             findings = await self._context_summary()
         elif operation == "intent_calibration":
             findings = await self._intent_calibration()
+        elif operation == "gate_audit_review":
+            findings = await self._gate_audit_review()
         else:
             findings = []
 
@@ -418,6 +420,110 @@ class RemEngine:
                 metadata={"project_id": project.project_id, "snapshot_count": len(history)},
             ))
 
+        return findings
+
+    async def _gate_audit_review(self) -> list[RemFinding]:
+        """Sample the enforcement gate's audit log for human review.
+
+        The attest-or-comply gate (v2.11) lets the agent contest a fire on
+        the record instead of being hard-blocked. That design is only
+        honest if somebody reads the record. This operation is that
+        somebody's assistant: it summarizes fires, compliances,
+        adjudications and human bypasses since the last review, surfaces
+        every contested verdict with its reasoning, and flags a contest
+        rate that suggests the gate is being talked around.
+        """
+        import json as _json
+        import os as _os
+        from pathlib import Path as _Path
+
+        audit_path = _Path(
+            _os.environ.get("MGCP_DATA_DIR", str(_Path.home() / ".mgcp"))
+        ) / "gate_audit.jsonl"
+        if not audit_path.exists():
+            return []
+
+        events = []
+        try:
+            for line in audit_path.read_text().splitlines()[-200:]:
+                try:
+                    events.append(_json.loads(line))
+                except _json.JSONDecodeError:
+                    continue
+        except OSError:
+            return []
+        if not events:
+            return []
+
+        denies = [e for e in events if e.get("event") == "deny"]
+        gate_denies = [e for e in denies if e.get("gate") == "apology"]
+        complies = [e for e in events if e.get("event") == "comply"]
+        contests = [e for e in events
+                    if e.get("event") == "adjudication"
+                    and e.get("verdict") == "not_apology"]
+        confirms = [e for e in events
+                    if e.get("event") == "adjudication"
+                    and e.get("verdict") == "apology"]
+        bypasses = [e for e in events if e.get("event") == "human_bypass"]
+        known = {"deny", "comply", "adjudication", "human_bypass"}
+        unknown = [e for e in events if e.get("event") not in known]
+
+        findings = []
+        description = (
+            f"Last {len(events)} audit events: {len(gate_denies)} apology-gate "
+            f"denial(s) ({len(denies) - len(gate_denies)} from data rules), "
+            f"{len(complies)} compliance(s), {len(contests)} contested / "
+            f"{len(confirms)} confirmed adjudication(s), "
+            f"{len(bypasses)} human bypass(es)."
+        )
+        if unknown:
+            # A future event type must be REPORTED, not silently dropped: the
+            # audit log is only an instrument if it surfaces what it does not
+            # recognise.
+            kinds = sorted({str(e.get("event")) for e in unknown})
+            description += (
+                f" NOTE: {len(unknown)} event(s) of unrecognised type "
+                f"{kinds} — this reviewer does not summarise them; read the "
+                "log directly."
+            )
+        if contests:
+            sample = contests[-5:]
+            description += " Contested verdicts to review: " + " | ".join(
+                f"[{c.get('flagged_sentence', '')!r} -> {c.get('reasoning', '')!r}]"
+                for c in sample
+            )
+        findings.append(RemFinding(
+            operation="gate_audit_review",
+            title=f"Gate audit: {len(gate_denies)} fires, {len(contests)} contested",
+            description=description,
+            options=[
+                {"label": "Review contests", "description": "Read each contested verdict against its flagged sentence"},
+                {"label": "Acknowledge", "description": "Counts noted, nothing suspicious"},
+            ],
+            recommended=0 if contests else 1,
+            metadata={
+                "fires": len(gate_denies), "complies": len(complies),
+                "contests": len(contests), "confirms": len(confirms),
+                "bypasses": len(bypasses), "rule_denies": len(denies) - len(gate_denies),
+            },
+        ))
+        if len(contests) >= 3 and len(contests) * 2 >= max(len(gate_denies), 1):
+            findings.append(RemFinding(
+                operation="gate_audit_review",
+                title="High contest rate on the apology gate",
+                description=(
+                    f"{len(contests)} of {len(gate_denies)} recent fires were "
+                    "contested. Either the tripwires are noisy (widen review) "
+                    "or the agent is talking its way past the gate (read the "
+                    "reasonings)."
+                ),
+                options=[
+                    {"label": "Audit reasonings", "description": "Human reads gate_audit.jsonl"},
+                    {"label": "Tune tripwires", "description": "Remove patterns producing false fires"},
+                ],
+                recommended=0,
+                metadata={"contest_rate": round(len(contests) / max(len(gate_denies), 1), 2)},
+            ))
         return findings
 
     async def _intent_calibration(self) -> list[RemFinding]:

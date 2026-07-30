@@ -396,3 +396,47 @@ def test_rem_warning_message_includes_toggle_hint(tmp_path):
     ctx = output["hookSpecificOutput"]["additionalContext"]
     assert "toggle_enforcement_rule" in ctx
     assert "rem-required-before-commit" in ctx
+
+
+class TestGateContestFlag:
+    """v2.11: SessionStart surfaces a contest-rate spike so a gate being
+    talked around is seen at the start of a session, not found in a log."""
+
+    def _run_with_audit(self, tmp_path, events):
+        import json as j
+        home = tmp_path / "home"
+        (home / ".mgcp").mkdir(parents=True)
+        project = tmp_path / "proj"
+        project.mkdir()
+        if events is not None:
+            (home / ".mgcp" / "gate_audit.jsonl").write_text(
+                "\n".join(j.dumps(e) for e in events)
+            )
+        result = subprocess.run(
+            [sys.executable, str(HOOK_PATH)],
+            capture_output=True, text=True, check=True,
+            env={"HOME": str(home), "CLAUDE_PROJECT_DIR": str(project),
+                 "PATH": "/usr/bin:/bin"},
+        )
+        return json.loads(result.stdout)
+
+    def test_contest_spike_warns(self, tmp_path):
+        events = []
+        for i in range(3):
+            events.append({"event": "deny", "gate": "apology", "tier": "apology-regex"})
+            events.append({"event": "adjudication", "verdict": "not_apology"})
+        out = self._run_with_audit(tmp_path, events)
+        ctx = out["hookSpecificOutput"]["additionalContext"]
+        assert "Apology-Gate Contest Rate" in ctx
+
+    def test_compliant_history_stays_quiet(self, tmp_path):
+        events = [
+            {"event": "deny", "gate": "apology", "tier": "apology-regex"},
+            {"event": "comply", "gate": "apology", "lesson_id": "x"},
+        ]
+        out = self._run_with_audit(tmp_path, events)
+        assert "Contest Rate" not in out["hookSpecificOutput"]["additionalContext"]
+
+    def test_no_audit_file_stays_quiet(self, tmp_path):
+        out = self._run_with_audit(tmp_path, None)
+        assert "Contest Rate" not in out["hookSpecificOutput"]["additionalContext"]

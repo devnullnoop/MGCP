@@ -85,7 +85,7 @@ The system flows from Claude/LLM through MCP Protocol to the MGCP Server, which 
 
 All source files are in `src/mgcp/`:
 
-- `server.py` - MCP server with 49 tools
+- `server.py` - MCP server with 50 tools
 - `models.py` - Pydantic models (Lesson, ProjectContext, ProjectCatalogue, SecurityNote, Convention, etc.)
 - `graph.py` - NetworkX graph operations with typed relationships and Louvain community detection
 - `embedding.py` - Centralized BGE embedding model (`BAAI/bge-base-en-v1.5`)
@@ -128,7 +128,7 @@ All source files are in `src/mgcp/`:
 - Decisions with rationale
 - Error patterns with solutions
 
-### MCP Tools (49 total)
+### MCP Tools (50 total)
 
 **Lesson Discovery & Retrieval (5):**
 - `query_lessons` - Semantic search for relevant lessons
@@ -237,6 +237,9 @@ cwd. Entries written before tagging existed carry no project tag and read as
 - `remove_intent` - Delete an intent from the routing config
 - `compile_intent_to_skill` - Compile an intent (+ linked workflow + lessons) into a SKILL.md file at `~/.claude/skills/` or `<project>/.claude/skills/`. Walks intent → workflow → ordered steps → lessons-per-step. Skill is a downstream artifact; the intent stays the source of truth.
 
+**Gate Adjudication (1):** The apology gate's second exit (v2.11).
+- `adjudicate_apology_gate` - Contest or confirm a gate fire on the record: flagged sentence + verdict + reasoning (>=20 chars) appended to `~/.mgcp/gate_audit.jsonl`; verdict `not_apology` opens the gate for the current turn, `apology` keeps it shut until `add_lesson`
+
 **Enforcement Rules (6):** Data-driven PreToolUse gates stored in `~/.mgcp/enforcement_rules.json`. Edits take effect on the next tool call.
 - `list_enforcement_rules` - List all rules with enabled/disabled status and trigger
 - `get_enforcement_rule` - Full JSON definition of one rule
@@ -271,7 +274,7 @@ MGCP v2.2 makes the routing prompt **data, not code**. The intent classification
 |------|-------|------|---------|
 | `session-init.py` | SessionStart | advisory | Inject the session-start bootstrap checklist (read_soliloquy / get_project_context / query_lessons) and workflow execution discipline. (v2.5: no longer duplicates the dispatcher's routing/actions block.) |
 | `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Hard keyword gates (loaded from `intent_config.json` — both git AND session_end fire from one loop), terse routing re-injection, scheduled reminders, workflow state, per-turn enforcement state reset, `MGCP_BYPASS` token detection |
-| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Generic data-driven evaluator. Reads `~/.mgcp/enforcement_rules.json` on every tool call and applies every enabled, triggered, non-bypassed rule. Plus one built-in gate that lives outside the JSON because its trigger is assistant text, not a tool argument: an apology in the current turn (seven word-boundary regexes) denies every tool except `add_lesson` until a lesson is written (bypass `MGCP_BYPASS:apology`). Denies when preconditions unsatisfied. Bash commands are tokenized per line with `shlex(punctuation_chars=True)` — per line because a newline is a command separator that `shlex` otherwise eats — and git's global flags are skipped so `git -C /path commit` is still a commit. A line that cannot be tokenized (an apostrophe in a commit message) falls back to a raw boundary scan and **fails closed for git**, since a command the detector cannot read is not evidence the command is safe. Scoped bypass: `MGCP_BYPASS:<scope>` disables one scope, bare `MGCP_BYPASS` disables all. |
+| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Generic data-driven evaluator. Reads `~/.mgcp/enforcement_rules.json` on every tool call and applies every enabled, triggered, non-bypassed rule. Plus one built-in gate that lives outside the JSON because its trigger is assistant text, not a tool argument: an apology in the current turn (the seven v2.9 word-boundary regexes) denies every tool except `add_lesson`, `adjudicate_apology_gate`, and tool-discovery calls -- gating discovery would gate the exits themselves. Every gate and data-rule decision appends to `~/.mgcp/gate_audit.jsonl` until the lesson is written or a `not_apology` adjudication is recorded (v2.11 attest-or-comply; bypass `MGCP_BYPASS:apology`, human-only). Every denial — gate or data rule — appends to the `~/.mgcp/gate_audit.jsonl` audit log. Denies when preconditions unsatisfied. Bash commands are tokenized per line with `shlex(punctuation_chars=True)` — per line because a newline is a command separator that `shlex` otherwise eats — and git's global flags are skipped so `git -C /path commit` is still a commit. A line that cannot be tokenized (an apostrophe in a commit message) falls back to a raw boundary scan and **fails closed for git**, since a command the detector cannot read is not evidence the command is safe. Scoped bypass: `MGCP_BYPASS:<scope>` disables one scope, bare `MGCP_BYPASS` disables all. |
 | `post-tool-dispatcher.py` | PostToolUse | advisory | Routes by tool: Edit/Write triggers knowledge-capture checkpoint; Bash triggers error detection with cooldown; every tool call is appended to `turn_tools_called` on workflow_state.json, consumed by PreToolUse `tool_called_this_turn` preconditions. |
 | `mgcp-precompact.py` | PreCompact | advisory | Critical reminder to save context (and write_soliloquy) before context compression |
 

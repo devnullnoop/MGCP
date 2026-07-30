@@ -191,6 +191,27 @@ def main():
         scope = match.group(1)
         bypass_scopes.append(scope if scope else "*")
     state["turn_bypass_scopes"] = bypass_scopes
+    # v2.11: an adjudication only ever opens the gate for ITS turn.
+    state.pop("turn_apology_adjudication", None)
+
+    if bypass_scopes:
+        # A bypass token is a human decision; it goes on the gate audit
+        # record like every other gate event. Fails silently.
+        try:
+            import datetime as _dt
+
+            audit_path = Path(
+                os.environ.get("MGCP_DATA_DIR", str(Path.home() / ".mgcp"))
+            ) / "gate_audit.jsonl"
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(audit_path, "a") as f:
+                f.write(json.dumps({
+                    "event": "human_bypass",
+                    "scopes": bypass_scopes,
+                    "ts": _dt.datetime.now(_dt.UTC).isoformat(),
+                }) + "\n")
+        except Exception:
+            pass
 
     _save_state(state)
 

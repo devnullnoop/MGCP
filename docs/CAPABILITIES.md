@@ -43,7 +43,7 @@ harsh:
 
 ```
 RETRIEVAL_FLOOR = 0.30      # QdrantVectorStore.search min_score default
-MCP_TOOL_COUNT  = 49        # @mcp.tool() functions in src/mgcp/server.py
+MCP_TOOL_COUNT  = 50        # @mcp.tool() functions in src/mgcp/server.py (v2.11 added adjudicate_apology_gate)
 ```
 
 `test_C24` compares `RETRIEVAL_FLOOR` above against the live default in
@@ -54,11 +54,11 @@ updating this file breaks the ledger. That is the point.
 
 | Status | Rows |
 |---|---|
-| VERIFIED | 37 |
+| VERIFIED | 38 |
 | CLAIMED | 3 |
 | FAKE | 0 |
 | RETRACTED | 2 |
-| **total** | **42** |
+| **total** | **43** |
 
 These counts are checked against the rows below by
 `test_ledger_scoreboard_matches_its_rows`, because this table had already
@@ -108,7 +108,7 @@ perturbations produced a failure. No repository file was modified to do it.
 
 | # | What we say | What is actually true | Where the gap is | What to do | Status | Command |
 |---|---|---|---|---|---|---|
-| C01 | README:180, CLAUDE.md:131 — "MCP Tools (49 total)" | `server.py` defines exactly 49 `@mcp.tool()` functions | — | nothing | **VERIFIED** | `pytest tests/test_claims.py -k C01` |
+| C01 | README / CLAUDE.md — "MCP Tools (50 total)" *(49 until v2.11 added `adjudicate_apology_gate`)* | `server.py` defines exactly 50 `@mcp.tool()` functions | — | nothing | **VERIFIED** | `pytest tests/test_claims.py -k C01` |
 | C02 | README presents its tool tables as the tool surface | those tables cover 41. `write_soliloquy`, `read_soliloquy`, `list_intents`, `get_intent`, `add_intent`, `update_intent`, `remove_intent`, `compile_intent_to_skill` appear nowhere in README | a "49 total" heading with 41 rows under it | add Soliloquy (2) and Intent Config (6) sections to README | **VERIFIED** | `pytest tests/test_claims.py -k C02` |
 | C03 | CLAUDE.md documents the tool surface for the agent working on this repo | all 49 are named | — | nothing | **VERIFIED** | `pytest tests/test_claims.py -k C03` |
 | C04 ✅ | CLAUDE.md:88 — used to say "`server.py` - MCP server with 37 tools" | **Was stale by 12** — not updated when v2.2–v2.4 added tools. **Repaired** (commit `31c5ea5`): CLAUDE.md:88 now reads 49, agreeing with the code. This row itself then rotted the same way — it kept quoting the old sentence and presenting "37 → 49" as pending long after the fix landed, caught by the 2026-07-29 verification sweep. The sentence is the claim, including this one | — | nothing | **VERIFIED** *(repaired; row prose corrected 2026-07-29)* | `pytest tests/test_claims.py -k C04` |
@@ -120,6 +120,7 @@ perturbations produced a failure. No repository file was modified to do it.
 | C10 ✅ | `add_enforcement_rule` docstring — precondition `type` ∈ {`tool_called_this_turn`, `tool_not_called_this_turn`, `staged_files_coupling`} | **Was FAKE** — `enforcement.py` also accepts `tool_input_glob`, added by in-flight v2.8 work without the docstring; the agent is the only caller and could not discover it. **Repaired during this pass:** the docstring now lists it with its `field` / `deny_globs` arguments, and CLAUDE.md's precondition set matches | — | nothing | **VERIFIED** *(repaired during this pass)* | `pytest tests/test_claims.py -k C10` |
 | C30 | the FastAPI self-description at `/docs` / `/openapi.json` presents itself as the API's endpoint map | it advertised `/api/compiled-skills` and a `/skills` UI page — **routes that never existed**; both returned 404 when used as documented. A third ghost, `/api/projects/{id}/catalogue`, was the wrong parameter template for the real `/api/projects/{project_id}/catalogue` — caught by this row's own test the day it was written | the description block was prose nobody parsed, so it rotted independently of the routes | description now names only real routes, and the test extracts every backtick path from it and resolves each against `app.routes` | **VERIFIED** *(repaired 2026-07-29)* | `pytest tests/test_claims.py -k C30` |
 | C31 | README v2.9 / CLAUDE.md hook table — the apology gate: an apology in the assistant's turn denies every tool except `add_lesson` until a lesson is written | true, and until 2026-07-29 it was true **and completely undocumented** — the gate shipped in the deployed hook (April, `523dd60`) with zero mentions in README or CLAUDE.md. The operator's question about "nothing is automatic" surfaced the gap. Detection is seven word-boundary regexes on the current turn's assistant text — keyword, not semantic; README now says exactly that | the docs claimed "nothing is automatic" while the most self-referential mechanism in the system enforced automatic capture at failure moments | documented as v2.9; the test pins the README's stated trigger list to `APOLOGY_PATTERNS` in the shipped hook so prose and gate cannot drift apart | **VERIFIED** | `pytest tests/test_claims.py -k C31` |
+| C32 | v2.11 — the apology gate has a reachable second exit and every gate event leaves an append-only audit record | the armed gate permits `add_lesson`, `adjudicate_apology_gate` and tool-discovery calls (gating discovery gated the exits themselves — a real deadlock, latent since v2.9); a `not_apology` verdict opens only its own session; an `apology` verdict does NOT bypass capture; denials from the gate AND the data rules, compliances, adjudications and human bypasses all append to `gate_audit.jsonl` | a widened tier, quote-stripper, first-person window, denial counter and advisory-degrade valve were built, red-teamed, and CUT: between them they short-circuited every data rule, crashed the hook into a silent bypass, and stopped `you're right` from firing. The shipped version is the subset that survived | nothing — the cut is recorded so it is not rebuilt | **VERIFIED** | `pytest tests/test_pre_tool_dispatcher.py -k ApologyGateExitsAndAudit tests/test_adjudicate_tool.py -q` |
 
 ## B. REM — a subsystem that reports success while doing nothing
 
@@ -226,7 +227,7 @@ Blocking. Not guessable.
 - `mgcp-backup --restore` prints "Restored to: X" with exit 0 even when the archive's top dir wasn't named `.mgcp` and nothing landed at X (undocumented flag combination only; the documented round-trip works).
 - `backup.py` is the one store-touching module that ignores `MGCP_DATA_DIR` (argparse default is hardcoded `~/.mgcp`).
 - Line-number citations in ledger cells and README prose drift on every edit (C11/C12/C27 anchors, ~14 "What we say" citations, README's `init_project.py:720`). The quoted sentences all still exist; only the numbers moved. Prefer symbol/heading anchors when next touched.
-- E04 still needs the one test it names: drive `add_enforcement_rule` → JSON file → real hook subprocess. And a denied tool call currently leaves no trace — a one-line append-only deny log would make D-row claims upgradeable from recorded evidence.
+- E04 still needs the one test it names: drive `add_enforcement_rule` → JSON file → real hook subprocess. ~~And a denied tool call currently leaves no trace~~ — the append-only deny log shipped in v2.11 (`gate_audit.jsonl`, row C32); future blocks are recorded evidence.
 
 - ~~`Lesson.parent_id` and `Lesson.related_ids` are marked deprecated~~ — done
   2026-07-29. `related_ids` is gone (every live id was already in

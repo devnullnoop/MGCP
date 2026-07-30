@@ -56,6 +56,26 @@ ENFORCEMENT_CONFIG = Path(
     )
 )
 
+GATE_AUDIT_FILE = Path(
+    os.environ.get("MGCP_DATA_DIR", str(Path.home() / ".mgcp"))
+) / "gate_audit.jsonl"
+
+
+def _audit(event: dict) -> None:
+    """Append one line to the gate audit log. Fails silently: the audit is
+    an instrument, and losing a line must never change an enforcement
+    decision. Before this existed a denied tool call left no trace at all."""
+    try:
+        import datetime
+
+        event["ts"] = datetime.datetime.now(datetime.UTC).isoformat()
+        GATE_AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(GATE_AUDIT_FILE, "a") as f:
+            f.write(json.dumps(event) + "\n")
+    except Exception:
+        pass
+
+
 SHELL_SEPARATORS = {"&&", "||", "&", ";", ";;", "|", "(", ")", "{", "}"}
 # `git` at a command boundary. Applied to raw text only when tokenizing fails.
 _GIT_AT_BOUNDARY_RE = re.compile(r"(?:^|[\s;&|(){}])git(?=\s)")
@@ -70,6 +90,16 @@ _GIT_RAW_LOOKAHEAD = 6
 BYPASS_ALL = "*"
 APOLOGY_BYPASS_SCOPE = "apology"
 ADD_LESSON_TOOL = "mcp__mgcp__add_lesson"
+ADJUDICATE_TOOL = "mcp__mgcp__adjudicate_apology_gate"
+
+# Tool-discovery calls, which a deferred-tool harness must make BEFORE it can
+# call add_lesson at all. Gating discovery gates the exits themselves, which
+# turns the gate into a deadlock with the key locked inside -- observed on
+# 2026-07-30 taking down a whole verification run. These calls cannot mutate
+# state, so exempting them costs nothing. Stateless by design: the earlier
+# attempt at a denial counter with an advisory-degrade valve was measured and
+# cut, because it disabled every OTHER enforcement rule as a side effect.
+DISCOVERY_TOOLS = {"ToolSearch", "ListMcpResourcesTool", "ReadMcpResourceTool"}
 
 # Apology markers that must immediately trigger an add_lesson call.
 # Rule: if the assistant's current turn contains any of these patterns,
@@ -333,10 +363,20 @@ def _load_rules() -> list:
 
 
 def _load_state() -> dict:
+    """Load per-turn state, or {} if it is unusable.
+
+    The isinstance check is load-bearing: workflow_state.json is
+    agent-writable, and a valid-JSON non-object (an array, a string, a
+    number) parses cleanly and then raises on .get() -- crashing the hook
+    PAST the rule loop, which the harness reads as allow. Malformed state
+    must degrade to "no state", never to "no enforcement".
+    """
     try:
         if STATE_FILE.exists():
             with open(STATE_FILE) as f:
-                return json.load(f)
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                return loaded
     except (json.JSONDecodeError, OSError):
         pass
     return {}
@@ -346,7 +386,17 @@ def _allow():
     sys.exit(0)
 
 
-def _deny(reasons: list):
+def _fail_open(exc: Exception):
+    """Last-resort handler. The hook fails open by design -- enforcement is a
+    net, not a tripwire -- but a silent fail-open defeats the audit log, so
+    the crash is recorded before the call is allowed."""
+    _audit({"event": "hook_error", "error": repr(exc)[:300]})
+    sys.exit(0)
+
+
+def _deny(reasons: list, audit: dict | None = None):
+    if audit is not None:
+        _audit({"event": "deny", **audit})
     header = "MGCP enforcement blocked this tool call:\n\n"
     body = "\n\n".join(reasons)
     footer = (
@@ -394,19 +444,58 @@ def main():
     # independently of enforcement_rules.json — this is a first-class
     # gate, not a data rule, because its trigger is assistant text not a
     # tool arg.
+    session_id = hook_input.get("session_id", "")
     if (
-        tool_name != ADD_LESSON_TOOL
+        tool_name not in (ADD_LESSON_TOOL, ADJUDICATE_TOOL)
+        and tool_name not in DISCOVERY_TOOLS
+        and APOLOGY_BYPASS_SCOPE not in bypass_scopes
+        and ADD_LESSON_TOOL not in (state.get("turn_tools_called") or [])
+    ):
+        # An adjudication speaks only for the session that recorded it:
+        # workflow_state.json is shared across concurrent sessions, so an
+        # unscoped verdict would open every one of them.
+        # Defensive: workflow_state.json is agent-writable, and a crash here
+        # means rc=1 with empty stdout, which the harness reads as ALLOW --
+        # a silent, unaudited bypass. A malformed value must read as "no
+        # adjudication" (fail closed: keep denying), never as an exception.
+        adjudication = state.get("turn_apology_adjudication")
+        if not isinstance(adjudication, dict):
+            adjudication = {}
+        adj_session = adjudication.get("session_id")
+        if not isinstance(adj_session, str):
+            adj_session = ""
+        # Exact match only. A lenient "" means "applies to everyone", which a
+        # forged or malformed session_id could reach by type confusion; the
+        # single-session case still works because both sides are then "".
+        adj_applies = (
+            adjudication.get("verdict") == "not_apology"
+            and adj_session == (session_id if isinstance(session_id, str) else "")
+        )
+        if not adj_applies:
+            transcript_path = hook_input.get("transcript_path", "")
+            text = _current_turn_assistant_text(transcript_path)
+            if _has_apology(text):
+                _deny([
+                    "[apology-requires-add-lesson] You apologized in this "
+                    "turn. Two exits: (1) COMPLY -- call "
+                    "mcp__mgcp__add_lesson capturing what you should do "
+                    "differently next time; or (2) CONTEST -- call "
+                    "mcp__mgcp__adjudicate_apology_gate with the flagged "
+                    "text, a verdict and your reasoning, which goes on the "
+                    "audit record. Bypass: include MGCP_BYPASS:apology in "
+                    "the next user prompt."
+                ], audit={"gate": "apology", "tool_denied": tool_name,
+                          "session_id": session_id})
+    elif (
+        tool_name == ADD_LESSON_TOOL
         and APOLOGY_BYPASS_SCOPE not in bypass_scopes
         and ADD_LESSON_TOOL not in (state.get("turn_tools_called") or [])
     ):
         transcript_path = hook_input.get("transcript_path", "")
         if _has_apology(_current_turn_assistant_text(transcript_path)):
-            _deny([
-                "[apology-requires-add-lesson] You apologized in this turn. "
-                "Before any other tool call, call mcp__mgcp__add_lesson "
-                "capturing what you should do differently next time. "
-                "Bypass: include MGCP_BYPASS:apology in the next user prompt."
-            ])
+            _audit({"event": "comply", "gate": "apology",
+                    "session_id": session_id,
+                    "lesson_id": (tool_input or {}).get("id", "")})
 
     if not rules:
         _allow()
@@ -451,9 +540,16 @@ def main():
             denials.append(f"[{rule.get('name', '?')}] {reason}\n{details}")
 
     if denials:
-        _deny(denials)
+        _deny(denials, audit={
+            "gate": "rules", "tool_denied": tool_name, "session_id": session_id,
+            "rules": [d.split("]")[0].lstrip("[") for d in denials]})
     _allow()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:  # never let a crash silently allow a tool call
+        _fail_open(exc)

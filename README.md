@@ -179,7 +179,7 @@ mgcp-bootstrap
 mgcp-dashboard
 ```
 
-## MCP Tools (49 total)
+## MCP Tools (50 total)
 
 ### Lesson Discovery (5)
 | Tool | Purpose |
@@ -267,6 +267,12 @@ Data-driven gates for the PreToolUse hook. Edits take effect on the next tool ca
 | `update_enforcement_rule` | Change fields on an existing rule |
 | `remove_enforcement_rule` | Delete a rule |
 | `toggle_enforcement_rule` | Enable/disable without deleting |
+
+### Gate Adjudication (1)
+The second exit of the apology gate (v2.11): contest a tripwire fire on the record instead of being hard-blocked.
+| Tool | Purpose |
+|------|---------|
+| `adjudicate_apology_gate` | Record a verdict (`not_apology` opens the gate for the turn; `apology` keeps it shut until `add_lesson`) with mandatory reasoning, appended to the audit log |
 
 ### Intent Config (6)
 The routing prompt is data. These tools edit `~/.mgcp/intent_config.json` from chat; the next session's hook injection picks up the change.
@@ -375,6 +381,24 @@ This is the closest thing MGCP has to a self-improving loop, stated carefully: t
 The v2.3 gate's detector needed hardening. Quote-aware tokenization alone was not enough, and three shapes walked straight past the gate until 2026-07-29, when replaying a commit this repo's own gate had just allowed exposed all three. A newline is a command separator, but `shlex` with `whitespace_split` consumes it, so `cd /repo` ⏎ `git commit` tokenized as one command and `git` no longer sat at a command boundary — `&&` was handled, the newline every multi-line block uses was not. An unterminated quote made the detector report "not a git command", so any message containing an apostrophe (`the project's fix`) turned the git gates off. And global flags pushed the subcommand one slot along, so `git -C /path commit` read its subcommand as `-C` and matched nothing.
 
 Detection now runs per line, skips git's global flags, and **fails closed** when a line cannot be tokenized: a command the detector cannot parse is not evidence that the command is safe. Failing closed stays scoped to git — `echo don't` is still allowed — because blocking everything unparseable would stop unrelated work. Both `enforcement.py` and the stdlib-only hook carry the fix, and the shared contract suite now exercises every one of these shapes; it previously tested only single-line, balanced-quote commands, which is why one bug lived in two implementations and both suites stayed green. **Upgrading the package does not redeploy hooks** — run `mgcp-init --force` to pick this up, or an existing install keeps the vulnerable detector.
+
+### v2.11: a second exit, and a record
+
+The v2.9 gate had one exit: write the lesson. Two problems surfaced when it was tested properly.
+
+**It could deadlock.** Both the comply exit and any contest exit are *tool calls*, and in a harness that loads tool schemas on demand, reaching them requires a discovery call — which the gate was also denying. An agent could be locked in a room with the key inside; only a human `MGCP_BYPASS` freed it. This was latent in v2.9 and became likely the moment the tripwire widened.
+
+**A denial left no trace.** Nothing recorded that the gate had fired, so no claim about enforcement could ever be graded from evidence.
+
+v2.11 adds exactly three things, and each one survived adversarial review:
+
+1. **Discovery calls are never gated** (`ToolSearch`, `ListMcpResourcesTool`, `ReadMcpResourceTool`). Stateless, exact-match, and it cannot mutate anything. This is the whole deadlock fix.
+2. **A second exit**: `adjudicate_apology_gate` records a verdict, the flagged text, and ≥20 characters of reasoning to the audit log. `not_apology` opens the gate for *that session only*; `apology` keeps it shut until the lesson is written — attesting "genuine" is never a way around capture.
+3. **An append-only audit log** at `~/.mgcp/gate_audit.jsonl`: every denial (gate *and* data rules), every compliance with its lesson id, every adjudication with its reasoning, every human bypass. REM's `gate_audit_review` summarises it and surfaces contested verdicts; SessionStart warns on a contest-rate spike.
+
+**What was built and deliberately cut.** A widened acknowledgment tier, a quote-and-code stripper, a first-person sentence window, a per-turn denial counter, and an advisory-degrade valve were all implemented and then removed after red-teaming. They produced six confirmed defects between them — the valve short-circuited *every other enforcement rule*, a malformed counter crashed the hook into a silent unaudited bypass, and the quote-stripper's apostrophe handling stopped `you're right` from firing at all. The reduction is the result, not a compromise: each mechanism added to handle a failure mode generated two more.
+
+The control principle, transferable beyond MGCP: you don't need a perfect classifier if you can force the agent to commit to an auditable attestation. Detection stays cheap and imperfect; judgment is accountable; override remains physically human-only. And an enforcement layer needs its exits to be *reachable* — a gate whose escape hatch is behind the gate is a trap.
 
 ### Current hooks
 

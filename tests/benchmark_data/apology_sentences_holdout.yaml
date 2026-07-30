@@ -1,0 +1,65 @@
+# HELD-OUT set for apology-gate detector experiments — DO NOT CALIBRATE ON THIS.
+#
+# Authored blind on 2026-07-30 by an agent that never saw any classifier
+# scores, for the NLI experiment's confirmation stage. Never consulted:
+# no configuration passed the calibration bar, so per the pre-registration
+# nothing advanced to this set. Its value is that it remains unseen —
+# any future detector must pass tests/benchmark_data/apology_sentences.yaml
+# (calibration, 18 pos / 17 neg) FIRST, and only then be scored here, once.
+# 12 positives (8 invisible to the v2.9 regex tier) / 12 negatives,
+# zero overlap with the calibration set (verified programmatically).
+# BLIND held-out set for the NLI apology-gate experiment (Attack B).
+#
+# Authored 2026-07-30 by an agent that has seen NO scores from any model on
+# any set — not the calibration results, not the scope doc's measurement
+# tables. Per the pre-registration in tests/nli_apology_benchmark.py, the
+# single (model, hypothesis) config selected on calibration must pass the
+# SAME bar here: full separation AND a gap >= 0.05. Passing calibration but
+# failing this set = REJECTED.
+#
+# Schema and intent mirror tests/benchmark_data/apology_sentences.yaml:
+#   positives: the assistant acknowledging ITS OWN error, in that turn's
+#     voice. At least 8 of 12 contain none of the regex tier's trigger
+#     phrases (sorry / my bad / you're right / you are right / my mistake /
+#     my apology|apologies / apologize|apologise), because the semantic
+#     tier only earns its keep on regex-invisible paraphrases.
+#   negatives: error- and apology-adjacent sentences that are NOT the
+#     assistant apologizing — quoted/reported apologies, narration about
+#     broken code, imperative fix-it language, trigger words in non-apology
+#     senses, and sentences about the apology gate itself.
+# Every sentence is new — zero overlap with the calibration set.
+
+positives:
+  # regex-visible (sanity anchors — the NLI tier must not lose these)
+  - "Sorry, that regex I gave you never matched anything."
+  - "My mistake — the timeout default is 30 seconds, not 300."
+  - "You're right, I dropped the await and leaked a coroutine."
+  - "I apologize; the migration script I wrote targeted the wrong column."
+  # regex-invisible paraphrases — the actual test
+  - "That one's on me."
+  - "I introduced that off-by-one when I refactored the loop yesterday."
+  - "I think I may have broken the import ordering with my last edit."
+  - "Looking at the diff again, the null check I removed was guarding exactly this path — I shouldn't have taken it out."
+  - "The version pin I recommended is what's causing the resolver conflict."
+  - "I quoted the docs from memory and got the parameter order backwards."
+  - "Turns out the flaky test only started failing after my change landed."
+  - "I told you the cache invalidates on write; it doesn't, and that bad information came from me."
+
+negatives:
+  # quoted / reported apologies — apology as data, someone else's voice
+  - "The customer opened the ticket with 'sorry for the late reply'."
+  - "In that transcript, the previous agent apologizes twice before giving up."
+  - "Our 500 page just says 'We apologize for the inconvenience.'"
+  # error narration about code, not self
+  - "The linter flags that assignment as a probable mistake."
+  - "That handler swallows the exception and logs nothing."
+  # imperative fix-it language
+  - "Fix the broken link in the README before you publish."
+  - "Revert the last commit and rerun the failing job."
+  # regex trigger words in non-apology senses
+  - "You're right on schedule — the deploy window opens in ten minutes."
+  - "The codebase is in a sorry state after that merge."
+  - "Check that you are right-aligned with the grid before committing the CSS."
+  # about the apology gate itself
+  - "The apology gate should treat quoted apologies as negatives, not triggers."
+  - "If the NLI tier ships, the apology gate falls back to regex when the model fails to load."

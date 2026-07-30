@@ -16,7 +16,12 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "mcp>=1.0.0",
+    # Upper bound is load-bearing: mcp 2.0.0 removed mcp.server.fastmcp,
+    # which server.py imports. CI installs the newest match, so an
+    # unbounded pin turned every server-importing test into a collection
+    # error while local envs on 1.x stayed green. Migrating to the 2.x
+    # API is real work; the bound buys the time to do it deliberately.
+    "mcp>=1.0.0,<2.0.0",
     "networkx>=3.2",
     "numpy>=1.26.0",  # onnxruntime conflict no longer applies (migrated from ChromaDB to Qdrant)
     "qdrant-client>=1.12.0",  # Vector store - local mode or server mode with same API

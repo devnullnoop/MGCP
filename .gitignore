@@ -61,8 +61,15 @@ data/
 # Users can copy this to their own projects
 # See examples/ for clean templates
 
-# Internal scripts (not for distribution)
-scripts/
+# Internal scripts (not for distribution). NOTE: 'scripts/*' not
+# 'scripts/' -- git cannot re-include a file whose parent DIRECTORY
+# is excluded, so the negation below only works against a glob.
+scripts/*
+# ...except the repair tool users are told to run. server.py and models.py
+# both name this path in error messages shown to the operator, and
+# tests/test_tool_call_envelope.py loads it, so excluding it published an
+# instruction pointing at a file nobody who clones the repo has.
+!scripts/clean_tool_call_envelopes.py
 
 # Project-specific Claude instructions (users create their own)
 CLAUDE.md

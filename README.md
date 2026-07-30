@@ -398,6 +398,8 @@ v2.11 adds exactly three things, and each one survived adversarial review:
 
 **What was built and deliberately cut.** A widened acknowledgment tier, a quote-and-code stripper, a first-person sentence window, a per-turn denial counter, and an advisory-degrade valve were all implemented and then removed after red-teaming. They produced six confirmed defects between them — the valve short-circuited *every other enforcement rule*, a malformed counter crashed the hook into a silent unaudited bypass, and the quote-stripper's apostrophe handling stopped `you're right` from firing at all. The reduction is the result, not a compromise: each mechanism added to handle a failure mode generated two more.
 
+A build log of this whole effort — the two detectors that were measured and rejected, the five mechanisms that were built and deleted, and the deadlock that cost three verification runs — is in [docs/apology-gate-what-worked.md](docs/apology-gate-what-worked.md).
+
 The control principle, transferable beyond MGCP: you don't need a perfect classifier if you can force the agent to commit to an auditable attestation. Detection stays cheap and imperfect; judgment is accountable; override remains physically human-only. And an enforcement layer needs its exits to be *reachable* — a gate whose escape hatch is behind the gate is a trap.
 
 ### Current hooks

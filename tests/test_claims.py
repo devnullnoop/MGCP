@@ -262,7 +262,9 @@ def test_C08_version_strings_agree():
     pyproject_version = _pyproject()["project"]["version"]
     init_version = re.search(r'__version__\s*=\s*"([^"]+)"',
                              (SRC / "__init__.py").read_text()).group(1)
-    claude_status = re.search(r"\*\*Status\*\*:\s*v([0-9.]+)", CLAUDE_MD.read_text()).group(1)
+    claude_status = re.search(
+        r"\*\*Status\*\*:.*?package version ([0-9.]+)", CLAUDE_MD.read_text()
+    ).group(1)
     assert pyproject_version == init_version == claude_status, (
         "version strings disagree: "
         f"pyproject.toml={pyproject_version}, mgcp/__init__.py={init_version}, "

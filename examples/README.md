@@ -8,13 +8,15 @@ The `claude-hooks/` directory contains templates for automatic session initializ
 
 ### Available Hooks
 
-| Hook | Event | Purpose |
-|------|-------|---------|
-| `session-init.py` | SessionStart | Load project context, inject MGCP usage instructions |
-| `git-reminder.py` | UserPromptSubmit | Detect "commit/push/git" keywords, remind to query lessons |
-| `catalogue-reminder.py` | UserPromptSubmit | Detect library/security/decision mentions, remind to catalogue |
-| `mgcp-reminder.sh` | PostToolUse (Edit/Write) | Remind to save lessons after code changes |
-| `mgcp-precompact.sh` | PreCompact | Critical reminder to save before context compression |
+| Hook | Event | Type | Purpose |
+|------|-------|------|---------|
+| `session-init.py` | SessionStart | advisory | Load project context, inject the session-start bootstrap checklist |
+| `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Keyword gates and intent routing from `~/.mgcp/intent_config.json`, scheduled reminders, per-turn enforcement state reset |
+| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Evaluates `~/.mgcp/enforcement_rules.json` on every tool call and denies tools whose preconditions are unsatisfied |
+| `post-tool-dispatcher.py` | PostToolUse | advisory | Knowledge-capture checkpoint after Edit/Write, error detection after Bash, per-turn tool tracking |
+| `mgcp-precompact.py` | PreCompact | advisory | Critical reminder to save context before compression |
+
+The old single-purpose regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `claude-hooks/legacy/` and superseded by the dispatchers.
 
 ### Setup
 
@@ -34,21 +36,28 @@ Note: The `mgcp-init` command is strongly recommended as it generates the hooks 
 
 **SessionStart** (`session-init.py`):
 - Fires when a new session starts
-- Injects instructions telling Claude to load project context and query lessons
+- Injects the bootstrap checklist (read_soliloquy / get_project_context / query_lessons)
+- Detects stale hook references in settings.json and overdue REM operations
 
-**UserPromptSubmit** (`git-reminder.py`):
-- Fires when user sends any message
-- Checks for git-related keywords (commit, push, git, pr, merge)
-- Injects reminder to query lessons before git operations
+**UserPromptSubmit** (`user-prompt-dispatcher.py`):
+- Fires when the user sends any message
+- Applies hard keyword gates and intent routing loaded from `~/.mgcp/intent_config.json`
+- Delivers scheduled reminders and resets per-turn enforcement state
 - This is the key to making lessons **proactive** rather than passive
 
-**PostToolUse** (`mgcp-reminder.sh`):
-- Fires after Edit/Write tool calls
-- Short reminder to save lessons when learning something new
+**PreToolUse** (`pre-tool-dispatcher.py`) — the only *enforcing* hook:
+- Fires before every tool call
+- Evaluates the data-driven rules in `~/.mgcp/enforcement_rules.json` and returns a deny decision when preconditions are unsatisfied — the harness then refuses to run the tool
+- Without this entry in settings.json there is **no enforcement at all**, only advisory reminders
 
-**PreCompact** (`mgcp-precompact.sh`):
+**PostToolUse** (`post-tool-dispatcher.py`):
+- Fires after every tool call
+- Edit/Write triggers a knowledge-capture checkpoint; Bash triggers error detection
+- Records each tool name for PreToolUse `tool_called_this_turn` preconditions
+
+**PreCompact** (`mgcp-precompact.py`):
 - Fires before context window compression
-- Critical warning to save all lessons before context is lost
+- Critical warning to save context and write a soliloquy before context is lost
 
 ## MCP Server Configuration
 

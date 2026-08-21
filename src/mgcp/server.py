@@ -103,6 +103,7 @@ async def _ensure_initialized() -> tuple[
 
         logger.info("Initializing MGCP server...")
 
+        shared_qdrant_client = None
         try:
             _store = LessonStore()
 
@@ -160,6 +161,15 @@ async def _ensure_initialized() -> tuple[
 
         except Exception as e:
             logger.error(f"Failed to initialize MGCP server: {e}")
+            # Release the Qdrant storage lock and reset partially-set globals
+            # so the next tool call can retry initialization from scratch
+            # instead of failing forever on "Storage folder already accessed".
+            if shared_qdrant_client is not None:
+                try:
+                    shared_qdrant_client.close()
+                except Exception:
+                    pass
+            _store = _vector_store = _catalogue_vector = _graph = _telemetry = None
             raise
 
         return _store, _vector_store, _catalogue_vector, _graph, _telemetry
@@ -406,6 +416,10 @@ async def add_lesson(
         tags: Categorization tags for filtering (optional)
         parent_id: Parent lesson ID for hierarchy (optional, empty string for root)
     """
+    id_error = _validate_lesson_id(id)
+    if id_error:
+        return id_error
+
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
 
     # Normalize empty strings to None
@@ -515,6 +529,10 @@ async def link_lessons(
     """
     from .models import Relationship
 
+    type_error = _validate_relationship_type(relationship_type)
+    if type_error:
+        return type_error
+
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
 
     lesson_a = await store.get_lesson(lesson_id_a)
@@ -537,11 +555,14 @@ async def link_lessons(
         bidirectional=bidirectional
     )
 
-    # Add to lesson_a's relationships (avoid duplicates)
-    existing_targets = [r.target for r in lesson_a.relationships]
-    if lesson_id_b not in existing_targets:
+    # Add to lesson_a's relationships (avoid duplicates of the same typed edge;
+    # different types between the same pair are meaningful and allowed)
+    added_any = False
+    existing_edges = {(r.target, r.type) for r in lesson_a.relationships}
+    if (lesson_id_b, relationship_type) not in existing_edges:
         lesson_a.relationships.append(new_rel)
         await store.update_lesson(lesson_a)
+        added_any = True
 
     # Add reverse relationship if bidirectional
     if bidirectional:
@@ -564,10 +585,17 @@ async def link_lessons(
             bidirectional=bidirectional
         )
 
-        existing_targets_b = [r.target for r in lesson_b.relationships]
-        if lesson_id_a not in existing_targets_b:
+        existing_edges_b = {(r.target, r.type) for r in lesson_b.relationships}
+        if (lesson_id_a, reverse_type) not in existing_edges_b:
             lesson_b.relationships.append(reverse_rel)
             await store.update_lesson(lesson_b)
+            added_any = True
+
+    if not added_any:
+        return (
+            f"'{lesson_id_a}' and '{lesson_id_b}' are already linked "
+            f"({relationship_type}). No change made."
+        )
 
     # Update graph
     graph.add_lesson(lesson_a)
@@ -816,7 +844,12 @@ async def update_project_todo(
 
     todo = context.todos[todo_index]
 
-    if status and status in ("pending", "in_progress", "completed", "blocked"):
+    if status:
+        if status not in ("pending", "in_progress", "completed", "blocked"):
+            return (
+                f"Invalid status '{status}'. "
+                "Valid: pending, in_progress, completed, blocked"
+            )
         todo.status = status
     if notes:
         todo.notes = notes
@@ -1172,66 +1205,70 @@ async def remove_catalogue_item(
         return f"Project not found: {project_path}"
 
     cat = context.catalogue
-    removed = False
+    # Track (item_type, vector_identifier) for each removed object so the
+    # Qdrant delete uses the same doc-ID derivation the _add_* methods used.
+    # Deriving from the raw identifier misses error/coupling/custom items
+    # (added by signature[:30] / files[0] / item.item_type+title) and leaves
+    # stale vectors that search_catalogue keeps returning.
+    vector_ids: list[tuple[str, str]] = []
 
     if item_type == "arch":
-        original_len = len(cat.architecture_notes)
-        cat.architecture_notes = [n for n in cat.architecture_notes if n.title != identifier]
-        removed = len(cat.architecture_notes) < original_len
+        kept = [n for n in cat.architecture_notes if n.title != identifier]
+        vector_ids = [("arch", n.title) for n in cat.architecture_notes if n.title == identifier]
+        cat.architecture_notes = kept
     elif item_type == "security":
-        original_len = len(cat.security_notes)
-        cat.security_notes = [n for n in cat.security_notes if n.title != identifier]
-        removed = len(cat.security_notes) < original_len
+        kept = [n for n in cat.security_notes if n.title != identifier]
+        vector_ids = [("security", n.title) for n in cat.security_notes if n.title == identifier]
+        cat.security_notes = kept
     elif item_type == "framework":
-        original_len = len(cat.frameworks)
-        cat.frameworks = [d for d in cat.frameworks if d.name != identifier]
-        removed = len(cat.frameworks) < original_len
+        kept = [d for d in cat.frameworks if d.name != identifier]
+        vector_ids = [("framework", d.name) for d in cat.frameworks if d.name == identifier]
+        cat.frameworks = kept
     elif item_type == "library":
-        original_len = len(cat.libraries)
-        cat.libraries = [d for d in cat.libraries if d.name != identifier]
-        removed = len(cat.libraries) < original_len
+        kept = [d for d in cat.libraries if d.name != identifier]
+        vector_ids = [("library", d.name) for d in cat.libraries if d.name == identifier]
+        cat.libraries = kept
     elif item_type == "tool":
-        original_len = len(cat.tools)
-        cat.tools = [d for d in cat.tools if d.name != identifier]
-        removed = len(cat.tools) < original_len
+        kept = [d for d in cat.tools if d.name != identifier]
+        vector_ids = [("tool", d.name) for d in cat.tools if d.name == identifier]
+        cat.tools = kept
     elif item_type == "convention":
-        original_len = len(cat.conventions)
-        cat.conventions = [c for c in cat.conventions if c.title != identifier]
-        removed = len(cat.conventions) < original_len
+        kept = [c for c in cat.conventions if c.title != identifier]
+        vector_ids = [("convention", c.title) for c in cat.conventions if c.title == identifier]
+        cat.conventions = kept
     elif item_type == "coupling":
-        original_len = len(cat.file_couplings)
-        cat.file_couplings = [c for c in cat.file_couplings if identifier not in c.files]
-        removed = len(cat.file_couplings) < original_len
+        kept = [c for c in cat.file_couplings if identifier not in c.files]
+        vector_ids = [
+            ("coupling", c.files[0] if c.files else "unknown")
+            for c in cat.file_couplings if identifier in c.files
+        ]
+        cat.file_couplings = kept
     elif item_type == "decision":
-        original_len = len(cat.decisions)
-        cat.decisions = [d for d in cat.decisions if d.title != identifier]
-        removed = len(cat.decisions) < original_len
+        kept = [d for d in cat.decisions if d.title != identifier]
+        vector_ids = [("decision", d.title) for d in cat.decisions if d.title == identifier]
+        cat.decisions = kept
     elif item_type == "error":
-        original_len = len(cat.error_patterns)
-        cat.error_patterns = [e for e in cat.error_patterns if not e.error_signature.startswith(identifier)]
-        removed = len(cat.error_patterns) < original_len
-    elif item_type == "custom" or item_type not in (
-        "arch", "security", "framework", "library", "tool", "convention",
-        "coupling", "decision", "error"
-    ):
-        # Handle custom items - identifier can be "type:title" or just "title"
+        kept = [e for e in cat.error_patterns if not e.error_signature.startswith(identifier)]
+        vector_ids = [
+            ("error", e.error_signature[:30])
+            for e in cat.error_patterns if e.error_signature.startswith(identifier)
+        ]
+        cat.error_patterns = kept
+    else:
+        # Custom items - identifier can be "type:title" or just "title"
         if ":" in identifier:
             custom_type, custom_title = identifier.split(":", 1)
-            original_len = len(cat.custom_items)
-            cat.custom_items = [
-                i for i in cat.custom_items
-                if not (i.item_type == custom_type and i.title == custom_title)
-            ]
-            removed = len(cat.custom_items) < original_len
+            matches = lambda i: i.item_type == custom_type and i.title == custom_title  # noqa: E731
         else:
-            # Search by title only
-            original_len = len(cat.custom_items)
-            cat.custom_items = [i for i in cat.custom_items if i.title != identifier]
-            removed = len(cat.custom_items) < original_len
+            matches = lambda i: i.title == identifier  # noqa: E731
+        kept = [i for i in cat.custom_items if not matches(i)]
+        vector_ids = [(i.item_type, i.title) for i in cat.custom_items if matches(i)]
+        cat.custom_items = kept
 
-    if removed:
+    if vector_ids:
         await store.save_project_context(context)
-        catalogue_vector.remove_item(context.project_id, item_type, identifier)
+        for vec_type, vec_id in vector_ids:
+            catalogue_vector.remove_item(context.project_id, vec_type, vec_id)
         return f"Removed {item_type} item: {identifier}"
     else:
         return f"Item not found: {identifier}"
@@ -1287,7 +1324,17 @@ async def get_catalogue_item(
         items = [e for e in cat.error_patterns if e.error_signature.startswith(identifier)]
         item = items[0] if items else None
     else:
-        return f"Unknown item type: {item_type}"
+        # Custom items, mirroring remove_catalogue_item: item_type may be the
+        # custom type itself, or "custom" with a "type:title" identifier
+        if item_type == "custom" and ":" in identifier:
+            custom_type, custom_title = identifier.split(":", 1)
+        else:
+            custom_type, custom_title = item_type, identifier
+        items = [
+            i for i in cat.custom_items
+            if i.item_type == custom_type and i.title == custom_title
+        ]
+        item = items[0] if items else None
 
     if item:
         return json.dumps(item.model_dump(mode="json"), indent=2, default=str)
@@ -2929,7 +2976,8 @@ Data is stored in ~/.mgcp/ by default.
 """)
             return
         elif sys.argv[1] in ("--version", "-V"):
-            print("mgcp 2.0.0")
+            from . import __version__
+            print(f"mgcp {__version__}")
             return
 
     mcp.run(transport="stdio")

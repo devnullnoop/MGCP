@@ -911,13 +911,40 @@ class TestGetCatalogueItem:
         assert "not found" in result.lower()
 
     @pytest.mark.asyncio
-    async def test_get_unknown_type(self, seeded_project):
+    async def test_get_unknown_type_falls_through_to_custom(self, seeded_project):
+        """A non-built-in type is a custom-type lookup (matching add/remove);
+        with no such item it reports not-found rather than unknown-type."""
         result = await get_catalogue_item(
             project_path="/tmp/test-project",
             item_type="bogus",
             identifier="Whatever",
         )
-        assert "Unknown" in result
+        assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_custom_item_round_trip(self, seeded_project):
+        await add_catalogue_item(
+            project_path="/tmp/test-project",
+            item_type="api_endpoint",
+            title="Login",
+            content="POST /api/login",
+        )
+        # By its own custom type
+        result = await get_catalogue_item(
+            project_path="/tmp/test-project",
+            item_type="api_endpoint",
+            identifier="Login",
+        )
+        parsed = json.loads(result)
+        assert parsed["title"] == "Login"
+        # Via the "custom" alias with a type:title identifier (remove syntax)
+        result = await get_catalogue_item(
+            project_path="/tmp/test-project",
+            item_type="custom",
+            identifier="api_endpoint:Login",
+        )
+        parsed = json.loads(result)
+        assert parsed["title"] == "Login"
 
     @pytest.mark.asyncio
     async def test_get_decision(self, seeded_project):

@@ -248,24 +248,6 @@ class Lesson(SanitizedModel):
         return "\n".join(lines)
 
 
-class LessonSummary(SanitizedModel):
-    """Lightweight lesson summary for listings."""
-
-    id: str
-    trigger: str
-    action: str
-    tags: list[str]
-    usage_count: int
-
-
-class QueryResult(SanitizedModel):
-    """Result from a lesson query."""
-
-    lesson: Lesson
-    score: float = Field(..., description="Similarity score 0-1")
-    source: Literal["semantic", "keyword", "graph"] = "semantic"
-
-
 class ProjectTodo(SanitizedModel):
     """A todo item for a specific project."""
 
@@ -394,40 +376,6 @@ class CommunitySummary(SanitizedModel):
     member_count: int = Field(default=0, description="Count at creation time")
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-
-# ============================================================================
-# VERSION HISTORY MODELS (REM cycle)
-# ============================================================================
-
-
-class LessonVersion(SanitizedModel):
-    """A snapshot of a lesson at a specific version."""
-
-    lesson_id: str
-    version: int
-    trigger: str
-    action: str
-    rationale: str | None = None
-    tags: list[str] = Field(default_factory=list)
-    timestamp: datetime
-    refinement_reason: str | None = None
-    session_id: str | None = None
-
-
-class ContextSnapshot(SanitizedModel):
-    """A snapshot of project context at a point in time."""
-
-    id: int | None = None
-    project_id: str
-    session_number: int
-    timestamp: datetime
-    notes: str | None = None
-    active_files: list[str] = Field(default_factory=list)
-    todos: list["ProjectTodo"] = Field(default_factory=list)
-    recent_decisions: list[str] = Field(default_factory=list)
-    catalogue_hash: str | None = None
-    catalogue_delta: dict | None = None
 
 
 # ============================================================================
@@ -646,14 +594,20 @@ class ProjectContext(SanitizedModel):
             for name, path in list(cat.entry_points.items())[:5]:
                 lines.append(f"  • {name}: `{path}`")
 
-        # Active todos
+        # Active todos, shown with their real index into self.todos —
+        # update_project_todo takes an index into the FULL list (completed
+        # entries included), so displaying positions within the filtered
+        # view would send updates to the wrong todo.
         if self.todos:
-            pending = [t for t in self.todos if t.status in ("pending", "in_progress")]
+            pending = [
+                (i, t) for i, t in enumerate(self.todos)
+                if t.status in ("pending", "in_progress")
+            ]
             if pending:
                 lines.append("\n### Active Todos:")
-                for todo in pending[:5]:
+                for i, todo in pending[:5]:
                     status_icon = "🔄" if todo.status == "in_progress" else "⏳"
-                    lines.append(f"  {status_icon} {todo.content}")
+                    lines.append(f"  {status_icon} [{i}] {todo.content}")
 
         if self.active_files:
             lines.append(f"\n### Working on: {', '.join(self.active_files[:5])}")

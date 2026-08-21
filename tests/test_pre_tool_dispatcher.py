@@ -170,6 +170,37 @@ class TestApologyDetector:
         assert "more of new turn" in text
         assert "OLD TURN" not in text
 
+    def test_current_turn_walks_past_tool_result_user_entries(self, hook_module, tmp_path):
+        """Tool results are type=='user' entries with tool_result content.
+
+        The backward walk must not stop at them: otherwise any tool call
+        (even a denied or discovery-exempt one) hides the apology and
+        reopens the gate mid-turn.
+        """
+        path = tmp_path / "transcript.jsonl"
+        entries = [
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "sorry, my mistake."}]}},
+            # tool_result envelope recorded after a tool call this turn
+            {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "denied"}]}},
+        ]
+        path.write_text("\n".join(json.dumps(e) for e in entries))
+        text = hook_module._current_turn_assistant_text(str(path))
+        assert "sorry" in text
+
+    def test_current_turn_stops_at_real_user_prompt(self, hook_module, tmp_path):
+        """A genuine user prompt (string or text-block content) still ends the turn."""
+        path = tmp_path / "transcript.jsonl"
+        entries = [
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "OLD sorry"}]}},
+            {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "new prompt"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "fresh turn"}]}},
+        ]
+        path.write_text("\n".join(json.dumps(e) for e in entries))
+        text = hook_module._current_turn_assistant_text(str(path))
+        assert "fresh turn" in text
+        assert "OLD sorry" not in text
+
     def test_current_turn_handles_missing_file(self, hook_module, tmp_path):
         assert hook_module._current_turn_assistant_text(str(tmp_path / "nope.jsonl")) == ""
 

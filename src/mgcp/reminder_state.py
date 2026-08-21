@@ -108,65 +108,6 @@ def schedule_reminder(
     return state
 
 
-def increment_counter() -> int:
-    """Increment the call counter and return new value."""
-    state = load_state()
-    state["current_call_count"] = state.get("current_call_count", 0) + 1
-    save_state(state)
-    return state["current_call_count"]
-
-
-def check_and_consume_reminder() -> dict | None:
-    """Check if a scheduled reminder should fire, and consume it if so.
-
-    Call this from the hook on each UserPromptSubmit.
-
-    Returns:
-        dict with reminder data if ready to fire, None otherwise.
-        Keys: message, lesson_ids, workflow_step, task_note
-    """
-    state = load_state()
-    current_call = state.get("current_call_count", 0)
-    now = time.time()
-
-    # Check if reminder threshold reached
-    remind_at_call = state.get("remind_at_call", 0)
-    remind_at_time = state.get("remind_at_time", 0)
-
-    call_ready = remind_at_call > 0 and current_call >= remind_at_call
-    time_ready = remind_at_time > 0 and now >= remind_at_time
-
-    if not call_ready and not time_ready:
-        return None
-
-    # Check if there's any reminder content
-    message = state.get("reminder_message", "")
-    lesson_ids = state.get("lesson_ids", [])
-    workflow_step = state.get("workflow_step", "")
-
-    if not message and not lesson_ids and not workflow_step:
-        return None
-
-    # Build reminder data
-    reminder = {
-        "message": message,
-        "lesson_ids": lesson_ids,
-        "workflow_step": workflow_step,
-        "task_note": state.get("task_note", ""),
-    }
-
-    # Consume the reminder (clear it so it only fires once)
-    state["remind_at_call"] = 0
-    state["remind_at_time"] = 0
-    state["reminder_message"] = ""
-    state["lesson_ids"] = []
-    state["workflow_step"] = ""
-    state["task_note"] = ""
-    save_state(state)
-
-    return reminder
-
-
 def get_status() -> dict:
     """Get current reminder state status for display."""
     state = load_state()
@@ -217,17 +158,6 @@ def reset_state() -> dict:
 # ============================================================================
 # WORKFLOW STATE MANAGEMENT
 # ============================================================================
-
-
-def get_workflow_state() -> dict:
-    """Get the current workflow execution state."""
-    state = load_state()
-    return {
-        "active_workflow": state.get("active_workflow"),
-        "current_step": state.get("current_step"),
-        "steps_completed": state.get("steps_completed", []),
-        "workflow_complete": state.get("workflow_complete", False),
-    }
 
 
 def update_workflow_state(

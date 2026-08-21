@@ -2,6 +2,7 @@
 
 import shutil
 import sys
+import tarfile
 from datetime import datetime
 from pathlib import Path
 
@@ -63,16 +64,43 @@ def restore(backup_path: Path, data_dir: Path = DEFAULT_DATA_DIR, force: bool = 
             "Use --force to overwrite, or backup existing data first."
         )
 
-    # Remove existing if force
-    if data_dir.exists() and force:
-        shutil.rmtree(data_dir)
+    with tarfile.open(backup_path) as tf:
+        members = tf.getmembers()
 
-    # Extract archive
-    shutil.unpack_archive(backup_path, data_dir.parent)
+        # Reject path traversal: absolute paths or members escaping the
+        # extraction root. The 'data' filter (3.12+) enforces this too, but
+        # 3.11 has no filter parameter, so check explicitly for both.
+        extract_root = data_dir.parent.resolve()
+        for member in members:
+            member_path = (extract_root / member.name).resolve()
+            if not member_path.is_relative_to(extract_root):
+                raise ValueError(
+                    f"Unsafe path in backup archive: {member.name!r}"
+                )
 
-    # Handle case where archive contains .mgcp subdirectory
-    extracted = data_dir.parent / ".mgcp"
-    if extracted != data_dir and extracted.exists():
+        # The archive is rooted at the *backed-up* directory's name, which
+        # may differ from the restore target (custom --data-dir). Find it so
+        # the extracted tree can be moved to data_dir regardless.
+        roots = {m.name.split("/", 1)[0] for m in members if m.name not in (".", "")}
+        roots.discard(".")
+        if len(roots) != 1:
+            raise ValueError(
+                f"Expected one top-level directory in backup, found: {sorted(roots)}"
+            )
+        archive_root = roots.pop()
+
+        # Remove existing if force
+        if data_dir.exists() and force:
+            shutil.rmtree(data_dir)
+
+        try:
+            tf.extractall(path=extract_root, filter="data")
+        except TypeError:
+            # Python < 3.11.4: no filter parameter; members were checked above
+            tf.extractall(path=extract_root)
+
+    extracted = data_dir.parent / archive_root
+    if extracted != data_dir:
         if data_dir.exists():
             shutil.rmtree(data_dir)
         extracted.rename(data_dir)

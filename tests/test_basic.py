@@ -174,26 +174,6 @@ class TestQdrantVectorStore:
         # Verify removed
         assert "test-lesson" not in store.get_all_ids()
 
-    def test_search_similar(self, temp_qdrant, sample_lesson):
-        """Test finding similar lessons."""
-        store = QdrantVectorStore(persist_path=temp_qdrant)
-        store.add_lesson(sample_lesson)
-
-        # Add another lesson
-        similar_lesson = Lesson(
-            id="similar-lesson",
-            trigger="test, example, demo",
-            action="This is another test action",
-            rationale="Also for testing",
-            tags=["test"],
-        )
-        store.add_lesson(similar_lesson)
-
-        # Find similar
-        results = store.search_similar("test-lesson", limit=5)
-        assert len(results) > 0
-        assert results[0][0] == "similar-lesson"
-
     def test_rebuild_index(self, temp_qdrant, sample_lesson):
         """Test rebuilding the index from scratch."""
         store = QdrantVectorStore(persist_path=temp_qdrant)
@@ -270,7 +250,7 @@ class TestTypedRelationships:
         assert "lesson-b" in related
 
         # Check typed getter
-        prereqs = graph.get_prerequisites("lesson-a")
+        prereqs = graph.get_by_relationship_type("lesson-a", "prerequisite")
         assert "lesson-b" in prereqs
 
 

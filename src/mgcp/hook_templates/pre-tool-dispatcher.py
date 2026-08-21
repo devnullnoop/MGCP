@@ -243,7 +243,22 @@ def _current_turn_assistant_text(transcript_path: str) -> str:
             continue
         etype = entry.get("type")
         if etype == "user":
-            break
+            # Tool results are recorded as type=="user" entries whose content
+            # is a list of tool_result blocks. Breaking on those lets any tool
+            # call (even a denied one) clear the apology from view and reopen
+            # the gate. Only a genuine user prompt (string content, or a list
+            # containing a text block) ends the current turn.
+            content = (entry.get("message") or {}).get("content")
+            is_real_prompt = isinstance(content, str) or (
+                isinstance(content, list)
+                and any(
+                    isinstance(b, dict) and b.get("type") == "text"
+                    for b in content
+                )
+            )
+            if is_real_prompt:
+                break
+            continue
         if etype != "assistant":
             continue
         msg = entry.get("message") or {}

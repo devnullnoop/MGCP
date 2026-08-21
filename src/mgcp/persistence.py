@@ -5,6 +5,8 @@ import hashlib
 import json
 import logging
 import os
+import threading
+import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -265,6 +267,30 @@ async def repair_rem_state(conn: aiosqlite.Connection) -> int:
     return changed
 
 
+# Stores whose pooled connections must be stopped at interpreter exit.
+# Each pooled aiosqlite connection owns a worker thread; a thread created
+# from a non-daemon context blocks interpreter shutdown until stopped, and
+# a store referenced by a module global (e.g. server._store) never gets
+# garbage-collected to trigger aiosqlite's own __del__ cleanup. Non-daemon
+# threads are joined BEFORE atexit handlers run, so this must use
+# threading._register_atexit (the hook concurrent.futures uses), which
+# fires before that join.
+_live_stores: weakref.WeakSet = weakref.WeakSet()
+
+
+def _stop_pooled_connections() -> None:
+    for store in list(_live_stores):
+        for conn in store._pool:
+            try:
+                conn.stop()  # synchronous, safe without an event loop
+            except Exception:
+                pass
+        store._pool.clear()
+
+
+threading._register_atexit(_stop_pooled_connections)
+
+
 class LessonStore:
     """Async SQLite storage for lessons with connection pooling and transaction safety."""
 
@@ -276,6 +302,7 @@ class LessonStore:
         self._pool: list[aiosqlite.Connection] = []
         self._pool_lock = asyncio.Lock()
         self._max_pool_size = 5
+        _live_stores.add(self)
 
     @asynccontextmanager
     async def _connection(self, *, commit: bool = False) -> AsyncIterator[aiosqlite.Connection]:
@@ -504,19 +531,6 @@ class LessonStore:
             rows = await cursor.fetchall()
             return [self._row_to_lesson(row) for row in rows]
 
-    async def get_lessons_by_tags(self, tags: list[str]) -> list[Lesson]:
-        """Get lessons matching any of the given tags."""
-        async with self._connection() as conn:
-            # SQLite JSON query for tag matching
-            placeholders = " OR ".join(
-                ["EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)" for _ in tags]
-            )
-            cursor = await conn.execute(
-                f"SELECT * FROM lessons WHERE {placeholders}", tags
-            )
-            rows = await cursor.fetchall()
-            return [self._row_to_lesson(row) for row in rows]
-
     async def update_lesson(
         self, lesson: Lesson, refinement_reason: str | None = None
     ) -> None:
@@ -590,13 +604,40 @@ class LessonStore:
             )
 
     async def delete_lesson(self, lesson_id: str) -> bool:
-        """Delete a lesson. Returns True if deleted."""
+        """Delete a lesson. Returns True if deleted.
+
+        Also repairs references left behind: children's parent_id is nulled
+        (they become roots instead of unbrowsable orphans, since the FK is
+        unenforced) and relationships targeting the deleted lesson are
+        stripped so the next graph rebuild does not recreate it as a ghost
+        node.
+        """
         async with self._connection(commit=True) as conn:
             cursor = await conn.execute(
                 "DELETE FROM lessons WHERE id = ?", (lesson_id,)
             )
             deleted = cursor.rowcount > 0
             if deleted:
+                await conn.execute(
+                    "UPDATE lessons SET parent_id = NULL WHERE parent_id = ?",
+                    (lesson_id,),
+                )
+                cursor = await conn.execute(
+                    "SELECT id, relationships FROM lessons WHERE relationships LIKE ?",
+                    (f'%"{lesson_id}"%',),
+                )
+                rows = await cursor.fetchall()
+                for row in rows:
+                    try:
+                        rels = json.loads(row["relationships"]) if row["relationships"] else []
+                    except (TypeError, ValueError):
+                        continue
+                    kept = [r for r in rels if r.get("target") != lesson_id]
+                    if len(kept) != len(rels):
+                        await conn.execute(
+                            "UPDATE lessons SET relationships = ? WHERE id = ?",
+                            (json.dumps(kept), row["id"]),
+                        )
                 logger.info(f"Deleted lesson: {lesson_id}")
             return deleted
 
@@ -930,17 +971,6 @@ class LessonStore:
             rows = await cursor.fetchall()
             return [self._row_to_workflow(row) for row in rows]
 
-    async def delete_workflow(self, workflow_id: str) -> bool:
-        """Delete a workflow. Returns True if deleted."""
-        async with self._connection(commit=True) as conn:
-            cursor = await conn.execute(
-                "DELETE FROM workflows WHERE id = ?", (workflow_id,)
-            )
-            deleted = cursor.rowcount > 0
-            if deleted:
-                logger.info(f"Deleted workflow: {workflow_id}")
-            return deleted
-
     def _row_to_workflow(self, row: aiosqlite.Row) -> Workflow:
         """Convert database row to Workflow model."""
         steps_data = json.loads(row["steps"]) if row["steps"] else []
@@ -1010,18 +1040,6 @@ class LessonStore:
             )
             rows = await cursor.fetchall()
             return [self._row_to_community_summary(row) for row in rows]
-
-    async def delete_community_summary(self, community_id: str) -> bool:
-        """Delete a community summary. Returns True if deleted."""
-        async with self._connection(commit=True) as conn:
-            cursor = await conn.execute(
-                "DELETE FROM community_summaries WHERE community_id = ?",
-                (community_id,),
-            )
-            deleted = cursor.rowcount > 0
-            if deleted:
-                logger.info(f"Deleted community summary: {community_id}")
-            return deleted
 
     def _row_to_community_summary(self, row: aiosqlite.Row) -> CommunitySummary:
         """Convert database row to CommunitySummary model."""

@@ -241,16 +241,19 @@ class RemEngine:
         findings = []
         for pair in pairs:
             similarity = pair.get("similarity", 0)
-            id_a = pair.get("lesson_a", "?")
-            id_b = pair.get("lesson_b", "?")
+            # find_duplicates returns nested {"lesson_1": {id, trigger}, ...}
+            lesson_1 = pair.get("lesson_1") or {}
+            lesson_2 = pair.get("lesson_2") or {}
+            id_a = lesson_1.get("id", "?")
+            id_b = lesson_2.get("id", "?")
 
             findings.append(RemFinding(
                 operation="duplicate_detection",
                 title=f"Potential duplicates ({similarity:.0%}): {id_a} / {id_b}",
                 description=(
                     f"Lessons '{id_a}' and '{id_b}' have {similarity:.0%} semantic similarity.\n\n"
-                    f"A: {pair.get('trigger_a', '')[:100]}\n"
-                    f"B: {pair.get('trigger_b', '')[:100]}"
+                    f"A: {lesson_1.get('trigger', '')[:100]}\n"
+                    f"B: {lesson_2.get('trigger', '')[:100]}"
                 ),
                 options=[
                     {"label": "Merge", "description": "Combine into one lesson"},

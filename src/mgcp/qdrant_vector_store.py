@@ -278,42 +278,6 @@ class QdrantVectorStore:
 
         return matches
 
-    def search_similar(
-        self,
-        lesson_id: str,
-        limit: int = 5,
-    ) -> list[tuple[str, float]]:
-        """Find lessons similar to a given lesson."""
-        # Get the lesson's vector
-        point_id = string_to_uuid(lesson_id)
-        points = self.client.retrieve(
-            collection_name=self.collection_name,
-            ids=[point_id],
-            with_vectors=True,
-        )
-
-        if not points:
-            return []
-
-        vector = points[0].vector
-
-        # Query for similar, excluding self
-        results = self.client.query_points(
-            collection_name=self.collection_name,
-            query=vector,
-            limit=limit + 1,  # +1 to exclude self
-            with_payload=["lesson_id"],
-        )
-
-        matches = []
-        for point in results.points:
-            point_lesson_id = point.payload.get("lesson_id", str(point.id))
-            if point_lesson_id == lesson_id:
-                continue  # Skip self
-            matches.append((point_lesson_id, point.score))
-
-        return matches[:limit]
-
     def get_all_ids(self) -> list[str]:
         """Get all lesson IDs in the store."""
         # Scroll through all points
@@ -541,19 +505,3 @@ class QdrantVectorStore:
             matches.append((community_id, point.score, metadata))
 
         return matches
-
-    def remove_community_summary(self, community_id: str) -> bool:
-        """Remove a community summary from the vector store."""
-        try:
-            collection = self.get_or_create_community_collection()
-            point_id = string_to_uuid(f"community-{community_id}")
-            self.client.delete(
-                collection_name=collection,
-                points_selector=[point_id],
-            )
-            return True
-        except Exception as e:
-            logger.warning(
-                f"Failed to remove community summary '{community_id}': {e}"
-            )
-            return False

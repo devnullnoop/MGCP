@@ -56,9 +56,6 @@
             <div class="text-gray-400">
                 Showing: <span id="showing-count" class="text-white font-medium">0</span>
             </div>
-            <div class="text-gray-400">
-                Graduated: <span id="graduated-count" class="text-amber-400 font-medium">0</span>
-            </div>
         </div>
 
         <!-- Lesson List -->
@@ -133,10 +130,6 @@
                         <div>
                             <label class="block text-xs text-gray-500 mb-1">Last Refined</label>
                             <div id="form-refined" class="text-sm text-gray-300">-</div>
-                        </div>
-                        <div>
-                            <label class="block text-xs text-gray-500 mb-1">Graduated To</label>
-                            <div id="form-graduated" class="text-sm text-gray-300">-</div>
                         </div>
                     </div>
 
@@ -246,7 +239,6 @@
 
             document.getElementById('total-count').textContent = lessons.length;
             document.getElementById('showing-count').textContent = filteredLessons.length;
-            document.getElementById('graduated-count').textContent = lessons.filter(l => l.graduated_to).length;
 
             if (!filteredLessons || filteredLessons.length === 0) {
                 container.innerHTML = `
@@ -278,7 +270,7 @@
                 const isCategory = children.length > 0;
 
                 return `
-                    <div class="bg-brand-panel rounded-lg border border-gray-700 ${root.graduated_to ? 'opacity-60' : ''}">
+                    <div class="bg-brand-panel rounded-lg border border-gray-700">
                         <!-- Root/Category Lesson -->
                         <div class="p-4 ${isCategory ? 'border-b border-gray-700' : ''} hover:bg-white/5 cursor-pointer transition-all" onclick="openLesson('${root.id}')">
                             <div class="flex justify-between items-start">
@@ -287,7 +279,6 @@
                                         <span class="text-brand-cyan font-medium">${escapeHtml(root.id)}</span>
                                         ${isCategory ? '<span class="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded">Category</span>' : ''}
                                         <span class="text-xs text-gray-500">v${root.version}</span>
-                                        ${root.graduated_to ? `<span class="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded">&rarr; ${escapeHtml(root.graduated_to)}</span>` : ''}
                                     </div>
                                     <p class="text-sm text-gray-300">${escapeHtml(root.action)}</p>
                                     ${root.tags && root.tags.length ? `
@@ -307,14 +298,13 @@
                         ${children.length > 0 ? `
                             <div class="divide-y divide-gray-700/50">
                                 ${children.map(child => `
-                                    <div class="p-4 pl-8 hover:bg-white/5 cursor-pointer transition-all ${child.graduated_to ? 'opacity-60' : ''}" onclick="openLesson('${child.id}')">
+                                    <div class="p-4 pl-8 hover:bg-white/5 cursor-pointer transition-all" onclick="openLesson('${child.id}')">
                                         <div class="flex justify-between items-start">
                                             <div class="flex-1">
                                                 <div class="flex items-center gap-2 mb-1">
                                                     <span class="text-gray-400 text-sm">└</span>
                                                     <span class="text-brand-cyan/80 font-medium text-sm">${escapeHtml(child.id)}</span>
                                                     <span class="text-xs text-gray-500">v${child.version}</span>
-                                                    ${child.graduated_to ? `<span class="text-xs bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded">&rarr; ${escapeHtml(child.graduated_to)}</span>` : ''}
                                                 </div>
                                                 <p class="text-sm text-gray-400 ml-5">${escapeHtml(child.action)}</p>
                                             </div>
@@ -352,14 +342,6 @@
             document.getElementById('form-usage').textContent = lesson.usage_count;
             document.getElementById('form-refined').textContent = lesson.last_refined ?
                 new Date(lesson.last_refined).toLocaleString() : '-';
-            document.getElementById('form-graduated').textContent = lesson.graduated_to || '-';
-            if (lesson.graduated_to) {
-                document.getElementById('form-graduated').classList.add('text-amber-400');
-                document.getElementById('form-graduated').classList.remove('text-gray-300');
-            } else {
-                document.getElementById('form-graduated').classList.remove('text-amber-400');
-                document.getElementById('form-graduated').classList.add('text-gray-300');
-            }
 
             // Render relationships
             const relContainer = document.getElementById('form-relationships');

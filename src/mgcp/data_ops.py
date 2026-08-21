@@ -133,11 +133,16 @@ async def import_lessons(
                     continue
                 elif merge_strategy == "overwrite":
                     if not dry_run:
-                        # Delete existing and re-add
-                        if is_duplicate_id:
-                            await store.delete_lesson(lesson_id)
-                        elif is_duplicate_trigger:
-                            await store.delete_lesson(existing_triggers[trigger.lower()])
+                        # Delete existing and re-add. Remove the old vector
+                        # too: on a trigger-duplicate the incoming id differs,
+                        # so the upsert below would leave the old id's vector
+                        # orphaned in Qdrant (searchable but unfetchable).
+                        deleted_id = (
+                            lesson_id if is_duplicate_id
+                            else existing_triggers[trigger.lower()]
+                        )
+                        await store.delete_lesson(deleted_id)
+                        vector_store.remove_vector_lesson(deleted_id)
                     results["overwritten"] += 1
                 elif merge_strategy == "rename":
                     # Generate new ID
@@ -162,6 +167,21 @@ async def import_lessons(
                     if rid not in known_targets
                 ]
 
+                # Preserve exported timestamps/usage so a round-trip does not
+                # reset every lesson to created-now/never-used, which would
+                # mistrain the REM staleness scan.
+                extra_fields = {}
+                if lesson_data.get("created_at"):
+                    extra_fields["created_at"] = datetime.fromisoformat(
+                        lesson_data["created_at"]
+                    )
+                if lesson_data.get("usage_count") is not None:
+                    extra_fields["usage_count"] = int(lesson_data["usage_count"])
+                if lesson_data.get("last_used"):
+                    extra_fields["last_used"] = datetime.fromisoformat(
+                        lesson_data["last_used"]
+                    )
+
                 lesson = Lesson(
                     id=lesson_data["id"],
                     trigger=lesson_data["trigger"],
@@ -172,6 +192,7 @@ async def import_lessons(
                     parent_id=lesson_data.get("parent_id"),
                     relationships=relationships,
                     version=lesson_data.get("version", 1),
+                    **extra_fields,
                 )
 
                 # Save to store

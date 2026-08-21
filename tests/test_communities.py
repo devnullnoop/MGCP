@@ -283,33 +283,6 @@ class TestCommunitySummaryPersistence:
         assert all_summaries[2].member_count == 2
 
     @pytest.mark.asyncio
-    async def test_delete_community_summary(self, temp_db):
-        """Delete removes the summary."""
-        store = LessonStore(db_path=temp_db)
-
-        summary = CommunitySummary(
-            community_id="to-delete",
-            title="Delete Me",
-            summary="This will be deleted",
-            member_ids=["a"],
-            member_count=1,
-        )
-        await store.save_community_summary(summary)
-
-        deleted = await store.delete_community_summary("to-delete")
-        assert deleted is True
-
-        retrieved = await store.get_community_summary("to-delete")
-        assert retrieved is None
-
-    @pytest.mark.asyncio
-    async def test_delete_nonexistent(self, temp_db):
-        """Deleting a nonexistent summary returns False."""
-        store = LessonStore(db_path=temp_db)
-        deleted = await store.delete_community_summary("nonexistent")
-        assert deleted is False
-
-    @pytest.mark.asyncio
     async def test_community_summary_not_found(self, temp_db):
         """Getting a nonexistent summary returns None."""
         store = LessonStore(db_path=temp_db)
@@ -341,19 +314,6 @@ class TestCommunityVectorSearch:
         assert community_id == "err123"
         assert score > 0.3
         assert metadata["title"] == "Error Handling"
-
-    def test_remove_community_summary(self, temp_qdrant):
-        """Remove a community summary from vector store."""
-        vector_store = QdrantVectorStore(persist_path=temp_qdrant)
-
-        vector_store.upsert_community_summary(
-            community_id="to-remove",
-            searchable_text="Community: Testing. Lessons about unit testing.",
-            metadata={"title": "Testing", "member_count": 3},
-        )
-
-        removed = vector_store.remove_community_summary("to-remove")
-        assert removed is True
 
     def test_query_empty_collection(self, temp_qdrant):
         """Querying empty collection returns no results."""

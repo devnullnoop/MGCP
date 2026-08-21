@@ -207,6 +207,32 @@ class TestRemReport:
         assert states[0]["last_run_session"] == 10
 
 
+class TestDuplicateDetection:
+    """_duplicate_detection must read find_duplicates' nested pair shape."""
+
+    @pytest.mark.asyncio
+    async def test_renders_real_ids_from_nested_pairs(self, engine, monkeypatch):
+        async def fake_find_duplicates(threshold=0.85):
+            return [{
+                "lesson_1": {"id": "lesson-one", "trigger": "trigger one"},
+                "lesson_2": {"id": "lesson-two", "trigger": "trigger two"},
+                "similarity": 0.93,
+            }]
+
+        import mgcp.data_ops
+        monkeypatch.setattr(mgcp.data_ops, "find_duplicates", fake_find_duplicates)
+
+        findings = await engine._duplicate_detection()
+        assert len(findings) == 1
+        f = findings[0]
+        assert "lesson-one" in f.title and "lesson-two" in f.title
+        assert "?" not in f.title
+        assert "trigger one" in f.description
+        # session-detail.html reads these metadata keys; they are load-bearing
+        assert f.metadata["lesson_a"] == "lesson-one"
+        assert f.metadata["lesson_b"] == "lesson-two"
+
+
 class TestRemFinding:
     """Test finding structure."""
 

@@ -27,7 +27,6 @@ class EventType(StrEnum):
     DELETE = "delete"
     BOOTSTRAP = "bootstrap"
     SESSION_START = "session_start"
-    SESSION_END = "session_end"
 
 
 @dataclass
@@ -117,26 +116,6 @@ class TelemetryLogger:
             await conn.close()
 
         return session_id
-
-    async def end_session(self, session_id: str) -> None:
-        """End a session."""
-        await self._emit(TelemetryEvent(
-            id=str(uuid4()),
-            timestamp=datetime.now(UTC),
-            session_id=session_id,
-            event_type=EventType.SESSION_END,
-            payload={},
-        ))
-
-        conn = await self._get_conn()
-        try:
-            await conn.execute(
-                "UPDATE sessions SET ended_at = ? WHERE id = ?",
-                (datetime.now(UTC).isoformat(), session_id),
-            )
-            await conn.commit()
-        finally:
-            await conn.close()
 
     @property
     def session_id(self) -> str:

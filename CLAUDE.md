@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **MGCP** (Memory Graph Core Primitives) is a Python MCP server providing persistent, graph-based memory for LLM interactions. The system stores lessons learned during LLM sessions in a graph structure, allowing semantic querying without loading full context histories.
 
-**Status**: v2.1.0 - Alpha/Research project. Phases 1-7 complete, actively dogfooding. Phase 8's *strategy* — graduating lessons out of `query_lessons` into compiled skill prompts — was dropped for degrading reliability. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
+**Status**: Alpha/Research project — package version 2.1.0 (`pyproject.toml`, `mgcp.__version__`); the hook/feature line is versioned separately and sits at v2.11 (`src/mgcp/hook_templates/VERSION`), with all v2.2+ work under CHANGELOG `[Unreleased]`. Phases 1-7 complete, actively dogfooding. Phase 8's *strategy* — graduating lessons out of `query_lessons` into compiled skill prompts — was dropped for degrading reliability. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
 
 ## Documentation Preferences
 
@@ -106,6 +106,9 @@ All source files are in `src/mgcp/`:
 - `bootstrap_loader.py` - Load bootstrap lessons, workflows, and relationships from YAML files
 - `logging_config.py` - Centralized logging with rotation (10MB max, 5 backups)
 - `reminder_state.py` - Self-directed reminder system for LLM workflow continuity
+- `enforcement.py` - Enforcement rule schema, evaluator, and default rules (v2.4)
+- `intent_config.py` - Intent routing config schema and DEFAULT_INTENTS (v2.2)
+- `skill_compiler.py` - Compiles intent + workflow + lessons into SKILL.md (v2.3)
 
 ### Data Model
 
@@ -272,13 +275,13 @@ MGCP v2.2 makes the routing prompt **data, not code**. The intent classification
 
 | Hook | Event | Type | Purpose |
 |------|-------|------|---------|
-| `session-init.py` | SessionStart | advisory | Inject the session-start bootstrap checklist (read_soliloquy / get_project_context / query_lessons) and workflow execution discipline. (v2.5: no longer duplicates the dispatcher's routing/actions block.) |
+| `session-init.py` | SessionStart | advisory | Inject the session-start bootstrap checklist (read_soliloquy / get_project_context / query_lessons) and workflow execution discipline. (v2.5: no longer duplicates the dispatcher's routing/actions block. v2.6: detects stale `.py` hook references in settings.json. v2.7: detects overdue REM operations from `rem_state` and recommends `rem_run`.) |
 | `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Hard keyword gates (loaded from `intent_config.json` — both git AND session_end fire from one loop), terse routing re-injection, scheduled reminders, workflow state, per-turn enforcement state reset, `MGCP_BYPASS` token detection |
 | `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Generic data-driven evaluator. Reads `~/.mgcp/enforcement_rules.json` on every tool call and applies every enabled, triggered, non-bypassed rule. Plus one built-in gate that lives outside the JSON because its trigger is assistant text, not a tool argument: an apology in the current turn (the seven v2.9 word-boundary regexes) denies every tool except `add_lesson`, `adjudicate_apology_gate`, and tool-discovery calls -- gating discovery would gate the exits themselves. Every gate and data-rule decision appends to `~/.mgcp/gate_audit.jsonl` until the lesson is written or a `not_apology` adjudication is recorded (v2.11 attest-or-comply; bypass `MGCP_BYPASS:apology`, human-only). Every denial — gate or data rule — appends to the `~/.mgcp/gate_audit.jsonl` audit log. Denies when preconditions unsatisfied. Bash commands are tokenized per line with `shlex(punctuation_chars=True)` — per line because a newline is a command separator that `shlex` otherwise eats — and git's global flags are skipped so `git -C /path commit` is still a commit. A line that cannot be tokenized (an apostrophe in a commit message) falls back to a raw boundary scan and **fails closed for git**, since a command the detector cannot read is not evidence the command is safe. Scoped bypass: `MGCP_BYPASS:<scope>` disables one scope, bare `MGCP_BYPASS` disables all. |
 | `post-tool-dispatcher.py` | PostToolUse | advisory | Routes by tool: Edit/Write triggers knowledge-capture checkpoint; Bash triggers error detection with cooldown; every tool call is appended to `turn_tools_called` on workflow_state.json, consumed by PreToolUse `tool_called_this_turn` preconditions. |
 | `mgcp-precompact.py` | PreCompact | advisory | Critical reminder to save context (and write_soliloquy) before context compression |
 
-The dispatcher falls back to a minimal hard-coded intent set if the JSON file is missing or corrupt, so a fresh install never crashes. The PreToolUse hook fails open (allows the tool call) on any parse error — enforcement is a net, not a tripwire. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
+The dispatcher falls back to a minimal hard-coded intent set if the JSON file is missing or corrupt, so a fresh install never crashes. The PreToolUse hook fails open (allows the tool call) on any parse error — enforcement is a net, not a tripwire. Note the deliberate asymmetry on a missing/corrupt `enforcement_rules.json`: the hook fails open to *no rules*, while the MCP tools (`list_enforcement_rules` etc.) fall back to the built-in defaults — so in that state the tools report rules the hook is not enforcing until the file is recreated (any `add_enforcement_rule`/`update_enforcement_rule` call rewrites it). Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
 
 **Advisory vs. enforcing.** The first four hooks inject text into `<system-reminder>` tags that the LLM may skim or ignore. `pre-tool-dispatcher.py` is different: it returns `permissionDecision: "deny"` with a `reason` string and the Claude Code harness refuses to run the tool. This addresses the repeated failure mode where `query-before-git-operations` was violated (v1→v4) despite correct hook fires. See `docs/mgcp-interception-flow.html` for the full interception map and remaining enforcement gaps.
 

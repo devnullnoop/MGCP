@@ -277,7 +277,7 @@ class TestGraphStress:
         assert stats["total_nodes"] == 500
         assert elapsed < 2, f"get_statistics took {elapsed:.1f}s (expected <2s)"
 
-    def test_find_paths_large_graph(self, large_graph):
+    def test_spider_paths_large_graph(self, large_graph):
         """Can find paths in large graph."""
         # Try to find paths between various nodes
         start_time = time.time()

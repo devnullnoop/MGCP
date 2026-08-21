@@ -248,6 +248,11 @@ def default_config() -> EnforcementConfig:
 
 
 def _config_path() -> Path:
+    # MGCP_ENFORCEMENT_CONFIG is honored by the PreToolUse hook; resolve it
+    # here too so the MCP tools never edit a file the hook is not enforcing.
+    override = os.environ.get("MGCP_ENFORCEMENT_CONFIG")
+    if override:
+        return Path(override)
     base = os.environ.get("MGCP_DATA_DIR", str(Path.home() / ".mgcp"))
     return Path(base) / ENFORCEMENT_CONFIG_FILENAME
 

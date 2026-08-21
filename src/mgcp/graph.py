@@ -82,38 +82,9 @@ class LessonGraph:
                     related.add(source)
         return list(related)
 
-    def get_relationships(self, lesson_id: str) -> list[dict]:
-        """Get all relationships with full metadata for a lesson.
-
-        Returns list of dicts with: target, type, weight, context, bidirectional
-        """
-        relationships = []
-        for _, target, data in self.graph.out_edges(lesson_id, data=True):
-            if data.get("relation") != "parent":
-                relationships.append({
-                    "target": target,
-                    "type": data.get("relation", "related"),
-                    "weight": data.get("weight", 0.5),
-                    "context": data.get("context", []),
-                    "bidirectional": data.get("bidirectional", True),
-                })
-        return relationships
-
     def get_by_relationship_type(self, lesson_id: str, rel_type: str) -> list[str]:
         """Get lessons connected by a specific relationship type."""
         return self.get_related(lesson_id, relation_type=rel_type)
-
-    def get_prerequisites(self, lesson_id: str) -> list[str]:
-        """Get prerequisite lessons (must know/do first)."""
-        return self.get_by_relationship_type(lesson_id, "prerequisite")
-
-    def get_next_in_sequence(self, lesson_id: str) -> list[str]:
-        """Get lessons that should come next in sequence."""
-        return self.get_by_relationship_type(lesson_id, "sequence_next")
-
-    def get_alternatives(self, lesson_id: str) -> list[str]:
-        """Get alternative approaches to the same problem."""
-        return self.get_by_relationship_type(lesson_id, "alternative")
 
     def spider(
         self,
@@ -169,18 +140,6 @@ class LessonGraph:
             current = parent
         return ancestors
 
-    def get_descendants(self, lesson_id: str) -> list[str]:
-        """Get all descendants (children, grandchildren, etc.)."""
-        descendants = []
-
-        def collect(node_id: str):
-            for child_id in self.get_children(node_id):
-                descendants.append(child_id)
-                collect(child_id)
-
-        collect(lesson_id)
-        return descendants
-
     def get_roots(self) -> list[str]:
         """Get all root lessons (no parent)."""
         roots = []
@@ -192,16 +151,6 @@ class LessonGraph:
     def get_hierarchy_depth(self, lesson_id: str) -> int:
         """Get depth of a lesson in the hierarchy (0 for root)."""
         return len(self.get_ancestors(lesson_id))
-
-    def find_path(self, from_id: str, to_id: str) -> list[str] | None:
-        """Find shortest path between two lessons."""
-        try:
-            # Use undirected view for path finding
-            undirected = self.graph.to_undirected()
-            path = nx.shortest_path(undirected, from_id, to_id)
-            return path
-        except (nx.NetworkXNoPath, nx.NodeNotFound):
-            return None
 
     def get_statistics(self) -> dict:
         """Get graph statistics."""

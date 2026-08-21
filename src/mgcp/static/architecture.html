@@ -262,11 +262,11 @@ sequenceDiagram
     MCP->>V: Re-embed updated text
     MCP-->>LLM: Lesson refined
 
-    Note over LLM: Mature lessons graduate to skills
-    LLM->>MCP: compile_skill(community_id)
-    MCP->>G: Extract community lessons
+    Note over LLM: Intents compile to skill files (additive)
+    LLM->>MCP: compile_intent_to_skill(intent_name)
+    MCP->>G: Walk intent -> workflow -> step lessons
     MCP->>MCP: Generate SKILL.md
-    MCP-->>LLM: Skill compiled, lessons graduated
+    MCP-->>LLM: SKILL.md emitted, knowledge store untouched
             </div>
         </div>
 
@@ -283,7 +283,6 @@ classDiagram
         +int version
         +str parent_id
         +dict relationships
-        +str graduated_to
     }
 
     class ProjectContext {
@@ -310,18 +309,8 @@ classDiagram
         +str trigger
     }
 
-    class CompiledSkill {
-        +str skill_name
-        +str community_id
-        +list member_ids
-        +str skill_path
-        +int version
-        +datetime compiled_at
-    }
-
     Lesson "1" --> "*" Lesson : parent/child
     Lesson "*" --> "*" Lesson : typed relationships
-    Lesson "*" --> "?" CompiledSkill : graduated_to
     ProjectContext "1" --> "1" Catalogue
     Workflow "*" --> "*" Lesson : linked at steps
             </div>

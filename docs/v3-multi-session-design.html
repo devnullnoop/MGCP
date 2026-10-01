@@ -116,6 +116,14 @@ flowchart LR
 </div>
 </div>
 
+<p class="measured">
+  <strong>MGCP does not require a server, a daemon or a container.</strong> Embedded is the default
+  and the single-session path: nothing to install, nothing to run, no Docker. Server mode exists
+  only for the operator who wants concurrent sessions, and how the server is run is entirely their
+  choice — a native binary, a managed service, a remote instance. Docker was used once, to obtain a
+  real Qdrant to verify against, and is not part of the project.
+</p>
+
 <h3>Design</h3>
 <ul>
   <li>One resolver, <code>qdrant_client_args()</code>, returns either
@@ -290,7 +298,7 @@ WHERE id = ? AND version = ?        -- the expected version
 <ol>
   <li>Does the socket round trip actually cost 1–3 ms? Measure before committing to B.</li>
   <li>Should the Qdrant server be managed by MGCP (spawn/supervise) or by the operator
-    (docker-compose / brew service)? Managed is friendlier; unmanaged is honest about what it is.</li>
+    (a native binary, a managed service, a remote instance)? Managed is friendlier; unmanaged is honest about what it is. Either way it stays optional.</li>
   <li>On a CAS conflict in <code>refine_lesson</code>, is the right default to retry once
     automatically after a re-read, or to always hand the conflict to the agent?</li>
   <li>Does <code>context_history</code>'s per-session upsert need CAS too, or is last-write-of-a-session

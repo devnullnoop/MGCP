@@ -431,3 +431,137 @@ class TestContextHistoryIsOnePerSession:
         history = await fresh.get_context_history(sample_project.project_id)
         assert len(history) == 1, f"migration did not collapse duplicates: {len(history)}"
         assert history[0]["notes"] == "dup 5", "newest row per session must survive"
+
+
+class TestCompareAndSwap:
+    """Concurrent writes must be refused, not silently applied.
+
+    Before v3, `lessons.version` was SELECTed but never used as a guard, so two
+    sessions refining one lesson produced a lost update with nothing recorded.
+    """
+
+    @pytest.mark.asyncio
+    async def test_second_writer_is_refused(self, temp_db, sample_lesson):
+        from mgcp.persistence import StaleWriteError
+
+        store = LessonStore(temp_db)
+        await store.add_lesson(sample_lesson)
+
+        first = await store.get_lesson(sample_lesson.id)
+        second = await store.get_lesson(sample_lesson.id)
+        assert first.version == second.version
+
+        first.action = "first writer"
+        first.version += 1
+        await store.update_lesson(first, expected_version=second.version)
+
+        second.action = "second writer clobbers"
+        second.version += 1
+        with pytest.raises(StaleWriteError) as caught:
+            await store.update_lesson(second, expected_version=1)
+
+        assert caught.value.expected == 1
+        assert caught.value.actual == 2
+        survivor = await store.get_lesson(sample_lesson.id)
+        assert survivor.action == "first writer", "the refused write was applied anyway"
+
+    @pytest.mark.asyncio
+    async def test_unguarded_writes_still_apply(self, temp_db, sample_lesson):
+        """link_lessons and bootstrap pass no expectation; they must not break."""
+        store = LessonStore(temp_db)
+        await store.add_lesson(sample_lesson)
+        lesson = await store.get_lesson(sample_lesson.id)
+        lesson.tags = ["added-by-an-additive-writer"]
+        await store.update_lesson(lesson)
+        assert (await store.get_lesson(sample_lesson.id)).tags == ["added-by-an-additive-writer"]
+
+    @pytest.mark.asyncio
+    async def test_missing_row_reports_no_row_rather_than_a_version(self, temp_db, sample_lesson):
+        from mgcp.persistence import StaleWriteError
+
+        store = LessonStore(temp_db)
+        await store.add_lesson(sample_lesson)
+        lesson = await store.get_lesson(sample_lesson.id)
+        await store.delete_lesson(sample_lesson.id)
+        lesson.version += 1
+        with pytest.raises(StaleWriteError) as caught:
+            await store.update_lesson(lesson, expected_version=1)
+        assert caught.value.actual is None
+
+
+class TestNarrowProjectWrites:
+    """Two sessions editing different fields must both survive.
+
+    `save_project_context` replaces todos, notes, catalogue, active_files and
+    recent_decisions wholesale from whatever the caller read, so a session that
+    only meant to change the notes discarded another session's todo. The narrow
+    writers read and write one column inside a single transaction.
+    """
+
+    @staticmethod
+    async def _seed(store, path="/srv/narrow"):
+        await store.save_project_context(ProjectContext(
+            project_id="narrow1", project_name="Narrow", project_path=path,
+            notes="original",
+            todos=[ProjectTodo(content="existing", status="pending")],
+        ))
+        return path
+
+    @pytest.mark.asyncio
+    async def test_a_todo_survives_a_concurrent_notes_edit(self, temp_db):
+        store = LessonStore(temp_db)
+        path = await self._seed(store)
+
+        await store.upsert_todo(path, ProjectTodo(content="added by A", status="pending"))
+        await store.set_project_notes(path, "changed by B")
+
+        context = await store.get_project_context_by_path(path)
+        assert {t.content for t in context.todos} == {"existing", "added by A"}, (
+            "the notes edit discarded the concurrent todo"
+        )
+        assert context.notes == "changed by B"
+
+    @pytest.mark.asyncio
+    async def test_whole_context_save_still_loses_it(self, temp_db):
+        """The behaviour the narrow writers exist to avoid, pinned deliberately.
+
+        Whole-context save remains last-writer-wins. That is acceptable only
+        because it is now the exception (session close), not the only tool.
+        """
+        store = LessonStore(temp_db)
+        path = await self._seed(store, "/srv/wide")
+
+        session_a = await store.get_project_context_by_path(path)
+        session_b = await store.get_project_context_by_path(path)
+        session_a.todos.append(ProjectTodo(content="added by A", status="pending"))
+        await store.save_project_context(session_a)
+        session_b.notes = "changed by B"
+        await store.save_project_context(session_b)
+
+        context = await store.get_project_context_by_path(path)
+        assert {t.content for t in context.todos} == {"existing"}
+
+    @pytest.mark.asyncio
+    async def test_upsert_todo_updates_rather_than_duplicates(self, temp_db):
+        store = LessonStore(temp_db)
+        path = await self._seed(store, "/srv/dup")
+        await store.upsert_todo(path, ProjectTodo(content="existing", status="completed"))
+        context = await store.get_project_context_by_path(path)
+        assert len(context.todos) == 1
+        assert context.todos[0].status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_append_decision_keeps_newest_first_and_dedupes(self, temp_db):
+        store = LessonStore(temp_db)
+        path = await self._seed(store, "/srv/dec")
+        await store.append_decision(path, "chose sqlite")
+        await store.append_decision(path, "chose qdrant")
+        await store.append_decision(path, "chose sqlite")
+        context = await store.get_project_context_by_path(path)
+        assert context.recent_decisions[:2] == ["chose sqlite", "chose qdrant"]
+        assert context.recent_decisions.count("chose sqlite") == 1
+
+    @pytest.mark.asyncio
+    async def test_narrow_write_on_an_unknown_project_returns_none(self, temp_db):
+        store = LessonStore(temp_db)
+        assert await store.set_project_notes("/srv/nope", "x") is None

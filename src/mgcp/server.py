@@ -40,7 +40,7 @@ from .models import (
     WorkflowStepLesson,
     sanitize_tool_call_xml,
 )
-from .persistence import LessonStore
+from .persistence import LessonStore, StaleWriteError
 from .qdrant_catalogue_store import QdrantCatalogueStore
 from .qdrant_vector_store import QdrantVectorStore
 from .telemetry import TelemetryLogger
@@ -533,7 +533,18 @@ async def refine_lesson(
     lesson.last_refined = datetime.now(UTC)
 
     # Save (pass refinement reason for version history)
-    await store.update_lesson(lesson, refinement_reason=refinement)
+    try:
+        await store.update_lesson(
+            lesson, refinement_reason=refinement, expected_version=old_version
+        )
+    except StaleWriteError as exc:
+        # Another session refined this lesson between the read and this write.
+        # Refusing is the point: the alternative silently discards their edit.
+        return (
+            f"Refinement NOT applied. {exc}\n\n"
+            "Call get_lesson to see the current text, decide whether your "
+            "refinement still applies to it, and refine again."
+        )
     vector_store.add_lesson(lesson)  # Re-index
 
     # Log
@@ -812,10 +823,20 @@ async def add_project_todo(
         priority=min(max(priority, 0), 9),
         notes=notes or None,
     )
-    context.todos.append(new_todo)
-    context.last_accessed = datetime.now(UTC)
-
-    await store.save_project_context(context)
+    # Narrow write: touches the todos column only, inside one transaction.
+    # Saving the whole context here wrote back every field as this session read
+    # them, so a concurrent edit to notes or the catalogue was discarded.
+    #
+    # upsert_todo returns None when the project has no row yet, because
+    # _get_or_create_project_context deliberately does not persist on create.
+    # That case needs the full insert; there is no concurrent writer to lose.
+    updated = await store.upsert_todo(project_path, new_todo)
+    if updated is None:
+        context.todos.append(new_todo)
+        context.last_accessed = datetime.now(UTC)
+        await store.save_project_context(context)
+    else:
+        context = updated
 
     pending_count = len([t for t in context.todos if t.status in ("pending", "in_progress")])
     return f"Todo added. {pending_count} active todos for {context.project_name}."

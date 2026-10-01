@@ -266,9 +266,25 @@ def load_config(path: Path | None = None) -> EnforcementConfig:
     return EnforcementConfig.model_validate(data)
 
 
+def _atomic_write(path: Path, text: str) -> None:
+    """Write via a temp file in the same directory, then os.replace.
+
+    `open(p, "w")` truncates first, so a crash — or a second process reading
+    mid-write — sees a half-written or empty config. os.replace is atomic on
+    POSIX, so a reader sees either the whole old file or the whole new one.
+    Cheap insurance on files the PreToolUse hook reads on every single call.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    try:
+        tmp.write_text(text)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
 def save_config(config: EnforcementConfig, path: Path | None = None) -> None:
-    p = path or _config_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(config.model_dump(), indent=2))
+    _atomic_write(path or _config_path(), json.dumps(config.model_dump(), indent=2))
 
 

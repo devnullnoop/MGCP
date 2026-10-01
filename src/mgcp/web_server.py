@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .graph import LessonGraph
 from .models import ProjectContext, ProjectTodo
-from .persistence import LessonStore
+from .persistence import LessonStore, StaleWriteError
 from .qdrant_vector_store import QdrantVectorStore
 from .telemetry import TelemetryLogger
 
@@ -751,12 +751,16 @@ async def update_lesson(lesson_id: str, data: dict[str, Any]) -> dict[str, Any]:
     if "tags" in data:
         lesson.tags = data["tags"]
 
-    # Increment version on edit
+    # Increment version on edit; the pre-edit value is the CAS token.
+    expected_version = lesson.version
     lesson.version += 1
     from datetime import UTC, datetime
     lesson.last_refined = datetime.now(UTC)
 
-    await store.update_lesson(lesson)
+    try:
+        await store.update_lesson(lesson, expected_version=expected_version)
+    except StaleWriteError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     # Re-index in vector store
     get_vector_store().add_lesson(lesson)

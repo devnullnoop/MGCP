@@ -313,6 +313,38 @@ class TestUpdateWorkflowState:
             assert "research" in result["steps_completed"]
             assert "plan" in result["steps_completed"]
 
+    def test_reactivating_a_finished_workflow_clears_the_complete_flag(self):
+        """Starting a run means it is not complete -- even the same workflow.
+
+        The reset was scoped to the different-workflow branch, so re-running a
+        finished workflow reported COMPLETE from its first step. The hook reads
+        this flag to decide whether to keep injecting workflow context.
+        """
+        from mgcp.reminder_state import save_state, update_workflow_state
+
+        with backup_and_restore_state():
+            save_state({
+                "current_call_count": 0,
+                "active_workflow": "feature-development",
+                "workflow_complete": True,
+                "steps_completed": ["research", "plan"],
+            })
+            result = update_workflow_state(active_workflow="feature-development")
+            assert result["workflow_complete"] is False, (
+                "re-activating a finished workflow still reported it complete"
+            )
+
+    def test_activating_still_honours_an_explicit_complete_in_the_same_call(self):
+        """activate + complete in one call must end complete, not reset."""
+        from mgcp.reminder_state import save_state, update_workflow_state
+
+        with backup_and_restore_state():
+            save_state({"current_call_count": 0})
+            result = update_workflow_state(
+                active_workflow="bug-fix", workflow_complete=True
+            )
+            assert result["workflow_complete"] is True
+
     def test_workflow_complete(self):
         """Marking workflow complete clears current_step."""
         from mgcp.reminder_state import save_state, update_workflow_state

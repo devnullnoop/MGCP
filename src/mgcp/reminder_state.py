@@ -204,7 +204,12 @@ def update_workflow_state(
         if active_workflow != state.get("active_workflow"):
             state["current_step"] = None
             state["steps_completed"] = []
-            state["workflow_complete"] = False
+        # Activating a workflow starts a run, so it is not complete — including
+        # when it is the SAME workflow being run again. Scoping this to the
+        # different-workflow branch meant re-running a finished workflow
+        # reported "Status: COMPLETE" from its first step, and the hook reads
+        # this flag to decide whether to keep injecting workflow context.
+        state["workflow_complete"] = False
         state["active_workflow"] = active_workflow
 
     if current_step:

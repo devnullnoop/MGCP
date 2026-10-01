@@ -35,6 +35,27 @@ from .rem_config import DEFAULT_SCHEDULES, next_due_session
 logger = logging.getLogger("mgcp.persistence")
 
 
+class StaleWriteError(RuntimeError):
+    """A write was refused because the row changed since it was read.
+
+    Compare-and-swap, not locking. The alternative is what MGCP did before:
+    two sessions read the same lesson, both write, and the first edit is gone
+    with nothing recorded anywhere. A refused write is recoverable — re-read
+    and re-apply — whereas a lost one is not even detectable after the fact.
+    """
+
+    def __init__(self, entity: str, key: str, expected: int, actual: int | None):
+        self.entity = entity
+        self.key = key
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"{entity} {key!r} changed since it was read "
+            f"(expected version {expected}, found {actual if actual is not None else 'no row'}). "
+            "Re-read it, re-apply the change, and write again."
+        )
+
+
 def get_default_db_path() -> str:
     """Get the default database path, respecting MGCP_DATA_DIR env var."""
     data_dir = os.environ.get("MGCP_DATA_DIR")
@@ -77,7 +98,10 @@ CREATE TABLE IF NOT EXISTS project_contexts (
     last_session_id TEXT,
     last_accessed TEXT NOT NULL,
     session_count INTEGER DEFAULT 0,
-    notes TEXT
+    notes TEXT,
+    -- Bumped on every content write. The compare-and-swap token for project
+    -- contexts, which have no natural version the way lessons do.
+    revision INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_project_path ON project_contexts(project_path);
@@ -384,6 +408,17 @@ class LessonStore:
                 "ALTER TABLE lessons ADD COLUMN relationships JSON NOT NULL DEFAULT '[]'"
             )
 
+        # Migration: project contexts gain a revision counter. Without one there
+        # is no way to tell "I am writing the context I read" from "I am
+        # overwriting someone else's", and this upsert replaces todos,
+        # catalogue, notes and recent_decisions wholesale.
+        cursor = await conn.execute("PRAGMA table_info(project_contexts)")
+        ctx_columns = [row[1] for row in await cursor.fetchall()]
+        if "revision" not in ctx_columns:
+            await conn.execute(
+                "ALTER TABLE project_contexts ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
+            )
+
         # Migration: collapse context_history to one snapshot per session, then
         # enforce it. The table was appended to on every save_project_context
         # call rather than once per session, so it grew ~9 rows per session and
@@ -563,9 +598,23 @@ class LessonStore:
             return [self._row_to_lesson(row) for row in rows]
 
     async def update_lesson(
-        self, lesson: Lesson, refinement_reason: str | None = None
+        self,
+        lesson: Lesson,
+        refinement_reason: str | None = None,
+        expected_version: int | None = None,
     ) -> None:
-        """Update an existing lesson, snapshotting previous version first."""
+        """Update an existing lesson, snapshotting previous version first.
+
+        Args:
+            expected_version: the version this edit was derived from. When
+                given, the write is a compare-and-swap: it applies only if the
+                stored row is still at that version, and raises
+                StaleWriteError otherwise. Callers that edit content
+                (refine_lesson, the web editor) pass it. Callers that make
+                additive, order-independent changes (link_lessons, bootstrap)
+                leave it None, because a concurrent edit does not invalidate
+                adding an edge.
+        """
         reject_tool_call_envelope(lesson)
         async with self._connection(commit=True) as conn:
             # Snapshot current state into lesson_versions before overwriting
@@ -595,13 +644,14 @@ class LessonStore:
                     ),
                 )
 
-            await conn.execute(
-                """
+            where_version = "" if expected_version is None else " AND version = ?"
+            cursor = await conn.execute(
+                f"""
                 UPDATE lessons SET
                     trigger = ?, action = ?, rationale = ?, examples = ?,
                     version = ?, last_refined = ?, last_used = ?, usage_count = ?,
                     tags = ?, parent_id = ?, relationships = ?
-                WHERE id = ?
+                WHERE id = ?{where_version}
                 """,
                 (
                     lesson.trigger,
@@ -616,8 +666,20 @@ class LessonStore:
                     lesson.parent_id,
                     json.dumps([rel.model_dump() for rel in lesson.relationships]),
                     lesson.id,
+                    *([] if expected_version is None else [expected_version]),
                 ),
             )
+            if expected_version is not None and cursor.rowcount == 0:
+                # Nothing matched: either the row is gone or someone else wrote
+                # it first. Read the current version so the error can say which.
+                probe = await conn.execute(
+                    "SELECT version FROM lessons WHERE id = ?", (lesson.id,)
+                )
+                row = await probe.fetchone()
+                raise StaleWriteError(
+                    "lesson", lesson.id, expected_version,
+                    row["version"] if row else None,
+                )
             logger.debug(f"Updated lesson: {lesson.id}")
 
     async def record_usage(self, lesson_id: str) -> None:
@@ -774,7 +836,8 @@ class LessonStore:
                     last_session_id = excluded.last_session_id,
                     last_accessed = excluded.last_accessed,
                     session_count = excluded.session_count,
-                    notes = excluded.notes
+                    notes = excluded.notes,
+                    revision = project_contexts.revision + 1
                 """,
                 (
                     context.project_id,
@@ -833,6 +896,89 @@ class LessonStore:
             )
 
             logger.debug(f"Saved project context: {context.project_name}")
+
+    async def _mutate_project_field(
+        self, project_path: str, column: str, mutate
+    ) -> ProjectContext | None:
+        """Read one column, transform it, write it back — in ONE transaction.
+
+        This is the other half of concurrency safety, and the cheaper half.
+        `save_project_context` replaces todos, catalogue, notes, active_files
+        and recent_decisions wholesale from whatever the caller held, so two
+        sessions editing unrelated parts of a project destroy each other's work
+        for no reason. Reading and writing a single column inside one
+        transaction removes the race rather than detecting it: SQLite
+        serialises the writers, so no compare-and-swap token is needed and no
+        caller has to retry.
+
+        `mutate` receives the decoded current value and returns the new one.
+        """
+        if column not in {"todos", "notes", "active_files", "recent_decisions"}:
+            raise ValueError(f"not a narrow-writable column: {column}")
+        async with self._connection(commit=True) as conn:
+            cursor = await conn.execute(
+                f"SELECT {column} FROM project_contexts WHERE project_path = ?",
+                (project_path,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            raw = row[column]
+            current = raw if column == "notes" else json.loads(raw or "[]")
+            updated = mutate(current)
+            encoded = updated if column == "notes" else json.dumps(updated)
+            await conn.execute(
+                f"UPDATE project_contexts SET {column} = ?, "
+                "last_accessed = ?, revision = revision + 1 "
+                "WHERE project_path = ?",
+                (encoded, datetime.now(UTC).isoformat(), project_path),
+            )
+        return await self.get_project_context_by_path(project_path)
+
+    async def append_decision(
+        self, project_path: str, decision: str, keep: int = 20
+    ) -> ProjectContext | None:
+        """Append one decision without touching todos, notes or the catalogue."""
+        return await self._mutate_project_field(
+            project_path,
+            "recent_decisions",
+            lambda current: ([decision] + [d for d in current if d != decision])[:keep],
+        )
+
+    async def set_project_notes(
+        self, project_path: str, notes: str
+    ) -> ProjectContext | None:
+        """Replace the notes field only."""
+        return await self._mutate_project_field(project_path, "notes", lambda _: notes)
+
+    async def set_active_files(
+        self, project_path: str, files: list[str]
+    ) -> ProjectContext | None:
+        """Replace the active-files list only."""
+        return await self._mutate_project_field(
+            project_path, "active_files", lambda _: list(files)
+        )
+
+    async def upsert_todo(
+        self, project_path: str, todo: ProjectTodo
+    ) -> ProjectContext | None:
+        """Add a todo, or update one that already has the same content.
+
+        Read-modify-write of the todos column inside one transaction, so two
+        sessions adding different todos both survive — which a whole-context
+        save does not guarantee, because it writes back the todo list the
+        caller read however long ago.
+        """
+        incoming = todo.model_dump(mode="json")
+
+        def mutate(current: list) -> list:
+            for existing in current:
+                if existing.get("content") == todo.content:
+                    existing.update(incoming)
+                    return current
+            return current + [incoming]
+
+        return await self._mutate_project_field(project_path, "todos", mutate)
 
     async def get_all_project_contexts(self) -> list[ProjectContext]:
         """Get all project contexts ordered by last accessed."""

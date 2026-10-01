@@ -349,9 +349,26 @@ def load_config(path: Path | None = None) -> IntentConfig:
         return default_config()
 
 
+def _atomic_write(path: Path, text: str) -> None:
+    """Write via a temp file in the same directory, then os.replace.
+
+    `open(p, "w")` truncates first, so a crash — or a second process reading
+    mid-write — sees a half-written or empty config. os.replace is atomic on
+    POSIX, so a reader sees either the whole old file or the whole new one.
+    Cheap insurance on files the PreToolUse hook reads on every single call.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    try:
+        tmp.write_text(text)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
 def save_config(config: IntentConfig, path: Path | None = None) -> None:
     """Persist a config to disk, refreshing the rendered cache."""
-    p = path or _config_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "w") as f:
-        json.dump(config.to_disk_dict(), f, indent=2)
+    _atomic_write(
+        path or _config_path(), json.dumps(config.to_disk_dict(), indent=2)
+    )

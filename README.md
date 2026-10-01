@@ -153,9 +153,8 @@ contested fire with the sentence that triggered it beside the reasoning given.
 ![Enforcement](docs/screenshots/instrument-enforcement.png)
 
 ### REM — what maintenance is actually due?
-Per project, per operation, on that project's own session clock. Overdue and never-run states
-carry a glyph and a word rather than a colour: `good` and `critical` measure a CVD ΔE of 4.1, so
-hue alone cannot carry that distinction.
+Per project, per operation, on that project's own session clock. Overdue and never-run states are
+named, not just coloured.
 ![REM](docs/screenshots/instrument-rem.png)
 
 ### Graph — what shape is the knowledge?

@@ -2340,8 +2340,32 @@ async def rem_run(
         "",
     ]
 
-    if not report.findings:
-        lines.append("No findings. Knowledge base looks healthy.")
+    if not report.operations_run:
+        # A skipped run is not a passing run. This branch used to print "No
+        # findings. Knowledge base looks healthy." whenever `findings` was
+        # empty, which is also what a cycle where NOTHING RAN produces — so the
+        # reassurance was emitted by the same code path whether the corpus had
+        # been scanned or not. Nothing was measured here, so nothing is claimed.
+        lines.append(
+            "**Nothing ran — this is not a clean bill of health.** Every operation "
+            "was skipped as not yet due on this project's session clock, so the "
+            "corpus is unverified, not verified healthy."
+        )
+        if report.operations_skipped:
+            lines.append(
+                "\nCall `rem_report` for each operation's next due session, or pass "
+                "`operations=\"" + report.operations_skipped[0] + "\"` to force one "
+                "now regardless of the schedule."
+            )
+    elif not report.findings:
+        ran = ", ".join(report.operations_run)
+        lines.append(f"No findings from the {len(report.operations_run)} operation(s) that ran ({ran}).")
+        if report.operations_skipped:
+            lines.append(
+                "Not a statement about the operations that were skipped: "
+                + ", ".join(report.operations_skipped)
+                + "."
+            )
     else:
         lines.append(f"### {len(report.findings)} Finding(s)\n")
         for i, finding in enumerate(report.findings, 1):

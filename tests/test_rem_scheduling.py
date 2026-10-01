@@ -194,3 +194,122 @@ class TestOperationDispatch:
 
         findings = await engine._knowledge_extraction()
         assert [f.metadata["pending_count"] for f in findings] == [3]
+
+
+class TestSkippedRunIsNotAPassingRun:
+    """`rem_run` printed a clean bill of health for a cycle where nothing ran.
+
+    `if not report.findings: "No findings. Knowledge base looks healthy."` is
+    also what a cycle with every operation skipped produces, so the reassurance
+    came from the same branch whether the corpus had been scanned or not. On
+    2026-10-01 a real call reported "Operations run: none ... Knowledge base
+    looks healthy" one line apart.
+    """
+
+    @pytest.mark.asyncio
+    async def test_nothing_due_does_not_claim_health(self, tmp_path, monkeypatch):
+        import mgcp.server as srv
+        from mgcp.models import ProjectContext
+        from mgcp.persistence import LessonStore
+        from mgcp.rem_cycle import RemReport
+
+        store = LessonStore(str(tmp_path / "test.db"))
+        project = ProjectContext(
+            project_id="p1", project_name="P", project_path=str(tmp_path), session_count=3
+        )
+        await store.save_project_context(project)
+
+        monkeypatch.setattr(srv, "_store", store)
+        monkeypatch.setattr(srv, "_graph", None)
+        monkeypatch.setattr(srv, "_telemetry", None)
+        monkeypatch.setattr(srv, "_initialized", True)
+        monkeypatch.setattr(srv, "_vectors_initialized", True)
+        monkeypatch.setattr(srv, "_vector_store", None)
+        monkeypatch.setattr(srv, "_catalogue_vector", None)
+        monkeypatch.setattr(srv, "_rem_project", lambda _store, _path: _coro(project))
+
+        skipped = ["staleness_scan", "duplicate_detection", "community_detection"]
+        report = RemReport(
+            session_number=3,
+            timestamp="2026-10-01T12:00:00Z",
+            operations_run=[],
+            operations_skipped=skipped,
+            findings=[],
+            duration_ms=0.0,
+        )
+
+        class _Engine:
+            def __init__(self, **_kw):
+                pass
+
+            async def run(self, **_kw):
+                return report
+
+        monkeypatch.setattr("mgcp.rem_cycle.RemEngine", _Engine)
+
+        out = await srv.rem_run(project_path=str(tmp_path))
+
+        assert "looks healthy" not in out, (
+            f"a cycle that ran nothing still claimed health:\n{out}"
+        )
+        assert "Nothing ran" in out
+        assert "unverified" in out
+        # The way out is named, so the reader is not left guessing.
+        assert "staleness_scan" in out
+
+    @pytest.mark.asyncio
+    async def test_a_real_run_with_no_findings_says_what_it_scanned(
+        self, tmp_path, monkeypatch
+    ):
+        """The honest no-findings case must stay available and stay scoped."""
+        import mgcp.server as srv
+        from mgcp.models import ProjectContext
+        from mgcp.persistence import LessonStore
+        from mgcp.rem_cycle import RemReport
+
+        store = LessonStore(str(tmp_path / "test2.db"))
+        project = ProjectContext(
+            project_id="p2", project_name="P2", project_path=str(tmp_path), session_count=9
+        )
+        await store.save_project_context(project)
+
+        monkeypatch.setattr(srv, "_store", store)
+        monkeypatch.setattr(srv, "_initialized", True)
+        monkeypatch.setattr(srv, "_vectors_initialized", True)
+        monkeypatch.setattr(srv, "_vector_store", None)
+        monkeypatch.setattr(srv, "_catalogue_vector", None)
+        monkeypatch.setattr(srv, "_graph", None)
+        monkeypatch.setattr(srv, "_telemetry", None)
+        monkeypatch.setattr(srv, "_rem_project", lambda _store, _path: _coro(project))
+
+        report = RemReport(
+            session_number=9,
+            timestamp="2026-10-01T12:00:00Z",
+            operations_run=["staleness_scan"],
+            operations_skipped=["duplicate_detection"],
+            findings=[],
+            duration_ms=12.0,
+        )
+
+        class _Engine:
+            def __init__(self, **_kw):
+                pass
+
+            async def run(self, **_kw):
+                return report
+
+        monkeypatch.setattr("mgcp.rem_cycle.RemEngine", _Engine)
+
+        out = await srv.rem_run(project_path=str(tmp_path))
+
+        assert "No findings from the 1 operation(s) that ran (staleness_scan)" in out
+        # Silence about duplicate_detection would read as a verdict on it.
+        assert "duplicate_detection" in out
+
+
+async def _coro_impl(value):
+    return value
+
+
+def _coro(value):
+    return _coro_impl(value)

@@ -108,11 +108,24 @@ class QdrantVectorStore:
         self._ensure_collection()
 
     def _ensure_collection(self) -> None:
-        """Create collection if it doesn't exist."""
+        """Create the collection if it does not exist, tolerating a race.
+
+        This is check-then-act, which is safe in embedded mode because there is
+        only ever one client. In server mode it is not: two sessions starting
+        at the same moment both see "not exists", both POST a create, and the
+        loser gets 409 Conflict. Measured against a real server — the second
+        process died on startup, which would have made concurrent sessions
+        unusable for exactly the people server mode is for.
+
+        Another writer winning the race is success, not failure: the collection
+        we wanted now exists. Anything else still raises.
+        """
         collections = self.client.get_collections().collections
         exists = any(c.name == self.collection_name for c in collections)
+        if exists:
+            return
 
-        if not exists:
+        try:
             self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config=VectorParams(
@@ -121,6 +134,13 @@ class QdrantVectorStore:
                 ),
             )
             logger.info(f"Created collection '{self.collection_name}'")
+        except Exception as exc:
+            if "already exists" not in str(exc):
+                raise
+            logger.debug(
+                "collection '%s' was created concurrently by another process",
+                self.collection_name,
+            )
 
     def add_lesson(self, lesson: Lesson) -> None:
         """Add or update a lesson in the vector store."""

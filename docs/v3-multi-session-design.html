@@ -66,8 +66,10 @@
 </table>
 <p>
   The resource story is the opposite of the intuition: the vectors are trivial and the
-  <em>model</em> is the cost. Running a Qdrant daemon for 6.4 MB is noise next to 403 MB of BGE
-  loaded per process. Concurrency is therefore cheap to make <em>correct</em> and expensive to
+  <em>model</em> is the cost. <strong>Correction, measured 2026-10-01:</strong> the guess below that
+  a Qdrant daemon would be "noise" was wrong — it idles at <strong>474.9 MiB</strong> for 656K of
+  stored data, about the same as one MGCP process. Server mode buys correctness at roughly one
+  extra process of memory, which is a real trade rather than a free one. Concurrency is therefore cheap to make <em>correct</em> and expensive to
   make <em>efficient</em>, and those are different pieces of work.
 </p>
 </div>

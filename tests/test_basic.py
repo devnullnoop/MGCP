@@ -505,3 +505,48 @@ class TestQdrantModeResolution:
 
         monkeypatch.setenv("MGCP_QDRANT_URL", "   ")
         assert qdrant_client_args("/tmp/q") == {"path": "/tmp/q"}
+
+
+@pytest.mark.integration
+class TestQdrantServerModeConcurrency:
+    """Two clients must be able to open the same collection at once.
+
+    `_ensure_collection` is check-then-act, which is safe embedded (one client
+    ever) and not safe in server mode: both processes see "not exists", both
+    POST a create, and the loser got 409 Conflict and died on startup. Measured
+    against a real server before it was fixed.
+
+    Skipped unless MGCP_QDRANT_URL points at a reachable server, so the suite
+    stays runnable without Docker.
+    """
+
+    @staticmethod
+    def _server_available() -> bool:
+        url = os.environ.get("MGCP_QDRANT_URL", "").strip()
+        if not url:
+            return False
+        try:
+            import urllib.request
+
+            with urllib.request.urlopen(f"{url.rstrip('/')}/readyz", timeout=2) as r:
+                return r.status == 200
+        except Exception:
+            return False
+
+    def test_concurrent_open_of_a_new_collection(self):
+        if not self._server_available():
+            pytest.skip("no Qdrant server at MGCP_QDRANT_URL")
+
+        import uuid as _uuid
+        from concurrent.futures import ThreadPoolExecutor
+
+        from mgcp.qdrant_vector_store import QdrantVectorStore
+
+        name = f"race_{_uuid.uuid4().hex[:8]}"
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            stores = list(pool.map(
+                lambda _: QdrantVectorStore(collection_name=name), range(4)
+            ))
+        assert len(stores) == 4, "a concurrent opener failed to construct"
+        assert all(s.server_mode for s in stores)
+        stores[0].client.delete_collection(name)

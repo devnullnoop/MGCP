@@ -554,6 +554,63 @@ The control principle, transferable beyond MGCP: you don't need a perfect classi
 
 The dispatcher falls back to a minimal hard-coded intent set if the JSON file is missing or corrupt — a fresh install never crashes a hook. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
 
+## v3: more than one session at a time
+
+Until v3, MGCP assumed one session. Embedded Qdrant allows a single writer per
+directory, every process loaded its own ~448 MiB copy of the embedding model, and
+two sessions editing the same lesson produced a lost update that nothing
+recorded. **Embedded, single-session, no-daemon remains the default** — nothing
+below is required, and MGCP still needs no server, no daemon and no container to
+run.
+
+| | Before | v3 |
+|---|---|---|
+| Concurrent sessions | one writer; a second blocks on the Qdrant lock | opt in with `MGCP_QDRANT_URL` |
+| Memory, 3 sessions | 1,344.6 MiB (each loads BGE) | **565.4 MiB** — one shared model |
+| Cost per extra session | ~448 MiB, ~2,100 ms cold start | **39 MiB, ~65 ms** |
+| Two sessions edit one lesson | last writer silently wins | `StaleWriteError` naming both versions |
+
+### Concurrent writes fail loudly
+
+`update_lesson` takes an `expected_version` and the UPDATE carries
+`AND version = ?`; a zero rowcount raises `StaleWriteError` rather than
+discarding the other session's edit. `refine_lesson` tells the agent to re-read
+and re-apply, and the web editor returns 409. Whole-object saves that need no
+read-modify-write got narrow single-column writers (`append_decision`,
+`set_project_notes`, `set_active_files`, `upsert_todo`), so two sessions touching
+different fields of one project no longer manufacture a conflict at all.
+
+### One embedding model per machine
+
+```bash
+mgcp-embed            # run it explicitly, or let the first client start it
+mgcp-embed --status   # which path is in use, and why
+```
+
+The daemon answers over a unix socket in `~/.mgcp/` — not TCP, so it is
+unreachable off-box and needs no auth. Vectors are **bit-identical** to the
+in-process path, not merely close: the wire carries raw little-endian float32,
+which is the dtype `encode` already produces, and the daemon calls the same
+functions a local caller would. A test asserts exact equality so the two paths
+cannot drift, which keeps the nine-month retrieval baseline comparable.
+
+Measured round trip: **0.009 ms** persistent, 0.060 ms per connection, 0.014 ms
+for a `ping` through the assembled daemon. End-to-end `embed` is 7.6-8.5 ms
+through the daemon against 7.8-9.5 ms in process — indistinguishable, and
+sometimes faster, because a client that never imports torch is not holding its
+thread pool. The design doc had estimated 1-3 ms; measuring corrected it by two
+orders of magnitude.
+
+If no daemon answers, if it idles out mid-session, or if it returns an error, the
+caller falls back in-process and never sees an exception. A dead daemon costs
+speed, never correctness.
+
+```bash
+MGCP_EMBED_DAEMON=0     # never use or start a daemon
+MGCP_EMBED_AUTOSTART=0  # use one that is running, never start one
+MGCP_EMBED_SOCKET=...   # socket path override
+```
+
 ## Commands
 
 | Command | Description |
@@ -567,6 +624,7 @@ The dispatcher falls back to a minimal hard-coded intent set if the JSON file is
 | `mgcp-duplicates` | Find semantically similar lessons |
 | `mgcp-backup` | Backup/restore all MGCP data |
 | `mgcp-migrate` | Rebuild the Qdrant index from `lessons.db` |
+| `mgcp-embed` | Shared embedding daemon — load BGE once per machine instead of once per process (`--status`, `--stop`) |
 
 ## API & Dashboard
 
@@ -635,6 +693,7 @@ If someone tries this, we'd be interested to hear how it goes.
 | Proactive Intelligence | Complete |
 | Feedback Loops (REM) | Complete |
 | Skill Compilation | Complete (v2.3) — emits a SKILL.md file; never writes to the knowledge store. The *strategy* of graduating lessons out of `query_lessons` was dropped for degrading reliability. |
+| Multi-session access (v3.0) | Complete — Qdrant server mode, compare-and-swap writes, shared embedding daemon. Embedded single-session stays the default. |
 
 ## Contributing
 

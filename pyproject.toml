@@ -1,6 +1,6 @@
 [project]
 name = "mgcp"
-version = "2.1.0"
+version = "3.0.0"
 description = "Memory Graph Core Primitives - Persistent graph-based memory for LLM interactions via MCP"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -55,6 +55,7 @@ mgcp-import = "mgcp.data_ops:main_import"
 mgcp-duplicates = "mgcp.data_ops:main_duplicates"
 mgcp-backup = "mgcp.backup:main"
 mgcp-migrate = "mgcp.migration:main"
+mgcp-embed = "mgcp.embedding_daemon:main"
 
 [project.urls]
 Homepage = "https://github.com/devnullnoop/MGCP"

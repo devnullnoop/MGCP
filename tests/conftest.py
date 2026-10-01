@@ -41,6 +41,13 @@ _SANDBOX_DATA_DIR = tempfile.mkdtemp(prefix="mgcp-tests-")
 os.environ["MGCP_LIVE_DATA_DIR"] = _LIVE_DATA_DIR
 os.environ["MGCP_DATA_DIR"] = _SANDBOX_DATA_DIR
 
+# The suite neither starts the shared embedding daemon nor depends on one the
+# operator happens to be running: an ordinary `pytest` must not fork a 478 MiB
+# background process, and must not change its answers based on whether a daemon
+# is up. tests/test_embedding_daemon.py re-enables it against a socket in a temp
+# directory, which is the only place the daemon is exercised.
+os.environ["MGCP_EMBED_DAEMON"] = "0"
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ledger import LEDGER_PATH, parse_rows  # noqa: E402
 

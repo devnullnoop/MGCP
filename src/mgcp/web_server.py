@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from .embedding import daemon_status
 from .graph import LessonGraph
 from .models import ProjectContext, ProjectTodo
 from .persistence import LessonStore, StaleWriteError
@@ -160,7 +161,7 @@ it so old bookmarks still land somewhere, which is why no page path is listed
 here as an endpoint — none of them resolve to a route of their own.
 `/docs` is this API documentation.
 """,
-    version="2.1.0",
+    version="3.0.0",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -238,6 +239,10 @@ async def health_check() -> dict[str, Any]:
         "qdrant_mode": "server" if get_qdrant_url() else "embedded",
         "qdrant_target": get_qdrant_url() or get_default_qdrant_path(),
         "catalogue_store": "connected" if catalogue_vector else "not initialized",
+        # Whether this process holds its own 478 MiB copy of BGE or is sharing
+        # one is the whole substance of v3 workstream B, and it is invisible
+        # otherwise.
+        "embedding": daemon_status(),
         "telemetry": "enabled" if telemetry else "disabled",
     }
 

@@ -6,7 +6,7 @@ Persistent graph-based memory for LLM interactions via MCP.
 import sys
 import warnings
 
-__version__ = "2.1.0"
+__version__ = "3.0.0"
 
 if sys.version_info >= (3, 13):
     warnings.warn(

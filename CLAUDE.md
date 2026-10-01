@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **MGCP** (Memory Graph Core Primitives) is a Python MCP server providing persistent, graph-based memory for LLM interactions. The system stores lessons learned during LLM sessions in a graph structure, allowing semantic querying without loading full context histories.
 
-**Status**: Alpha/Research project — package version 2.1.0 (`pyproject.toml`, `mgcp.__version__`); the hook/feature line is versioned separately and sits at v2.13 (`src/mgcp/hook_templates/VERSION` — that file is authoritative; this line has twice been written stale in the same commit that bumped it), with all v2.2+ work under CHANGELOG `[Unreleased]`. Phases 1-7 complete, actively dogfooding. Phase 8's *strategy* — graduating lessons out of `query_lessons` into compiled skill prompts — was dropped for degrading reliability. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
+**Status**: Alpha/Research project — package version 3.0.0 (`pyproject.toml`, `mgcp.__version__`); the hook/feature line is versioned separately and sits at v2.13 (`src/mgcp/hook_templates/VERSION` — that file is authoritative; this line has twice been written stale in the same commit that bumped it), and v2.2 through v3.0 is released under CHANGELOG `[3.0.0]`. Phases 1-7 complete plus v3 multi-session (Qdrant server mode, compare-and-swap writes, shared embedding daemon) — embedded single-session remains the default and MGCP needs no server, daemon or container. Actively dogfooding. Phase 8's *strategy* — graduating lessons out of `query_lessons` into compiled skill prompts — was dropped for degrading reliability. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
 
 ## Documentation Preferences
 
@@ -36,6 +36,10 @@ python -m mgcp.server
 
 # Run the web UI server
 python -m mgcp.web_server
+
+# Run the shared embedding daemon (optional; the first client starts one if absent)
+mgcp-embed
+mgcp-embed --status   # is this machine sharing a model, or loading one per process?
 
 # Run tests
 pytest
@@ -88,7 +92,8 @@ All source files are in `src/mgcp/`:
 - `server.py` - MCP server with 50 tools
 - `models.py` - Pydantic models (Lesson, ProjectContext, ProjectCatalogue, SecurityNote, Convention, etc.)
 - `graph.py` - NetworkX graph operations with typed relationships and Louvain community detection
-- `embedding.py` - Centralized BGE embedding model (`BAAI/bge-base-en-v1.5`)
+- `embedding.py` - Centralized BGE embedding model (`BAAI/bge-base-en-v1.5`); daemon-first with an in-process fallback
+- `embedding_daemon.py` - Shared embedding daemon (`mgcp-embed`): BGE loaded once per machine, served over a unix socket
 - `qdrant_vector_store.py` - Qdrant integration for lesson, workflow, and community summary search
 - `qdrant_catalogue_store.py` - Qdrant integration for project catalogue search
 - `persistence.py` - SQLite/JSON storage for lessons, project contexts, and community summaries

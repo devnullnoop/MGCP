@@ -33,6 +33,9 @@
   nav{position:sticky;top:0;background:var(--bg);padding:.75rem 0;border-bottom:1px solid var(--border);margin-bottom:2rem;z-index:10}
   nav a{color:var(--accent);text-decoration:none;margin-right:1.25rem;font-size:.92rem}
   footer{color:var(--muted);margin-top:4rem;font-size:.85rem}
+  .done { font-size: 0.6em; font-weight: 600; letter-spacing: 0.04em;
+           vertical-align: middle; padding: 0.15em 0.5em; border-radius: 999px;
+           background: color-mix(in oklab, currentColor 10%, transparent); opacity: 0.85; }
 </style>
 </head>
 <body>
@@ -49,6 +52,13 @@
   single-writer lock, stop paying for the embedding model once per process, and make concurrent
   writes fail loudly instead of quietly. Every number below is measured on this machine, not
   estimated, unless it says otherwise.
+</p>
+<p class="lead">
+  <strong>All three shipped in v3.0.0 on 2026-10-01</strong> — C first, then A, then B, in the order
+  this document recommended. Where a measurement later contradicted an estimate here, the estimate
+  has been replaced by the measurement and labelled as such; workstream B's latency paragraph is the
+  clearest case, and it was wrong by two orders of magnitude in the pessimistic direction.
+  <strong>Embedded, single-session, no-daemon remains the default.</strong>
 </p>
 
 <h2 id="why">Why — what is actually broken</h2>
@@ -90,7 +100,7 @@
     <td>2 sessions ≈ 1 GB of duplicate model</td><td>B</td></tr>
 </table>
 
-<h2 id="a">Workstream A — Qdrant server mode</h2>
+<h2 id="a">Workstream A — Qdrant server mode <span class="done">✅ shipped v3.0.0</span></h2>
 <p>
   The smallest of the three, and already half-designed: both store docstrings document
   <code>Server mode: QdrantClient(host="localhost", port=6333)</code> while the code only ever
@@ -143,7 +153,7 @@ flowchart LR
     bit-identical across modes.</li>
 </ul>
 
-<h2 id="b">Workstream B — shared embedding</h2>
+<h2 id="b">Workstream B — shared embedding <span class="done">✅ shipped v3.0.0</span></h2>
 <p>
   <code>embedding.py</code> is already a single <code>@lru_cache(maxsize=1)</code> instance —
   <em>per process</em>. The work is to make the cache process-wide rather than per-interpreter,
@@ -190,12 +200,20 @@ flowchart TB
     same input, so the two paths can never drift.</li>
 </ul>
 <p class="risk">
-  <strong>Latency.</strong> A socket round trip adds roughly 1–3 ms (unmeasured — to be confirmed
-  before committing to this). Observed retrieval latency today is 40–260 ms, so the overhead should
-  be well inside noise. If measurement contradicts that, B is droppable without affecting A or C.
-</p>
+  <strong>Latency — measured, and the estimate was wrong by two orders of magnitude.</strong>
+  This paragraph predicted 1–3 ms for the round trip and said to confirm it before committing to B.
+  Confirmed: a persistent-connection round trip is <strong>0.009 ms</strong>, connecting per call is
+  0.060 ms, and a <code>ping</code> through the fully assembled daemon returns in
+  <strong>0.014 ms</strong>. End-to-end <code>embed</code> is 7.6–8.5 ms through the daemon against
+  7.8–9.5 ms in process across three alternating rounds — indistinguishable, and occasionally
+  <em>faster</em>, because a client that never imports torch is not holding its thread pool. An early
+  reading of 16 ms was noise from six consecutive model loads and was chased down rather than
+  published. The saving it buys, measured with three real client processes against one daemon:
+  <strong>1,344.6 MiB → 565.4 MiB</strong>, and each additional session costs
+  <strong>39 MiB instead of 448</strong> with cold start falling from ~2,100 ms to ~65 ms.
+  B was droppable if the number had come back badly; it did not.</p>
 
-<h2 id="c">Workstream C — writes that fail loudly</h2>
+<h2 id="c">Workstream C — writes that fail loudly <span class="done">✅ shipped v3.0.0</span></h2>
 <p>
   The one that matters most, because its failure mode is invisible. Two halves: detect the
   conflict, and stop manufacturing conflicts that need not exist.
@@ -253,9 +271,9 @@ WHERE id = ? AND version = ?        -- the expected version
 <table>
   <tr><th>Order</th><th>Work</th><th>Independent?</th><th>Why this order</th></tr>
   <tr><td>0 ✅</td><td>Lazy Qdrant in <code>web_server</code> (shipped)</td><td>yes</td><td>Dashboard coexists today; buys time to do the rest properly</td></tr>
-  <tr><td>1</td><td><strong>C — CAS + narrow writes</strong></td><td>yes</td><td><em>Before</em> A. Server mode makes concurrency routine; shipping it first would turn a rare silent loss into a common one</td></tr>
-  <tr><td>2</td><td><strong>A — Qdrant server mode</strong></td><td>yes</td><td>Removes the lock. Small, contained, reversible — SQLite stays the source of truth</td></tr>
-  <tr><td>3</td><td><strong>B — shared embedding</strong></td><td>yes</td><td>Pure optimisation. Last because it is the only one that can be abandoned without affecting the others</td></tr>
+  <tr><td>1 ✅</td><td><strong>C — CAS + narrow writes</strong></td><td>yes</td><td><em>Before</em> A. Server mode makes concurrency routine; shipping it first would turn a rare silent loss into a common one</td></tr>
+  <tr><td>2 ✅</td><td><strong>A — Qdrant server mode</strong></td><td>yes</td><td>Removes the lock. Small, contained, reversible — SQLite stays the source of truth</td></tr>
+  <tr><td>3 ✅</td><td><strong>B — shared embedding</strong></td><td>yes</td><td>Pure optimisation. Last because it is the only one that can be abandoned without affecting the others</td></tr>
 </table>
 <p class="risk">
   <strong>The ordering is the one firm recommendation in this document.</strong> A before C would
@@ -296,7 +314,6 @@ WHERE id = ? AND version = ?        -- the expected version
 
 <h2>Open questions</h2>
 <ol>
-  <li>Does the socket round trip actually cost 1–3 ms? Measure before committing to B.</li>
   <li>Should the Qdrant server be managed by MGCP (spawn/supervise) or by the operator
     (a native binary, a managed service, a remote instance)? Managed is friendlier; unmanaged is honest about what it is. Either way it stays optional.</li>
   <li>On a CAS conflict in <code>refine_lesson</code>, is the right default to retry once
@@ -306,9 +323,10 @@ WHERE id = ? AND version = ?        -- the expected version
 </ol>
 
 <footer>
-  Written 2026-10-01 against hook template v2.13. Measurements from this machine; anything
-  estimated is labelled. No code written for A, B or C — this document is the plan, per the
-  project's own feature-development workflow.
+  Written 2026-10-01 against hook template v2.13, and updated the same day once all three
+  workstreams shipped as v3.0.0. Measurements from this machine; anything estimated is labelled.
+  This document was the plan before any code existed, which is why its wrong latency estimate is
+  left visible beside the measurement that replaced it.
 </footer>
 
 </body>

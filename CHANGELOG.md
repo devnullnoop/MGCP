@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The README is no longer a second changelog.** Eleven version-labelled sections (v2.2 → v2.13) describing releases already recorded here were replaced by a present-tense description of the current system, with 3.0 and multi-session as the one highlighted release and a pointer to this file for history. `tests/test_claims.py::test_C31_...` sliced the README between `### v2.9` and `### v2.10`, so a claim about the apology gate was pinned to a version heading; it now anchors on the section's subject, and ledger row C31 points at the section rather than at a version.
+
 ## [3.0.0] - 2026-10-01
 
 Multi-session access. Three workstreams, each verified against the real thing

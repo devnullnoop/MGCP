@@ -909,13 +909,18 @@ def test_C30_web_api_self_description_names_only_real_routes():
 
 
 def test_C31_readme_apology_gate_description_matches_the_shipped_hook():
-    """README v2.9 documents the apology gate — previously the gate shipped
-    entirely undocumented — and names its seven trigger phrases. The list in
-    prose must stay the list in code, or the docs describe a different gate
-    than the one that fires.
+    """The README documents the apology gate and names its seven trigger
+    phrases. The list in prose must stay the list in code, or the docs describe
+    a different gate than the one that fires.
+
+    Anchored on the section's subject, not on a version heading: this test used
+    to slice between "### v2.9" and "### v2.10", so folding the release history
+    out of the README broke a claim about the gate rather than about versions.
     """
     readme = README.read_text()
-    v29 = readme[readme.index("### v2.9: the apology gate"):readme.index("### v2.10")]
+    section = readme[
+        readme.index("### The apology gate"):readme.index("### Intents compile to portable skills")
+    ]
 
     hook_ns: dict = {}
     exec(compile(PRE_TOOL_HOOK.read_text(), str(PRE_TOOL_HOOK), "exec"), hook_ns)
@@ -932,14 +937,15 @@ def test_C31_readme_apology_gate_description_matches_the_shipped_hook():
         ("apologize/apologise", "I apologize for the delay"),
     ]
     for readme_form, probe in documented:
-        assert readme_form in v29, f"README v2.9 no longer names {readme_form!r}"
+        assert readme_form in section, f"README no longer names {readme_form!r}"
         assert any(p.search(probe) for p in patterns), (
             f"README documents {readme_form!r} as a trigger but the shipped hook does not match {probe!r}"
         )
     assert len(patterns) == 7, (
         f"hook has {len(patterns)} apology patterns; README says seven — update both together"
     )
-    assert "MGCP_BYPASS:apology" in v29 and hook_ns["APOLOGY_BYPASS_SCOPE"] == "apology"
+    assert "MGCP_BYPASS:apology" in section
+    assert hook_ns["APOLOGY_BYPASS_SCOPE"] == "apology"
 
 
 def test_every_store_honours_MGCP_DATA_DIR(monkeypatch, tmp_path):

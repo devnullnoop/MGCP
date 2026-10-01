@@ -17,7 +17,11 @@ from fastapi.staticfiles import StaticFiles
 from .graph import LessonGraph
 from .models import ProjectContext, ProjectTodo
 from .persistence import LessonStore, StaleWriteError
-from .qdrant_vector_store import QdrantVectorStore
+from .qdrant_vector_store import (
+    QdrantVectorStore,
+    get_default_qdrant_path,
+    get_qdrant_url,
+)
 from .telemetry import TelemetryLogger
 
 logger = logging.getLogger(__name__)
@@ -228,6 +232,11 @@ async def health_check() -> dict[str, Any]:
         "lessons_count": len(lessons),
         "projects_count": len(projects),
         "vector_store": "connected" if vector_store else "lazy (opened on first write)",
+        # Which store a process is talking to is not obvious once two modes
+        # exist, and a misconfigured session writing to the other one would be
+        # silent. Report it.
+        "qdrant_mode": "server" if get_qdrant_url() else "embedded",
+        "qdrant_target": get_qdrant_url() or get_default_qdrant_path(),
         "catalogue_store": "connected" if catalogue_vector else "not initialized",
         "telemetry": "enabled" if telemetry else "disabled",
     }

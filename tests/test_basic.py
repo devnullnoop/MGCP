@@ -464,3 +464,44 @@ print("done")
             )
         assert result.returncode == 0, result.stderr[-2000:]
         assert "done" in result.stdout
+
+
+class TestQdrantModeResolution:
+    """Embedded by default; server mode is opt-in via MGCP_QDRANT_URL.
+
+    One resolver feeds every construction site so the two modes cannot
+    disagree about which store a process is talking to — a session silently
+    writing to the other store is the failure this centralisation prevents.
+    """
+
+    def test_embedded_is_the_default(self, monkeypatch):
+        from mgcp.qdrant_vector_store import get_qdrant_url, qdrant_client_args
+
+        monkeypatch.delenv("MGCP_QDRANT_URL", raising=False)
+        assert get_qdrant_url() is None
+        assert qdrant_client_args("/tmp/q") == {"path": "/tmp/q"}
+
+    def test_url_switches_to_server_mode(self, monkeypatch):
+        from mgcp.qdrant_vector_store import qdrant_client_args
+
+        monkeypatch.setenv("MGCP_QDRANT_URL", "http://localhost:6333")
+        monkeypatch.delenv("MGCP_QDRANT_API_KEY", raising=False)
+        args = qdrant_client_args("/tmp/q")
+        assert args == {"url": "http://localhost:6333"}
+        assert "path" not in args, "server mode must not also pass a local path"
+
+    def test_api_key_is_included_only_when_set(self, monkeypatch):
+        from mgcp.qdrant_vector_store import qdrant_client_args
+
+        monkeypatch.setenv("MGCP_QDRANT_URL", "http://localhost:6333")
+        monkeypatch.setenv("MGCP_QDRANT_API_KEY", "k")
+        assert qdrant_client_args("/tmp/q")["api_key"] == "k"
+        monkeypatch.setenv("MGCP_QDRANT_API_KEY", "   ")
+        assert "api_key" not in qdrant_client_args("/tmp/q")
+
+    def test_blank_url_is_treated_as_unset(self, monkeypatch):
+        """An empty env var must not produce url="" and a broken client."""
+        from mgcp.qdrant_vector_store import qdrant_client_args
+
+        monkeypatch.setenv("MGCP_QDRANT_URL", "   ")
+        assert qdrant_client_args("/tmp/q") == {"path": "/tmp/q"}

@@ -118,9 +118,12 @@ async def _ensure_initialized() -> tuple[
             # Create a single shared Qdrant client for all vector stores
             # CRITICAL: Qdrant local mode only allows ONE client per path.
             # Multiple clients cause "Storage folder already accessed" errors.
-            from .qdrant_vector_store import get_default_qdrant_path
+            from .qdrant_vector_store import (
+                get_default_qdrant_path,
+                qdrant_client_args,
+            )
             qdrant_path = get_default_qdrant_path()
-            shared_qdrant_client = QdrantClient(path=qdrant_path)
+            shared_qdrant_client = QdrantClient(**qdrant_client_args(qdrant_path))
 
             _vector_store = QdrantVectorStore(client=shared_qdrant_client)
             _catalogue_vector = QdrantCatalogueStore(client=shared_qdrant_client)

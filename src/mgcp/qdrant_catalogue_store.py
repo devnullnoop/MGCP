@@ -46,7 +46,12 @@ from .models import (
 # Both stores share one Qdrant directory and one UUID namespace, so these were
 # byte-identical copies here. Importing rather than re-declaring keeps a single
 # definition: two copies of the namespace is two chances for point ids to diverge.
-from .qdrant_vector_store import DEFAULT_QDRANT_PATH, string_to_uuid
+from .qdrant_vector_store import (
+    DEFAULT_QDRANT_PATH,
+    get_qdrant_url,
+    qdrant_client_args,
+    string_to_uuid,
+)
 
 logger = logging.getLogger("mgcp.qdrant_catalogue_store")
 
@@ -66,12 +71,14 @@ class QdrantCatalogueStore:
         client: QdrantClient | None = None,
     ):
         self.persist_path = Path(os.path.expanduser(persist_path))
-        self.persist_path.mkdir(parents=True, exist_ok=True)
         self.collection_name = collection_name
+        self.server_mode = get_qdrant_url() is not None
+        if not self.server_mode:
+            self.persist_path.mkdir(parents=True, exist_ok=True)
 
-        # IMPORTANT: Qdrant local mode only allows ONE client per path.
-        # Share clients between stores to avoid lock conflicts.
-        self.client = client or QdrantClient(path=str(self.persist_path))
+        # IMPORTANT: embedded Qdrant allows ONE client per path, which is why
+        # stores share a client where they can and why server mode exists.
+        self.client = client or QdrantClient(**qdrant_client_args(self.persist_path))
 
         # Ensure collection exists
         self._ensure_collection()

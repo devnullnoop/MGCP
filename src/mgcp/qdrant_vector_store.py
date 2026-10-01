@@ -53,6 +53,36 @@ def get_default_qdrant_path() -> str:
 DEFAULT_QDRANT_PATH = get_default_qdrant_path()
 
 
+def get_qdrant_url() -> str | None:
+    """The Qdrant server URL, or None for embedded mode.
+
+    Embedded stays the default on purpose: a single-session user should never
+    have to run a daemon to use MGCP. Setting MGCP_QDRANT_URL opts in to server
+    mode, which is what lets concurrent sessions and the dashboard share one
+    store — embedded Qdrant permits exactly one client per path.
+    """
+    url = os.environ.get("MGCP_QDRANT_URL", "").strip()
+    return url or None
+
+
+def qdrant_client_args(persist_path: str | Path) -> dict:
+    """Arguments for QdrantClient, in whichever mode is configured.
+
+    One resolver for every construction site, so the two modes can never
+    disagree about which store a process is talking to — a misconfigured
+    second session writing to the other store would be silent and very hard
+    to notice.
+    """
+    url = get_qdrant_url()
+    if url:
+        args: dict = {"url": url}
+        api_key = os.environ.get("MGCP_QDRANT_API_KEY", "").strip()
+        if api_key:
+            args["api_key"] = api_key
+        return args
+    return {"path": str(persist_path)}
+
+
 class QdrantVectorStore:
     """Semantic search over lessons using Qdrant."""
 
@@ -63,12 +93,16 @@ class QdrantVectorStore:
         client: QdrantClient | None = None,
     ):
         self.persist_path = Path(os.path.expanduser(persist_path))
-        self.persist_path.mkdir(parents=True, exist_ok=True)
         self.collection_name = collection_name
+        self.server_mode = get_qdrant_url() is not None
+        if not self.server_mode:
+            # Only embedded mode needs the directory; in server mode the data
+            # lives wherever the server keeps it.
+            self.persist_path.mkdir(parents=True, exist_ok=True)
 
-        # IMPORTANT: Qdrant local mode only allows ONE client per path.
-        # Share clients between stores to avoid lock conflicts.
-        self.client = client or QdrantClient(path=str(self.persist_path))
+        # IMPORTANT: embedded Qdrant allows ONE client per path, which is why
+        # stores share a client where they can and why server mode exists.
+        self.client = client or QdrantClient(**qdrant_client_args(self.persist_path))
 
         # Ensure collection exists
         self._ensure_collection()

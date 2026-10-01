@@ -355,7 +355,11 @@ flowchart TB
 </div>
 <p>
   Qdrant runs in local mode, which permits <strong>one client per path</strong>. A second MGCP
-  process therefore cannot open the store, and every vector-backed tool in it fails.
+  process therefore cannot open the store, and every vector-backed tool in it fails. The dashboard
+  works around this by opening Qdrant only when a route actually needs it — every analytics view
+  reads SQLite and the audit log, so it runs read-only beside a live MCP server, and only lesson
+  writes return 503. That is a mitigation, not a fix: concurrent <em>sessions</em> still contend,
+  which is what Qdrant server mode would resolve.
 </p>
 
 <h2 id="gaps">8. Remaining gaps</h2>

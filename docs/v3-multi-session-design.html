@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MGCP v3 — Multi-Session Design</title>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'dark', flowchart: { curve: 'basis' } });
+</script>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#171b22; --border:#2a3140; --accent:#7ab8ff;
+    --text:#d7dde6; --muted:#8a94a6; --warn:#ffb86b; --bad:#ff8b8b; --good:#7ee0a8;
+  }
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);
+       color:var(--text);margin:0;padding:2rem 3rem 6rem;line-height:1.55}
+  h1{color:var(--accent);margin-top:0}
+  h2{color:var(--accent);border-bottom:1px solid var(--border);padding-bottom:.3rem;margin-top:3rem}
+  h3{margin-top:2rem}
+  .lead{color:var(--muted);max-width:68rem;font-size:1.05rem}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:1.25rem 1.5rem;margin:1.25rem 0}
+  .mermaid{text-align:center;margin:1rem 0}
+  table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.92rem}
+  th,td{border:1px solid var(--border);padding:.5rem .7rem;text-align:left;vertical-align:top}
+  th{background:#1d2430;color:var(--accent)}
+  code{background:#11151c;padding:.1rem .35rem;border-radius:4px;font-size:.88em}
+  pre{background:#11151c;border:1px solid var(--border);border-radius:8px;padding:1rem;overflow:auto;font-size:.85rem}
+  .measured{border-left:3px solid var(--good);padding-left:1rem}
+  .risk{border-left:3px solid var(--warn);padding-left:1rem}
+  .out{border-left:3px solid var(--bad);padding-left:1rem}
+  nav{position:sticky;top:0;background:var(--bg);padding:.75rem 0;border-bottom:1px solid var(--border);margin-bottom:2rem;z-index:10}
+  nav a{color:var(--accent);text-decoration:none;margin-right:1.25rem;font-size:.92rem}
+  footer{color:var(--muted);margin-top:4rem;font-size:.85rem}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="#why">Why</a><a href="#a">A · Qdrant server</a><a href="#b">B · Shared embedding</a>
+  <a href="#c">C · Safe writes</a><a href="#seq">Sequencing</a><a href="#risks">Risks</a>
+  <a href="#out">Out of scope</a>
+</nav>
+
+<h1>MGCP v3 — Multi-Session</h1>
+<p class="lead">
+  One store, many sessions, without silent loss. Three independent workstreams: remove the
+  single-writer lock, stop paying for the embedding model once per process, and make concurrent
+  writes fail loudly instead of quietly. Every number below is measured on this machine, not
+  estimated, unless it says otherwise.
+</p>
+
+<h2 id="why">Why — what is actually broken</h2>
+
+<div class="panel measured">
+<h3>Measured, 2026-09-30</h3>
+<table>
+  <tr><th>Observation</th><th>Value</th><th>How</th></tr>
+  <tr><td>Vector data, all four collections</td><td><strong>6.4 MB</strong></td><td><code>du -sh ~/.mgcp/qdrant</code></td></tr>
+  <tr><td>MCP server RSS after 12h</td><td><strong>1,692 MB</strong></td><td><code>ps -o rss=</code></td></tr>
+  <tr><td>Cost of the BGE model alone</td><td><strong>+403 MB</strong></td><td>staged <code>ru_maxrss</code> on a cold process</td></tr>
+  <tr><td>Cost of importing the qdrant <em>client</em></td><td>+55 MB</td><td>same</td></tr>
+  <tr><td>Concurrent MGCP processes possible</td><td><strong>1</strong></td><td>local Qdrant: one client per path</td></tr>
+  <tr><td>Second server locked out, 2026-09-30</td><td>12 hours</td><td>a <code>bg-spare</code> daemon; every vector tool in it failed</td></tr>
+</table>
+<p>
+  The resource story is the opposite of the intuition: the vectors are trivial and the
+  <em>model</em> is the cost. Running a Qdrant daemon for 6.4 MB is noise next to 403 MB of BGE
+  loaded per process. Concurrency is therefore cheap to make <em>correct</em> and expensive to
+  make <em>efficient</em>, and those are different pieces of work.
+</p>
+</div>
+
+<h3>The three failures, in order of severity</h3>
+<table>
+  <tr><th>#</th><th>Failure</th><th>Today</th><th>Fixed by</th></tr>
+  <tr><td>1</td><td><strong>Silent write loss.</strong> <code>save_project_context</code> overwrites
+    <code>todos</code>, <code>catalogue</code>, <code>notes</code>, <code>recent_decisions</code> and
+    <code>active_files</code> wholesale. <code>lessons.version</code> is read but never used as a
+    guard, so <code>refine_lesson</code> is a read-modify-write with no detection. The JSON configs
+    are whole-file rewrites.</td>
+    <td>Happens already, single-user, whenever two windows touch one project</td><td>C</td></tr>
+  <tr><td>2</td><td><strong>One process at a time.</strong> Local Qdrant permits one client per
+    path, so a second session's vector tools fail outright.</td>
+    <td>Observed: 12h lockout</td><td>A</td></tr>
+  <tr><td>3</td><td><strong>N × 403 MB.</strong> Each process loads its own BGE.</td>
+    <td>2 sessions ≈ 1 GB of duplicate model</td><td>B</td></tr>
+</table>
+
+<h2 id="a">Workstream A — Qdrant server mode</h2>
+<p>
+  The smallest of the three, and already half-designed: both store docstrings document
+  <code>Server mode: QdrantClient(host="localhost", port=6333)</code> while the code only ever
+  calls <code>QdrantClient(path=...)</code>. <code>qdrant-client</code> 1.16.2 supports
+  <code>url</code>, <code>host</code>, <code>port</code>, <code>api_key</code> and
+  <code>prefer_grpc</code> already.
+</p>
+
+<div class="panel">
+<div class="mermaid">
+flowchart LR
+  subgraph NOW["today — embedded, one writer"]
+    S1[MCP session A] -->|holds lock| Q1[("~/.mgcp/qdrant")]
+    S2[MCP session B] -.->|BlockingIOError| Q1
+    D1[dashboard] -.->|read-only workaround| L1[("lessons.db")]
+  end
+  subgraph V3["v3 — server mode"]
+    A1[MCP session A] --> QS{{"qdrant server<br/>localhost:6333"}}
+    A2[MCP session B] --> QS
+    A3[dashboard] --> QS
+    QS --> ST[("storage")]
+  end
+</div>
+</div>
+
+<h3>Design</h3>
+<ul>
+  <li>One resolver, <code>qdrant_client_args()</code>, returns either
+    <code>{"path": ...}</code> or <code>{"url": ..., "api_key": ...}</code> from
+    <code>MGCP_QDRANT_URL</code> (and <code>MGCP_QDRANT_API_KEY</code>). Three construction sites
+    change: <code>qdrant_vector_store.py:71</code>, <code>qdrant_catalogue_store.py:74</code>,
+    <code>server.py:123</code>.</li>
+  <li><strong>Embedded stays the default.</strong> A single-session user should never have to run a
+    daemon. Server mode is opt-in by setting the URL.</li>
+  <li><code>mgcp-init</code> gains <code>--qdrant-url</code>, writes it into the client env block,
+    and <code>mgcp-doctor</code>-style verification pings <code>/readyz</code>.</li>
+  <li>A migration path: <code>mgcp-migrate</code> already rebuilds the Qdrant index from SQLite,
+    which <em>is</em> the embedded→server migration. It needs no new code, only documentation —
+    point it at the server and re-index. SQLite remains the source of truth, so this is
+    reversible.</li>
+  <li>Collection names, vector size (768) and distance (Cosine) are unchanged, so vectors are
+    bit-identical across modes.</li>
+</ul>
+
+<h2 id="b">Workstream B — shared embedding</h2>
+<p>
+  <code>embedding.py</code> is already a single <code>@lru_cache(maxsize=1)</code> instance —
+  <em>per process</em>. The work is to make the cache process-wide rather than per-interpreter,
+  without changing the vectors.
+</p>
+
+<div class="panel">
+<div class="mermaid">
+flowchart TB
+  subgraph NOW2["today"]
+    P1["MCP session A<br/>BGE +403MB"]
+    P2["MCP session B<br/>BGE +403MB"]
+    P3["dashboard<br/>BGE +403MB on write"]
+  end
+  subgraph V3B["v3"]
+    C1[MCP session A] --> E{{"mgcp-embed<br/>unix socket<br/>BGE loaded once"}}
+    C2[MCP session B] --> E
+    C3[dashboard] --> E
+    E --> M[("BAAI/bge-base-en-v1.5")]
+  end
+</div>
+</div>
+
+<h3>Why a daemon and not Qdrant's own inference</h3>
+<p>
+  Qdrant can embed server-side via FastEmbed, which looks like the tidier answer. It is rejected:
+  it changes which model produces the vectors, so the entire corpus would need re-embedding, and
+  the retrieval-quality baseline measured over nine months (median top-1 0.691) would no longer be
+  comparable. Keeping BGE exactly as it is means the vectors, the scores and every number in the
+  Signal view stay continuous across the upgrade.
+</p>
+
+<h3>Design</h3>
+<ul>
+  <li>A small daemon exposing <code>embed</code> / <code>embed_query</code> / <code>embed_batch</code>
+    over a <strong>unix domain socket</strong> in <code>~/.mgcp/</code> — not TCP, so it is not
+    reachable off-box and needs no auth.</li>
+  <li><code>embedding.py</code> keeps its current signatures and gains a client path: if the socket
+    exists, use it; otherwise load the model in-process exactly as now. <strong>No caller
+    changes.</strong></li>
+  <li>Lazy start: the first client that finds no socket spawns the daemon and waits for readiness.
+    Idle timeout shuts it down, so a one-off CLI does not leave 400 MB resident.</li>
+  <li>Correctness gate: a test asserts in-process and over-socket embeddings are identical for the
+    same input, so the two paths can never drift.</li>
+</ul>
+<p class="risk">
+  <strong>Latency.</strong> A socket round trip adds roughly 1–3 ms (unmeasured — to be confirmed
+  before committing to this). Observed retrieval latency today is 40–260 ms, so the overhead should
+  be well inside noise. If measurement contradicts that, B is droppable without affecting A or C.
+</p>
+
+<h2 id="c">Workstream C — writes that fail loudly</h2>
+<p>
+  The one that matters most, because its failure mode is invisible. Two halves: detect the
+  conflict, and stop manufacturing conflicts that need not exist.
+</p>
+
+<h3>C1 — compare-and-swap</h3>
+<div class="panel">
+<div class="mermaid">
+sequenceDiagram
+  participant A as Session A
+  participant B as Session B
+  participant S as Store
+  A->>S: get_lesson(x) → version 4
+  B->>S: get_lesson(x) → version 4
+  A->>S: update(x, expect=4)
+  S-->>A: ok, now version 5
+  B->>S: update(x, expect=4)
+  S-->>B: CONFLICT — x is at version 5
+  Note over B: re-read, re-apply, retry<br/>(today: B silently wins and A's edit is gone)
+</div>
+</div>
+<pre>UPDATE lessons SET ..., version = version + 1
+WHERE id = ? AND version = ?        -- the expected version
+-- rowcount 0 → raise StaleWriteError(id, expected, actual)</pre>
+<ul>
+  <li><code>lessons.version</code> and <code>workflows.version</code> exist already. Project
+    contexts need a <code>revision INTEGER NOT NULL DEFAULT 0</code>, added by the same idempotent
+    migration pattern used for <code>rem_state</code> and <code>context_history</code>.</li>
+  <li>The MCP tools surface the conflict as a message the agent can act on: what changed, and that
+    it should re-read. An agent retrying after a re-read is correct behaviour; an agent silently
+    overwriting is not.</li>
+  <li>JSON configs get the same treatment via mtime+hash CAS, plus atomic
+    <code>os.replace</code> so a torn read is impossible.</li>
+</ul>
+
+<h3>C2 — narrow writes</h3>
+<p>
+  Most conflicts today are manufactured. <code>save_project_context</code> takes a whole object
+  when the caller means "append a decision" or "set notes", so two sessions editing unrelated
+  fields collide for no reason. Adding field-scoped operations removes the conflict instead of
+  detecting it:
+</p>
+<table>
+  <tr><th>Instead of</th><th>Use</th><th>Conflict with a concurrent writer?</th></tr>
+  <tr><td><code>save_project_context(whole object)</code></td><td><code>append_decision</code>, <code>set_notes</code>, <code>upsert_todo</code>, <code>set_active_files</code></td><td>none unless the same field</td></tr>
+  <tr><td><code>refine_lesson</code> read-modify-write</td><td>same call, now carrying the version it read</td><td>detected, not lost</td></tr>
+  <tr><td>whole-file <code>intent_config.json</code> rewrite</td><td><code>add_intent</code>/<code>update_intent</code> against a CAS'd file</td><td>detected</td></tr>
+</table>
+<p>
+  <code>save_project_context</code> stays for the session-close path that genuinely writes
+  everything, but it becomes the exception rather than the only tool.
+</p>
+
+<h2 id="seq">Sequencing</h2>
+<table>
+  <tr><th>Order</th><th>Work</th><th>Independent?</th><th>Why this order</th></tr>
+  <tr><td>0 ✅</td><td>Lazy Qdrant in <code>web_server</code> (shipped)</td><td>yes</td><td>Dashboard coexists today; buys time to do the rest properly</td></tr>
+  <tr><td>1</td><td><strong>C — CAS + narrow writes</strong></td><td>yes</td><td><em>Before</em> A. Server mode makes concurrency routine; shipping it first would turn a rare silent loss into a common one</td></tr>
+  <tr><td>2</td><td><strong>A — Qdrant server mode</strong></td><td>yes</td><td>Removes the lock. Small, contained, reversible — SQLite stays the source of truth</td></tr>
+  <tr><td>3</td><td><strong>B — shared embedding</strong></td><td>yes</td><td>Pure optimisation. Last because it is the only one that can be abandoned without affecting the others</td></tr>
+</table>
+<p class="risk">
+  <strong>The ordering is the one firm recommendation in this document.</strong> A before C would
+  make the data-loss window wider at exactly the moment more writers appear.
+</p>
+
+<h2 id="risks">Risks</h2>
+<ul>
+  <li class="risk"><strong>CAS surfaces conflicts to an agent that may handle them badly.</strong>
+    A retry loop that re-reads and blindly re-applies is just last-writer-wins with extra steps.
+    The tool message must say <em>what</em> changed, and REM's existing interactive-review path is
+    where genuine merges belong.</li>
+  <li class="risk"><strong>A daemon that must be running is a new failure mode.</strong> Both A and
+    B must degrade to embedded/in-process when their daemon is absent, and say so, rather than
+    failing the call.</li>
+  <li class="risk"><strong>Migration is a re-index, and re-indexing is where corpora get lost.</strong>
+    <code>mgcp-migrate</code> must refuse to start without a verified backup, and the embedded
+    store must be left intact until the server copy is checksum-verified.</li>
+  <li class="risk"><strong>Two write paths during transition.</strong> While both embedded and
+    server modes exist, a misconfigured second session could write to the other store. The resolver
+    must be the single source of that decision, and <code>/api/health</code> should report which
+    mode is live.</li>
+</ul>
+
+<h2 id="out">Explicitly out of scope</h2>
+<ul>
+  <li class="out"><strong>A write broker or queue.</strong> CAS covers the realistic contention for
+    a single operator with a few sessions. A broker is the answer to a problem no measurement here
+    supports.</li>
+  <li class="out"><strong>Human review of every write.</strong> The value of MGCP is that capture is
+    cheap and automatic; gating it on approval would destroy that. Review belongs where REM already
+    puts it: destructive consolidation.</li>
+  <li class="out"><strong>Multi-user / remote access.</strong> Unix socket and localhost only. No
+    auth story, no network exposure, no tenancy.</li>
+  <li class="out"><strong>Changing the embedding model.</strong> Nine months of scores depend on
+    BGE producing the same vectors.</li>
+</ul>
+
+<h2>Open questions</h2>
+<ol>
+  <li>Does the socket round trip actually cost 1–3 ms? Measure before committing to B.</li>
+  <li>Should the Qdrant server be managed by MGCP (spawn/supervise) or by the operator
+    (docker-compose / brew service)? Managed is friendlier; unmanaged is honest about what it is.</li>
+  <li>On a CAS conflict in <code>refine_lesson</code>, is the right default to retry once
+    automatically after a re-read, or to always hand the conflict to the agent?</li>
+  <li>Does <code>context_history</code>'s per-session upsert need CAS too, or is last-write-of-a-session
+    genuinely the intent? (Current belief: intent, no CAS.)</li>
+</ol>
+
+<footer>
+  Written 2026-10-01 against hook template v2.13. Measurements from this machine; anything
+  estimated is labelled. No code written for A, B or C — this document is the plan, per the
+  project's own feature-development workflow.
+</footer>
+
+</body>
+</html>

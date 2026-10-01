@@ -194,3 +194,34 @@ class TestUIPages:
         """The catch-all must not swallow the API or the schema."""
         response = client.get(path)
         assert response.status_code != 200 or "MGCP Instrument" not in response.text
+
+
+class TestVectorStoreIsLazy:
+    """The dashboard must not open Qdrant to serve read-only views.
+
+    Local-mode Qdrant allows one client per path, so an eager open meant the
+    web server could not start at all while an MCP server held the lock —
+    although none of the analytics views need vectors. They read lessons.db,
+    telemetry.db and gate_audit.jsonl; only lesson writes touch Qdrant.
+    """
+
+    def test_startup_does_not_open_the_vector_store(self, client):
+        import mgcp.web_server as ws
+
+        ws.vector_store = None
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert ws.vector_store is None, (
+            "the vector store was opened during startup/health, which is what "
+            "stopped the dashboard running beside the MCP server"
+        )
+        assert "lazy" in response.json()["vector_store"]
+
+    @pytest.mark.parametrize("path", ["/api/signal", "/api/gate-audit", "/api/rem/state"])
+    def test_analytics_views_never_open_the_vector_store(self, client, path):
+        import mgcp.web_server as ws
+
+        ws.vector_store = None
+        response = client.get(path)
+        assert response.status_code == 200
+        assert ws.vector_store is None, f"{path} opened Qdrant; it reads SQLite only"

@@ -96,8 +96,8 @@ async def lifespan(app: FastAPI):
 
     telemetry = TelemetryLogger()
     store = LessonStore()
-    vector_store = QdrantVectorStore()
     graph = LessonGraph()
+    # Qdrant is opened on demand, not here: see get_vector_store().
 
     # Load existing lessons into graph
     lessons = await store.get_all_lessons()
@@ -182,11 +182,37 @@ async def ensure_initialized():
     if store is None:
         telemetry = TelemetryLogger()
         store = LessonStore()
-        vector_store = QdrantVectorStore()
         graph = LessonGraph()
         lessons = await store.get_all_lessons()
         for lesson in lessons:
             graph.add_lesson(lesson)
+
+
+def get_vector_store() -> QdrantVectorStore:
+    """Open the vector store on first use, not at startup.
+
+    Local-mode Qdrant permits one client per path, so opening it eagerly meant
+    the dashboard could not run at all while an MCP server held the lock — even
+    though nothing it displays needs vectors. Every analytics view reads
+    lessons.db, telemetry.db and gate_audit.jsonl; only lesson create/update/
+    delete touch Qdrant. Those few routes now pay the cost, and they fail with
+    a message that says what is holding the store rather than preventing the
+    server from starting.
+    """
+    global vector_store
+    if vector_store is None:
+        try:
+            vector_store = QdrantVectorStore()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"The vector store is unavailable: {exc}. Local-mode Qdrant allows one "
+                    "client per path, so another MGCP process (usually the MCP server) is "
+                    "holding it. Read-only views work regardless; writing a lesson needs it."
+                ),
+            ) from exc
+    return vector_store
 
 
 @app.get("/api/health")
@@ -201,7 +227,7 @@ async def health_check() -> dict[str, Any]:
         "status": "healthy",
         "lessons_count": len(lessons),
         "projects_count": len(projects),
-        "vector_store": "connected" if vector_store else "not initialized",
+        "vector_store": "connected" if vector_store else "lazy (opened on first write)",
         "catalogue_store": "connected" if catalogue_vector else "not initialized",
         "telemetry": "enabled" if telemetry else "disabled",
     }
@@ -733,7 +759,7 @@ async def update_lesson(lesson_id: str, data: dict[str, Any]) -> dict[str, Any]:
     await store.update_lesson(lesson)
 
     # Re-index in vector store
-    vector_store.add_lesson(lesson)
+    get_vector_store().add_lesson(lesson)
 
     return lesson.model_dump(mode="json")
 
@@ -750,7 +776,7 @@ async def delete_lesson_endpoint(lesson_id: str) -> dict[str, Any]:
     # Delete from all stores
     deleted = await store.delete_lesson(lesson_id)
     if deleted:
-        vector_store.remove_vector_lesson(lesson_id)
+        get_vector_store().remove_vector_lesson(lesson_id)
         graph.remove_graph_lesson(lesson_id)
 
     return {"deleted": lesson_id}

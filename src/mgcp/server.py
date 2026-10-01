@@ -56,10 +56,17 @@ mcp = FastMCP("mgcp")
 _store: LessonStore | None = None
 _vector_store: QdrantVectorStore | None = None
 _catalogue_vector: QdrantCatalogueStore | None = None
+_qdrant_client: QdrantClient | None = None
 _graph: LessonGraph | None = None
 _telemetry: TelemetryLogger | None = None
 _initialized = False
 _init_lock = asyncio.Lock()
+# Vectors initialize separately from SQLite, under their own lock, because
+# embedded Qdrant can be locked by another process while SQLite is perfectly
+# readable. One lock for both would make the 26 SQLite-only tools wait on — and
+# fail with — a store they never touch.
+_vectors_initialized = False
+_vector_init_lock = asyncio.Lock()
 
 # Validation constants
 # Derived from the model's Literal so the two cannot drift; the Literal itself
@@ -93,28 +100,139 @@ def _validate_relationship_type(rel_type: str) -> str | None:
     return None
 
 
-async def _ensure_initialized() -> tuple[
-    LessonStore, QdrantVectorStore, QdrantCatalogueStore, LessonGraph, TelemetryLogger
-]:
-    """Lazy initialization of components with thread-safe locking."""
-    global _store, _vector_store, _catalogue_vector, _graph, _telemetry, _initialized
+class VectorStoreUnavailableError(RuntimeError):
+    """Qdrant could not be opened, so semantic search is unavailable.
+
+    Carries an actionable message: which process holds the embedded lock, and
+    the one environment variable that removes the restriction entirely.
+    """
+
+
+def _describe_lock_holder() -> str:
+    """Name the process holding the embedded Qdrant lock, if it can be found.
+
+    Best-effort and never raises: this runs only on an error path, and a
+    diagnostic that can fail the call it is diagnosing is worse than no
+    diagnostic. `lsof` is absent on some systems and may be slow on others,
+    hence the short timeout.
+    """
+    from .qdrant_vector_store import get_default_qdrant_path, get_qdrant_url
+
+    if get_qdrant_url():
+        return ""
+    lock_file = Path(get_default_qdrant_path()) / ".lock"
+    if not lock_file.exists():
+        return ""
+    try:
+        import subprocess
+
+        pids = subprocess.run(
+            ["lsof", "-t", str(lock_file)],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        ).stdout.split()
+        # Never report ourselves. A failed open leaves this process holding the
+        # lock file briefly, so lsof lists it — and a message naming the caller
+        # as the culprit points at the wrong process to kill.
+        own = str(os.getpid())
+        pids = [pid for pid in pids if pid != own]
+        if not pids:
+            return ""
+        described = []
+        for pid in pids[:3]:
+            cmd = subprocess.run(
+                ["ps", "-o", "command=", "-p", pid],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            ).stdout.strip()
+            # The executable's absolute path is noise; the tail identifies it.
+            if cmd:
+                short = " ".join(Path(part).name for part in cmd.split()[:3])
+                described.append(f"PID {pid} ({short})")
+            else:
+                described.append(f"PID {pid}")
+        return " Currently held by: " + "; ".join(described) + "."
+    except Exception:  # pragma: no cover - diagnostics are never load-bearing
+        return ""
+
+
+async def _ensure_initialized() -> tuple[LessonStore, LessonGraph, TelemetryLogger]:
+    """Open the SQLite-backed components. Never touches Qdrant.
+
+    Split from the vector stores deliberately. Embedded Qdrant permits one
+    client per path, so when another MGCP process holds the lock this used to
+    raise from a single all-or-nothing try block and take down all 50 tools —
+    including `read_soliloquy`, `get_project_context`, `save_project_context`
+    and `write_soliloquy`, none of which need a vector at all. A session that
+    started while a previous session's server was still alive could therefore
+    neither load its memory nor save it. 26 of the 36 tools need SQLite only;
+    they now work regardless of the lock, and the 10 that need vectors say what
+    is holding it. See `web_server.get_vector_store` for the same shape.
+    """
+    global _store, _graph, _telemetry, _initialized
 
     # Fast path: already initialized
     if _initialized:
-        return _store, _vector_store, _catalogue_vector, _graph, _telemetry
+        return _store, _graph, _telemetry
 
     # Slow path: acquire lock and initialize
     async with _init_lock:
         # Double-check after acquiring lock
         if _initialized:
-            return _store, _vector_store, _catalogue_vector, _graph, _telemetry
+            return _store, _graph, _telemetry
 
-        logger.info("Initializing MGCP server...")
+        logger.info("Initializing MGCP server (SQLite, graph, telemetry)...")
 
-        shared_qdrant_client = None
         try:
             _store = LessonStore()
+            _graph = LessonGraph()
+            _telemetry = TelemetryLogger()
 
+            # Load lessons from database and build the graph
+            lessons = await _store.get_all_lessons()
+            logger.info(f"Loaded {len(lessons)} lessons from database")
+            _graph.load_from_lessons(lessons)
+
+            # Start telemetry session
+            await _telemetry.start_session()
+
+            _initialized = True
+            logger.info("Server initialized successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize MGCP server: {e}")
+            # Reset partially-set globals so the next tool call retries from
+            # scratch instead of failing forever on a half-built server.
+            _store = _graph = _telemetry = None
+            raise
+
+        return _store, _graph, _telemetry
+
+
+async def _ensure_vector_stores() -> tuple[QdrantVectorStore, QdrantCatalogueStore]:
+    """Open Qdrant on first use by a tool that actually needs it.
+
+    Raises VectorStoreUnavailableError, naming the lock holder, rather than letting
+    a Qdrant error escape as the raw "Storage folder already accessed" string
+    that tells the caller nothing it can act on.
+    """
+    global _vector_store, _catalogue_vector, _qdrant_client, _vectors_initialized
+
+    if _vectors_initialized:
+        return _vector_store, _catalogue_vector
+
+    async with _vector_init_lock:
+        if _vectors_initialized:
+            return _vector_store, _catalogue_vector
+
+        # SQLite is the source of truth for everything indexed below.
+        store, _graph_unused, _telemetry_unused = await _ensure_initialized()
+
+        logger.info("Opening vector stores...")
+        client = None
+        try:
             # Create a single shared Qdrant client for all vector stores
             # CRITICAL: Qdrant local mode only allows ONE client per path.
             # Multiple clients cause "Storage folder already accessed" errors.
@@ -123,34 +241,29 @@ async def _ensure_initialized() -> tuple[
                 qdrant_client_args,
             )
             qdrant_path = get_default_qdrant_path()
-            shared_qdrant_client = QdrantClient(**qdrant_client_args(qdrant_path))
+            client = QdrantClient(**qdrant_client_args(qdrant_path))
 
-            _vector_store = QdrantVectorStore(client=shared_qdrant_client)
-            _catalogue_vector = QdrantCatalogueStore(client=shared_qdrant_client)
-            _graph = LessonGraph()
-            _telemetry = TelemetryLogger()
+            _vector_store = QdrantVectorStore(client=client)
+            _catalogue_vector = QdrantCatalogueStore(client=client)
 
-            # Load lessons from database
-            lessons = await _store.get_all_lessons()
-            logger.info(f"Loaded {len(lessons)} lessons from database")
-
-            # Build graph
-            _graph.load_from_lessons(lessons)
-
-            # Sync vector store
+            # Reconcile from SQLite. This is also the repair path for anything
+            # written while the store was locked: a lesson, catalogue item or
+            # community summary that could not be indexed at write time is
+            # indexed here, the next time the store opens.
+            lessons = await store.get_all_lessons()
             stored_ids = set(_vector_store.get_all_ids())
-            for lesson in lessons:
-                if lesson.id not in stored_ids:
-                    _vector_store.add_lesson(lesson)
+            missing = [le for le in lessons if le.id not in stored_ids]
+            for lesson in missing:
+                _vector_store.add_lesson(lesson)
+            if missing:
+                logger.info(f"Indexed {len(missing)} lessons missing from Qdrant")
 
-            # Sync catalogue vector store
-            contexts = await _store.get_all_project_contexts()
+            contexts = await store.get_all_project_contexts()
             for ctx in contexts:
                 _catalogue_vector.index_catalogue(ctx.project_id, ctx.catalogue)
             logger.info(f"Indexed catalogues for {len(contexts)} projects")
 
-            # Sync community summaries to Qdrant for semantic search
-            community_summaries = await _store.get_all_community_summaries()
+            community_summaries = await store.get_all_community_summaries()
             for cs in community_summaries:
                 searchable = f"Community: {cs.title}. {cs.summary}."
                 _vector_store.upsert_community_summary(
@@ -164,26 +277,69 @@ async def _ensure_initialized() -> tuple[
             if community_summaries:
                 logger.info(f"Indexed {len(community_summaries)} community summaries")
 
-            # Start telemetry session
-            await _telemetry.start_session()
-
-            _initialized = True
-            logger.info("Server initialized successfully")
+            _qdrant_client = client
+            _vectors_initialized = True
+            logger.info("Vector stores opened successfully")
 
         except Exception as e:
-            logger.error(f"Failed to initialize MGCP server: {e}")
-            # Release the Qdrant storage lock and reset partially-set globals
-            # so the next tool call can retry initialization from scratch
-            # instead of failing forever on "Storage folder already accessed".
-            if shared_qdrant_client is not None:
+            logger.error(f"Vector stores unavailable: {e}")
+            # Release the storage lock and reset, so a later call can retry
+            # once whatever holds it has exited.
+            if client is not None:
                 try:
-                    shared_qdrant_client.close()
+                    client.close()
                 except Exception:
                     pass
-            _store = _vector_store = _catalogue_vector = _graph = _telemetry = None
-            raise
+            _vector_store = _catalogue_vector = _qdrant_client = None
+            raise VectorStoreUnavailableError(
+                f"Semantic search is unavailable: {e}"
+                f"{_describe_lock_holder()} Embedded Qdrant allows one client per "
+                "path, so another MGCP process (an older session's server, or the "
+                "dashboard) can hold it. Set MGCP_QDRANT_URL to run Qdrant as a "
+                "server and remove the restriction. Everything backed by SQLite — "
+                "project context, the soliloquy journal, lesson reads by id, "
+                "workflows, REM — works regardless."
+            ) from e
 
-        return _store, _vector_store, _catalogue_vector, _graph, _telemetry
+        return _vector_store, _catalogue_vector
+
+
+class _UnindexedWrites:
+    """Accepts and drops index calls while the vector store is locked.
+
+    Installed by `_try_vector_stores` on the degraded path only, and never
+    reachable when Qdrant opened. Dropping the call is safe precisely because
+    `_ensure_vector_stores` reconciles from SQLite the next time it opens: the
+    row written now is indexed then. The caller is told so in its return value,
+    so this degrades loudly rather than silently — a dropped write nobody is
+    told about is the failure mode, not the dropping.
+    """
+
+    def __getattr__(self, _name):
+        def _drop(*_args, **_kwargs):
+            return None
+
+        return _drop
+
+
+async def _try_vector_stores() -> tuple[object, object, str]:
+    """Vector stores if available, else no-op indexes plus a warning.
+
+    For writes whose SQLite row is the source of truth and whose index
+    `_ensure_vector_stores` rebuilds. Refusing those would be worse than
+    degrading: `add_lesson` is the apology gate's only comply exit, and a gate
+    whose exit depends on a lock another process holds is the same trap v2.11
+    removed. The row is written now; it becomes searchable when the store opens.
+    """
+    try:
+        vector_store, catalogue_vector = await _ensure_vector_stores()
+        return vector_store, catalogue_vector, ""
+    except VectorStoreUnavailableError as exc:
+        unindexed = _UnindexedWrites()
+        return unindexed, unindexed, (
+            f"\n\n⚠️ Stored in SQLite but NOT yet searchable: {exc} "
+            "It will be indexed automatically the next time the vector store opens."
+        )
 
 
 # ============================================================================
@@ -204,7 +360,11 @@ async def query_lessons(task_description: str, limit: int = 5) -> str:
                          'API integration', 'error handling', 'performance optimization'
         limit: Maximum number of lessons to return (default 5)
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
+    try:
+        vector_store, catalogue_vector = await _ensure_vector_stores()
+    except VectorStoreUnavailableError as exc:
+        return f"⚠️ {exc}"
     start_time = time.time()
 
     # Log the query
@@ -323,7 +483,7 @@ async def get_lesson(lesson_id: str) -> str:
     Args:
         lesson_id: The unique lesson identifier to retrieve
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     lesson = await store.get_lesson(lesson_id)
     if not lesson:
@@ -363,7 +523,7 @@ async def spider_lessons(lesson_id: str, depth: int = 2) -> str:
         lesson_id: Starting lesson ID to traverse from
         depth: How many levels deep to traverse (default 2, max 5)
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     depth = min(depth, 5)  # Cap depth
 
@@ -394,7 +554,7 @@ async def spider_lessons(lesson_id: str, depth: int = 2) -> str:
 @mcp.tool()
 async def list_categories() -> str:
     """List all top-level lesson categories for browsing."""
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     categories = await store.get_categories()
 
@@ -418,7 +578,7 @@ async def get_lessons_by_category(category_id: str) -> str:
     Args:
         category_id: The category (parent lesson) ID to browse
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     lessons = await store.get_lessons_by_parent(category_id)
 
@@ -458,7 +618,8 @@ async def add_lesson(
     if id_error:
         return id_error
 
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
+    vector_store, catalogue_vector, index_warning = await _try_vector_stores()
 
     # Normalize empty strings to None
     actual_parent_id = parent_id if parent_id else None
@@ -488,14 +649,15 @@ async def add_lesson(
     # Save to database
     await store.add_lesson(lesson)
 
-    # Add to vector store and graph
+    # Add to vector store and graph. The graph is in-memory and the row is
+    # already committed, so a locked vector store costs searchability only.
     vector_store.add_lesson(lesson)
     graph.add_lesson(lesson)
 
     # Log
     await telemetry.log_add(lesson.id, lesson.trigger)
 
-    return f"Lesson '{lesson.id}' added successfully."
+    return f"Lesson '{lesson.id}' added successfully.{index_warning}"
 
 
 @mcp.tool()
@@ -513,7 +675,8 @@ async def refine_lesson(
         refinement: What to add or improve - will be appended to rationale
         new_action: Updated action text (optional, leave empty to keep current)
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
+    vector_store, catalogue_vector, index_warning = await _try_vector_stores()
 
     lesson = await store.get_lesson(lesson_id)
     if not lesson:
@@ -553,7 +716,7 @@ async def refine_lesson(
     # Log
     await telemetry.log_refine(lesson_id, old_version, lesson.version, refinement)
 
-    return f"Lesson '{lesson_id}' refined to version {lesson.version}."
+    return f"Lesson '{lesson_id}' refined to version {lesson.version}.{index_warning}"
 
 
 @mcp.tool()
@@ -582,7 +745,7 @@ async def link_lessons(
     if type_error:
         return type_error
 
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     lesson_a = await store.get_lesson(lesson_id_a)
     lesson_b = await store.get_lesson(lesson_id_b)
@@ -669,7 +832,11 @@ async def delete_lesson(lesson_id: str) -> str:
     Args:
         lesson_id: The ID of the lesson to delete
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
+    try:
+        vector_store, catalogue_vector = await _ensure_vector_stores()
+    except VectorStoreUnavailableError as exc:
+        return f"⚠️ {exc}"
 
     # Check if lesson exists
     lesson = await store.get_lesson(lesson_id)
@@ -712,7 +879,7 @@ async def get_project_context(project_path: str) -> str:
         project_path: Absolute path to the project root directory
     """
 
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     # Try to find by path
     context = await store.get_project_context_by_path(project_path)
@@ -774,7 +941,7 @@ async def save_project_context(
         active_files: Comma-separated list of files being worked on
         decision: A recent decision to add to history
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     # Sanitize the decision string up front: it gets appended into a list, and
     # list mutations bypass SanitizedModel.__setattr__. The notes/project_name
@@ -816,7 +983,7 @@ async def add_project_todo(
         priority: Priority 0-9 (higher = more urgent)
         notes: Additional context or blockers
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     context = await _get_or_create_project_context(store, project_path)
 
@@ -860,7 +1027,7 @@ async def update_project_todo(
         status: New status: pending, in_progress, completed, or blocked
         notes: Updated notes
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     # Look up by path first (handles legacy project IDs)
     context = await store.get_project_context_by_path(project_path)
@@ -895,7 +1062,7 @@ async def list_projects() -> str:
 
     Returns projects ordered by most recently accessed.
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     contexts = await store.get_all_project_contexts()
 
@@ -964,7 +1131,11 @@ async def search_catalogue(
         item_types: Comma-separated filter (arch, security, framework, library, tool, etc.)
         limit: Max results (default 10)
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
+    try:
+        vector_store, catalogue_vector = await _ensure_vector_stores()
+    except VectorStoreUnavailableError as exc:
+        return f"⚠️ {exc}"
 
     project_id = None
     if project_path:
@@ -1050,7 +1221,8 @@ async def add_catalogue_item(
             coupling(direction), decision(alternatives), error(solution)
         tags: Comma-separated tags (for searchability)
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
+    vector_store, catalogue_vector, index_warning = await _try_vector_stores()
 
     context = await _get_or_create_project_context(store, project_path)
 
@@ -1185,7 +1357,11 @@ async def remove_catalogue_item(
         item_type: One of: arch, security, framework, library, tool, convention, coupling, decision, error
         identifier: Title (for notes/decisions) or name (for dependencies) or first file (for couplings)
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
+    try:
+        vector_store, catalogue_vector = await _ensure_vector_stores()
+    except VectorStoreUnavailableError as exc:
+        return f"⚠️ {exc}"
 
     context = await store.get_project_context_by_path(project_path)
     if not context:
@@ -1278,7 +1454,7 @@ async def get_catalogue_item(
         item_type: One of: arch, security, framework, library, tool, convention, coupling, decision, error
         identifier: Title (for notes/decisions) or name (for dependencies)
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     context = await store.get_project_context_by_path(project_path)
     if not context:
@@ -1345,7 +1521,7 @@ async def list_workflows() -> str:
     Workflows define process steps with linked lessons for contextual guidance.
     Use workflows to follow best practices for common development tasks.
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     workflows = await store.get_all_workflows()
 
@@ -1379,7 +1555,11 @@ async def query_workflows(task_description: str, min_relevance: float = 0.35) ->
     Returns:
         Matching workflow(s) with relevance scores, or message if no match
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
+    try:
+        vector_store, catalogue_vector = await _ensure_vector_stores()
+    except VectorStoreUnavailableError as exc:
+        return f"⚠️ {exc}"
 
     workflows = await store.get_all_workflows()
     if not workflows:
@@ -1453,7 +1633,7 @@ async def get_workflow(workflow_id: str) -> str:
     Args:
         workflow_id: The workflow identifier (e.g., 'feature-development')
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     workflow = await store.get_workflow(workflow_id)
     if not workflow:
@@ -1477,7 +1657,7 @@ async def get_workflow_step(
         step_id: The step identifier (e.g., 'research', 'plan', 'execute')
         expand_lessons: Whether to include full lesson details (default True)
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     workflow = await store.get_workflow(workflow_id)
     if not workflow:
@@ -1545,7 +1725,7 @@ async def link_lesson_to_workflow_step(
         relevance: Why this lesson applies to this step (1-2 sentences)
         priority: 1=critical (always show), 2=important (show by default), 3=helpful (show on demand)
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     workflow = await store.get_workflow(workflow_id)
     if not workflow:
@@ -1597,7 +1777,7 @@ async def create_workflow(
         trigger: Keywords that activate this workflow
         tags: Comma-separated tags for categorization
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     existing = await store.get_workflow(workflow_id)
     if existing:
@@ -1635,7 +1815,7 @@ async def update_workflow(
         description: New description (optional)
         tags: New comma-separated tags (replaces existing if provided)
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     workflow = await store.get_workflow(workflow_id)
     if not workflow:
@@ -1693,7 +1873,7 @@ async def add_workflow_step(
         checklist: Comma-separated items to verify before moving to next step
         outputs: Comma-separated expected outputs/artifacts
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     workflow = await store.get_workflow(workflow_id)
     if not workflow:
@@ -1742,7 +1922,7 @@ async def detect_communities(
     the membership, so IDs minted at another resolution are IDs that
     save_community_summary and search_communities can never resolve.
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     communities = graph.detect_communities()
 
@@ -1808,7 +1988,8 @@ async def save_community_summary(
         title: Short descriptive title for this community
         summary: LLM-generated description of what this community covers
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
+    vector_store, catalogue_vector, index_warning = await _try_vector_stores()
 
     # Validate community exists by re-running detection
     communities = graph.detect_communities()
@@ -1873,7 +2054,11 @@ async def search_communities(
         query: What to search for (e.g., "error handling", "testing patterns")
         limit: Maximum results to return (default 5)
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
+    try:
+        vector_store, catalogue_vector = await _ensure_vector_stores()
+    except VectorStoreUnavailableError as exc:
+        return f"⚠️ {exc}"
 
     results = vector_store.query_community_summaries(query, limit=limit)
 
@@ -2113,8 +2298,16 @@ async def rem_run(
         project_path: Project root whose session count sets the cadence.
                    Empty = CLAUDE_PROJECT_DIR, else the current directory.
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
     from .rem_cycle import RemEngine
+
+    # Only duplicate_detection needs vectors. None makes it report that it could
+    # not scan; the other six operations run regardless of the Qdrant lock.
+    try:
+        vector_store, _ = await _ensure_vector_stores()
+    except VectorStoreUnavailableError as exc:
+        logger.warning(f"REM running without vectors: {exc}")
+        vector_store = None
 
     project = await _rem_project(store, project_path)
     if project is None:
@@ -2177,7 +2370,7 @@ async def rem_report(project_path: str = "") -> str:
         project_path: Project root whose schedule to report.
                    Empty = CLAUDE_PROJECT_DIR, else the current directory.
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
 
     project = await _rem_project(store, project_path)
     if project is None:
@@ -2223,7 +2416,7 @@ async def rem_status(project_path: str = "") -> str:
         project_path: Project root whose session count sets the cadence.
                    Empty = CLAUDE_PROJECT_DIR, else the current directory.
     """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
+    store, graph, telemetry = await _ensure_initialized()
     from .rem_cycle import RemEngine
 
     project = await _rem_project(store, project_path)
@@ -2282,7 +2475,7 @@ async def write_soliloquy(
             tag only lets a later session on this project read its own train of
             thought first.
     """
-    store, _, _, _, _ = await _ensure_initialized()
+    store, _, _ = await _ensure_initialized()
     from .models import Soliloquy
 
     project = await _rem_project(store, project_path)
@@ -2317,7 +2510,7 @@ async def read_soliloquy(
         project_path: Project you are reading in. Empty = CLAUDE_PROJECT_DIR,
             else the current directory.
     """
-    store, _, _, _, _ = await _ensure_initialized()
+    store, _, _ = await _ensure_initialized()
 
     project = await _rem_project(store, project_path)
     project_id = project.project_id if project else None
@@ -2623,7 +2816,7 @@ async def compile_intent_to_skill(
     """
     from .skill_compiler import compile_intent_to_skill as _compile
 
-    store, _, _, _, _ = await _ensure_initialized()
+    store, _, _ = await _ensure_initialized()
 
     try:
         result = await _compile(

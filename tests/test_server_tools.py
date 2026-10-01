@@ -115,7 +115,9 @@ async def server_stores(tmp_path, mock_embeddings):
     server_module._catalogue_vector = catalogue_vector
     server_module._graph = graph
     server_module._telemetry = telemetry
+    server_module._qdrant_client = qdrant_client
     server_module._initialized = True
+    server_module._vectors_initialized = True
 
     yield {
         "store": store,
@@ -127,9 +129,11 @@ async def server_stores(tmp_path, mock_embeddings):
 
     # Cleanup
     server_module._initialized = False
+    server_module._vectors_initialized = False
     server_module._store = None
     server_module._vector_store = None
     server_module._catalogue_vector = None
+    server_module._qdrant_client = None
     server_module._graph = None
     server_module._telemetry = None
     qdrant_client.close()
@@ -264,7 +268,7 @@ class TestCommunityBridge:
 
         if not await self._seed_community():
             pytest.skip("Louvain formed no community on this graph")
-        store, _vs, _cv, _g, _t = await srv._ensure_initialized()
+        store, _g, _t = await srv._ensure_initialized()
 
         ids = [f"hydro-{i}" for i in range(4)]
         before = {i: (await store.get_lesson(i)).usage_count for i in ids}
@@ -293,7 +297,7 @@ class TestCommunityBridge:
 
         if not await self._seed_community():
             pytest.skip("Louvain formed no community on this graph")
-        _s, _vs, _cv, _g, tel = await srv._ensure_initialized()
+        _s, _g, tel = await srv._ensure_initialized()
 
         result = await query_lessons("greenhouse hydroponic nutrient dosing", limit=1)
         if "via community" not in result:

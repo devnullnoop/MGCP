@@ -118,6 +118,17 @@ All source files are in `src/mgcp/`:
 
 **Every agent-facing write is envelope-guarded.** `reject_tool_call_envelope` (`models.py`) runs on all six: `add_lesson`, `update_lesson`, `save_project_context`, `save_workflow`, `save_community_summary` and `write_soliloquy`. It refuses text that is a serialised tool-call envelope rather than prose — the corruption that had already reached 7 of 24 stored project contexts before the guard existed, and which `get_project_context` still has to tolerate on read so those projects can resume.
 
+**One locked store does not fail unrelated tools.** `_ensure_initialized` opens SQLite, the
+graph and telemetry; `_ensure_vector_stores` opens Qdrant on first use by one of the ten tools
+that need it, and raises `VectorStoreUnavailableError` naming the holding PID and
+`MGCP_QDRANT_URL`. The two used to share one `try`, so an embedded-Qdrant lock held by another
+process failed all 50 tools — including `read_soliloquy` and `get_project_context`, which read
+no vectors, so a session starting while a previous session's server was still alive could
+neither load its memory nor save it. Writes degrade rather than refuse (`add_lesson` is the
+apology gate's only exit) and `_ensure_vector_stores` indexes what was written while locked;
+`delete_lesson` and `remove_catalogue_item` refuse, since a surviving vector for a deleted row
+is a search hit for something that no longer exists.
+
 **Lessons** have hierarchical relationships (parent/child) and typed cross-links. Key fields:
 - `trigger`: When the lesson applies (keywords/patterns)
 - `action`: What to do (imperative)

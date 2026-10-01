@@ -9,6 +9,7 @@ These tests verify the system handles failures gracefully:
 - Recovery from bad states
 """
 
+import os
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -584,3 +585,171 @@ class TestBackupRestore:
             # The fix strips .tgz, so result is my-backup.tar.gz
             assert archive.name == "my-backup.tar.gz"
             assert archive.exists()
+
+
+class TestServerSurvivesLockedVectorStore:
+    """The failure of 2026-10-01 10:58:25.
+
+    The operator restarted the session; the previous session's `mgcp.server`
+    was still alive holding `~/.mgcp/qdrant/.lock`. `_ensure_initialized` built
+    the Qdrant client in the same all-or-nothing try as SQLite, so all 50 tools
+    raised -- including the three the SessionStart hook mandates, two of which
+    (`read_soliloquy`, `get_project_context`) need no vector at all. The session
+    could neither load its memory nor save it, and the error it surfaced named
+    no holder and no remedy.
+
+    The lock is taken from a SEPARATE PROCESS on purpose: an in-process second
+    client raises the same message for a different reason, so it would prove
+    the handling without reproducing the failure.
+    """
+
+    @staticmethod
+    def _mock_vector(text):
+        """Deterministic unit vector. The real model is a 415 MB download."""
+        import hashlib
+        import random
+
+        rng = random.Random(hashlib.md5(text.encode()).hexdigest())
+        vec = [rng.gauss(0, 1) for _ in range(768)]
+        norm = sum(x * x for x in vec) ** 0.5
+        return [x / norm for x in vec]
+
+    @pytest.fixture
+    def locked_qdrant(self, tmp_path):
+        """Hold the embedded Qdrant lock from another process."""
+        import subprocess
+        import sys
+
+        qdrant_dir = tmp_path / "qdrant"
+        qdrant_dir.mkdir()
+        holder = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import sys, time\n"
+                "from qdrant_client import QdrantClient\n"
+                "client = QdrantClient(path=sys.argv[1])\n"
+                "print('LOCKED', flush=True)\n"
+                "time.sleep(300)\n",
+                str(qdrant_dir),
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert holder.stdout.readline().strip() == "LOCKED", "holder never locked"
+            yield qdrant_dir, holder
+        finally:
+            holder.terminate()
+            holder.wait(timeout=30)
+
+    @pytest.fixture
+    def server(self, locked_qdrant, tmp_path, monkeypatch):
+        """Point the server at a locked Qdrant and throwaway SQLite."""
+        import mgcp.server as srv
+        from mgcp.telemetry import TelemetryLogger
+
+        qdrant_dir, holder = locked_qdrant
+        monkeypatch.setattr(
+            "mgcp.qdrant_vector_store.get_default_qdrant_path", lambda: str(qdrant_dir)
+        )
+        monkeypatch.setattr(
+            srv, "LessonStore", lambda: LessonStore(db_path=str(tmp_path / "lessons.db"))
+        )
+        monkeypatch.setattr(
+            srv,
+            "TelemetryLogger",
+            lambda: TelemetryLogger(db_path=str(tmp_path / "telemetry.db")),
+        )
+        for name in ("mgcp.qdrant_vector_store.embed", "mgcp.qdrant_vector_store.embed_query"):
+            monkeypatch.setattr(name, self._mock_vector)
+        monkeypatch.setattr(
+            "mgcp.qdrant_vector_store.embed_batch",
+            lambda texts: [self._mock_vector(t) for t in texts],
+        )
+        for attr in ("_store", "_vector_store", "_catalogue_vector", "_qdrant_client",
+                     "_graph", "_telemetry"):
+            monkeypatch.setattr(srv, attr, None, raising=False)
+        monkeypatch.setattr(srv, "_initialized", False)
+        monkeypatch.setattr(srv, "_vectors_initialized", False, raising=False)
+        yield srv
+        srv._initialized = False
+        srv._vectors_initialized = False
+        srv._store = srv._vector_store = srv._catalogue_vector = None
+        srv._qdrant_client = srv._graph = srv._telemetry = None
+
+    @pytest.mark.asyncio
+    async def test_sqlite_only_tools_work_while_vectors_are_locked(self, server, tmp_path):
+        """The three bootstrap calls that failed at 10:58 now answer."""
+        project = str(tmp_path / "proj")
+
+        saved = await server.save_project_context(
+            project_path=project, notes="written while Qdrant was locked"
+        )
+        assert "error" not in saved.lower(), saved
+
+        context = await server.get_project_context(project_path=project)
+        assert "written while Qdrant was locked" in context
+
+        await server.write_soliloquy(
+            content="A locked vector store must not cost me my memory.",
+            project_path=project,
+        )
+        assert "locked vector store" in await server.read_soliloquy(project_path=project)
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_names_the_holder_and_the_remedy(self, server):
+        """query_lessons cannot work, but it must say what to do about it."""
+        result = await server.query_lessons("anything at all")
+
+        assert "MGCP_QDRANT_URL" in result, result
+        assert "PID" in result, f"the holding process was not named: {result}"
+        # Not a crash, and not an empty result set that reads as "no lessons".
+        assert "unavailable" in result.lower()
+        # A failed open leaves this process on the lock file too, so lsof lists
+        # it. Naming the caller as the holder points at the wrong process.
+        assert f"PID {os.getpid()}" not in result, (
+            f"the message blames the calling process: {result}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_add_lesson_still_works_because_the_gate_depends_on_it(self, server):
+        """add_lesson is the apology gate's only comply exit.
+
+        If a locked store could block it, an armed gate would be inescapable --
+        the trap v2.11 removed by never gating the exits.
+        """
+        result = await server.add_lesson(
+            id="written-under-lock",
+            trigger="the vector store is locked",
+            action="write the row anyway and index it later",
+        )
+
+        assert "added successfully" in result
+        assert "NOT yet searchable" in result, f"degradation was silent: {result}"
+        store, _graph, _telemetry = await server._ensure_initialized()
+        assert await store.get_lesson("written-under-lock") is not None
+
+    @pytest.mark.asyncio
+    async def test_rows_written_under_lock_are_indexed_when_the_lock_clears(
+        self, server, locked_qdrant
+    ):
+        """The reconciliation that makes degrading safe rather than lossy."""
+        _qdrant_dir, holder = locked_qdrant
+
+        await server.add_lesson(
+            id="indexed-later",
+            trigger="qdrant was locked at write time",
+            action="verify the row becomes searchable once the lock clears",
+        )
+
+        # The holder exits, as the stale session's server did.
+        holder.terminate()
+        holder.wait(timeout=30)
+        server._vectors_initialized = False
+
+        vector_store, _catalogue = await server._ensure_vector_stores()
+        assert "indexed-later" in set(vector_store.get_all_ids()), (
+            "a lesson written while the store was locked never became searchable, "
+            "so degrading at write time silently lost it from retrieval"
+        )

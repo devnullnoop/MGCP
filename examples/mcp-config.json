@@ -2,10 +2,12 @@
   "mcpServers": {
     "mgcp": {
       "command": "python",
-      "args": ["-m", "mgcp.server"],
-      "cwd": "<PATH_TO_MGCP_DIRECTORY>",
+      "args": [
+        "-m",
+        "mgcp.server"
+      ],
       "env": {
-        "MGCP_DB_PATH": "~/.mgcp/lessons.db"
+        "MGCP_DATA_DIR": "~/.mgcp"
       }
     }
   }

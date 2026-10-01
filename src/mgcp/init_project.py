@@ -25,17 +25,21 @@ def get_mgcp_python_path() -> str:
     return sys.executable
 
 
-def get_mgcp_install_dir() -> Path:
-    """Get the MGCP installation directory."""
-    return Path(__file__).parent.parent.parent
-
-
 def get_mcp_server_config() -> dict:
-    """Get the standard MCP server configuration for MGCP."""
+    """Get the standard MCP server configuration for MGCP.
+
+    Deliberately carries no ``cwd``. It was ``__file__``'s third parent, which
+    names the repo root only for an editable checkout: a wheel install has no
+    ``src/`` level, so that path landed above site-packages and went verbatim
+    into every client config. It bought nothing even when right --
+    ``python -m mgcp.server`` resolves through the installed distribution --
+    and omitting it lets the server inherit the client's directory, so
+    ``server.py``'s ``os.getcwd()`` fallback names the project being worked in
+    rather than MGCP's own source tree.
+    """
     return {
         "command": get_mgcp_python_path(),
         "args": ["-m", "mgcp.server"],
-        "cwd": str(get_mgcp_install_dir())
     }
 
 
@@ -71,25 +75,19 @@ def _claude_code_path() -> Path:
 
 
 def _cursor_path() -> Path:
-    if sys.platform == "darwin":
-        return Path.home() / ".cursor" / "mcp.json"
-    elif sys.platform == "win32":
+    if sys.platform == "win32":
         return Path(os.environ.get("APPDATA", "")) / "Cursor" / "mcp.json"
     return Path.home() / ".cursor" / "mcp.json"
 
 
 def _windsurf_path() -> Path:
-    if sys.platform == "darwin":
-        return Path.home() / ".codeium" / "windsurf" / "mcp_config.json"
-    elif sys.platform == "win32":
+    if sys.platform == "win32":
         return Path(os.environ.get("APPDATA", "")) / "Codeium" / "windsurf" / "mcp_config.json"
     return Path.home() / ".codeium" / "windsurf" / "mcp_config.json"
 
 
 def _continue_path() -> Path:
-    if sys.platform == "darwin":
-        return Path.home() / ".continue" / "config.json"
-    elif sys.platform == "win32":
+    if sys.platform == "win32":
         return Path(os.environ.get("APPDATA", "")) / "Continue" / "config.json"
     return Path.home() / ".continue" / "config.json"
 
@@ -106,9 +104,7 @@ def _cline_path() -> Path:
 
 def _zed_path() -> Path:
     """Zed editor stores settings in ~/.config/zed/settings.json"""
-    if sys.platform == "darwin":
-        return Path.home() / ".config" / "zed" / "settings.json"
-    elif sys.platform == "win32":
+    if sys.platform == "win32":
         return Path(os.environ.get("APPDATA", "")) / "Zed" / "settings.json"
     return Path.home() / ".config" / "zed" / "settings.json"
 
@@ -210,13 +206,15 @@ LEGACY_HOOK_FILES = [
     "error-detector.py",
 ]
 
-# v2 hook files: filename -> (hook event type, optional matcher)
+# v2 hook files: filename -> hook event type. No per-hook matcher: MGCP
+# filters by tool inside the dispatchers, not in settings.json, so every hook
+# registers for its whole event.
 V2_HOOK_FILES = {
-    "session-init.py": ("SessionStart", None),
-    "user-prompt-dispatcher.py": ("UserPromptSubmit", None),
-    "pre-tool-dispatcher.py": ("PreToolUse", None),
-    "post-tool-dispatcher.py": ("PostToolUse", None),
-    "mgcp-precompact.py": ("PreCompact", None),
+    "session-init.py": "SessionStart",
+    "user-prompt-dispatcher.py": "UserPromptSubmit",
+    "pre-tool-dispatcher.py": "PreToolUse",
+    "post-tool-dispatcher.py": "PostToolUse",
+    "mgcp-precompact.py": "PreCompact",
 }
 
 VERSION_MARKER = ".mgcp-hook-version"
@@ -234,24 +232,26 @@ def _get_hook_version() -> str:
     return version_path.read_text().strip()
 
 
-# Backward compat: HOOK_SCRIPT is still importable for tests
-HOOK_SCRIPT = _load_hook_template("session-init.py")
+def _build_hook_settings(hook_path: Callable[[str], str]) -> dict:
+    """Build a settings dict registering every V2_HOOK_FILES hook.
 
-
-def _build_hook_settings() -> dict:
-    """Build the v2 HOOK_SETTINGS dict from V2_HOOK_FILES."""
+    ``hook_path`` renders the script location, which is the only thing that
+    differs between a project deployment ($CLAUDE_PROJECT_DIR-relative) and a
+    global one (absolute under ~/.mgcp/hooks). Everything else -- the settings
+    shape and the ``mcp__mgcp__*`` permission -- has one copy here, so it
+    cannot drift between the two deployments.
+    """
     hooks: dict[str, list] = {}
-    for filename, (event_type, matcher) in V2_HOOK_FILES.items():
-        entry_hook = {
-            "type": "command",
-            "command": f"{_hook_python_command()} $CLAUDE_PROJECT_DIR/.claude/hooks/{filename}",
+    for filename, event_type in V2_HOOK_FILES.items():
+        entry = {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": f"{_hook_python_command()} {hook_path(filename)}",
+                }
+            ]
         }
-        entry: dict = {"hooks": [entry_hook]}
-        if matcher:
-            entry["matcher"] = matcher
-        if event_type not in hooks:
-            hooks[event_type] = []
-        hooks[event_type].append(entry)
+        hooks.setdefault(event_type, []).append(entry)
     return {
         "permissions": {
             "allow": ["mcp__mgcp__*"],
@@ -260,7 +260,9 @@ def _build_hook_settings() -> dict:
     }
 
 
-HOOK_SETTINGS = _build_hook_settings()
+HOOK_SETTINGS = _build_hook_settings(
+    lambda filename: f"$CLAUDE_PROJECT_DIR/.claude/hooks/{filename}"
+)
 
 # Global hooks: deploy once, fire in every Claude Code session
 GLOBAL_HOOKS_DIR = Path.home() / ".mgcp" / "hooks"
@@ -269,33 +271,15 @@ GLOBAL_CLAUDE_JSON_PATH = Path.home() / ".claude.json"
 
 
 def _build_global_hook_settings() -> dict:
-    """Build hook settings with absolute paths for global deployment.
+    """Hook settings with absolute ~/.mgcp/hooks/ paths, so hooks fire everywhere.
 
-    Unlike _build_hook_settings() which uses $CLAUDE_PROJECT_DIR relative paths,
-    this uses absolute paths to ~/.mgcp/hooks/ so hooks fire in every project.
-
-    Returns only hooks and permissions (same shape as _build_hook_settings).
-    mcpServers are written separately to ~/.claude.json by init_global_hooks().
+    Returns only hooks and permissions; mcpServers are written separately to
+    ~/.claude.json by init_global_hooks(). Read at call time rather than bound
+    at import, because GLOBAL_HOOKS_DIR is patched by the tests.
     """
-    hooks: dict[str, list] = {}
-    for filename, (event_type, matcher) in V2_HOOK_FILES.items():
-        abs_path = GLOBAL_HOOKS_DIR / filename
-        entry_hook = {
-            "type": "command",
-            "command": f"{_hook_python_command()} {shlex.quote(str(abs_path))}",
-        }
-        entry: dict = {"hooks": [entry_hook]}
-        if matcher:
-            entry["matcher"] = matcher
-        if event_type not in hooks:
-            hooks[event_type] = []
-        hooks[event_type].append(entry)
-    return {
-        "permissions": {
-            "allow": ["mcp__mgcp__*"],
-        },
-        "hooks": hooks,
-    }
+    return _build_hook_settings(
+        lambda filename: shlex.quote(str(GLOBAL_HOOKS_DIR / filename))
+    )
 
 
 def _mgcp_hook_script(command: str) -> str | None:
@@ -364,7 +348,6 @@ def _sync_hook_entries(groups: list, entries: list) -> bool:
 def _merge_settings(existing: dict, mgcp_settings: dict) -> bool:
     """Merge MGCP settings into existing settings.json.
 
-    - Adds/updates mcpServers.mgcp without clobbering other servers
     - Adds mcp__mgcp__* to permissions.allow without clobbering existing perms
     - Installs each MGCP hook exactly once, keyed by hook script rather than
       by full command string, so re-running under a different interpreter
@@ -374,14 +357,8 @@ def _merge_settings(existing: dict, mgcp_settings: dict) -> bool:
     """
     changed = False
 
-    # Merge mcpServers (if present in mgcp_settings)
-    if "mcpServers" in mgcp_settings:
-        if "mcpServers" not in existing:
-            existing["mcpServers"] = {}
-        mcp_config = mgcp_settings["mcpServers"]["mgcp"]
-        if existing["mcpServers"].get("mgcp") != mcp_config:
-            existing["mcpServers"]["mgcp"] = mcp_config
-            changed = True
+    # mcpServers are not merged here: neither builder emits them, and
+    # init_global_hooks() owns them in ~/.claude.json.
 
     # Merge permissions.allow
     mgcp_perm = "mcp__mgcp__*"
@@ -496,8 +473,6 @@ def configure_client(client: LLMClient, dry_run: bool = False) -> dict:
             return result
     else:
         settings = {}
-        if not dry_run:
-            settings_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Navigate to the correct key (handles nested keys like "experimental.modelContextProtocolServers")
     keys = client.mcp_key.split(".")
@@ -516,8 +491,6 @@ def configure_client(client: LLMClient, dry_run: bool = False) -> dict:
         old_config = current[final_key]["mgcp"]
         if old_config != mcp_config:
             current[final_key]["mgcp"] = mcp_config
-            if not dry_run:
-                settings_path.write_text(json.dumps(settings, indent=2) + "\n")
             result["status"] = "would_update" if dry_run else "updated"
             msg = "Would update MGCP server configuration" if dry_run else "Updated MGCP server configuration"
             result["message"] = msg
@@ -526,10 +499,22 @@ def configure_client(client: LLMClient, dry_run: bool = False) -> dict:
             result["message"] = "MGCP already configured"
     else:
         current[final_key]["mgcp"] = mcp_config
-        if not dry_run:
-            settings_path.write_text(json.dumps(settings, indent=2) + "\n")
         result["status"] = "would_create" if dry_run else "created"
         result["message"] = "Would add MGCP server configuration" if dry_run else "Added MGCP server configuration"
+
+    # One write, one failure path. This used to be two identical write_text
+    # calls plus an eager mkdir, none of them guarded, so an unwritable config
+    # directory raised PermissionError straight out of configure_client and
+    # aborted the whole run -- with eight clients configured in a loop, one
+    # bad directory took the other seven down with it. The status vocabulary
+    # already had "error" for exactly this.
+    if not dry_run and result["status"] in ("created", "updated"):
+        try:
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+        except OSError as exc:
+            result["status"] = "error"
+            result["message"] = f"Could not write {settings_path}: {exc}"
 
     return result
 
@@ -557,12 +542,9 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False, force: bool = Fa
     """
     Initialize Claude Code v2 hooks in a project directory.
 
-    Creates:
-    - .claude/hooks/session-init.py           (SessionStart hook)
-    - .claude/hooks/user-prompt-dispatcher.py  (UserPromptSubmit hook)
-    - .claude/hooks/post-tool-dispatcher.py    (PostToolUse hook - Edit/Write + Bash errors)
-    - .claude/hooks/mgcp-precompact.py         (PreCompact hook)
-    - .claude/settings.json                    (Hook + permission configuration)
+    Writes every hook in V2_HOOK_FILES to <project>/.claude/hooks/ plus a
+    merged .claude/settings.json. Not enumerated here: the list that used to
+    be had already dropped pre-tool-dispatcher.py, the only enforcing hook.
 
     All hooks are Python for cross-platform Windows compatibility.
 
@@ -594,8 +576,9 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False, force: bool = Fa
     if not dry_run:
         hooks_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check existing version marker — auto-upgrade when marker is behind
-    # the template so silent drift can't happen again.
+    # Check existing version marker — auto-upgrade whenever the marker differs
+    # from the template. Any difference is drift; the marker is a bare version
+    # string with no parser, so there is no "behind" to test for.
     auto_upgrade = False
     if not force and version_file.exists():
         installed_version = version_file.read_text().strip()
@@ -717,8 +700,9 @@ def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
     if not dry_run:
         hooks_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check existing version marker — auto-upgrade when marker is behind
-    # the template so silent drift can't happen again.
+    # Check existing version marker — auto-upgrade whenever the marker differs
+    # from the template. Any difference is drift; the marker is a bare version
+    # string with no parser, so there is no "behind" to test for.
     auto_upgrade = False
     if not force and version_file.exists():
         installed_version = version_file.read_text().strip()
@@ -769,16 +753,24 @@ def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
     # Seed default enforcement_rules.json on first install. Never
     # overwrite: user edits to this file (via MCP tools or manual edit)
     # must be preserved across upgrades.
-    enforcement_path = Path.home() / ".mgcp" / "enforcement_rules.json"
-    if not dry_run and not enforcement_path.exists():
+    #
+    # The path comes from enforcement's own resolver because the hook and the
+    # MCP tools both honor MGCP_DATA_DIR / MGCP_ENFORCEMENT_CONFIG. A
+    # hardcoded ~/.mgcp seeded a file nothing read: the hook fell open to zero
+    # rules while list_enforcement_rules reported the defaults, so the install
+    # looked configured and enforced nothing — and the existence check that is
+    # supposed to protect user edits was looking at the wrong file.
+    if not dry_run:
         try:
-            from .enforcement import default_config
+            from .enforcement import _config_path, default_config
 
-            enforcement_path.parent.mkdir(parents=True, exist_ok=True)
-            enforcement_path.write_text(
-                json.dumps(default_config().model_dump(), indent=2) + "\n"
-            )
-            results.setdefault("created", []).append(str(enforcement_path))
+            enforcement_path = _config_path()
+            if not enforcement_path.exists():
+                enforcement_path.parent.mkdir(parents=True, exist_ok=True)
+                enforcement_path.write_text(
+                    json.dumps(default_config().model_dump(), indent=2) + "\n"
+                )
+                results.setdefault("created", []).append(str(enforcement_path))
         except Exception:
             # Never break hook install if enforcement seeding fails.
             pass
@@ -1017,7 +1009,6 @@ def verify_setup() -> dict:
             capture_output=True,
             text=True,
             timeout=10,
-            cwd=str(get_mgcp_install_dir())
         )
         if proc.returncode == 0 and "ok" in proc.stdout:
             results["server_starts"] = True

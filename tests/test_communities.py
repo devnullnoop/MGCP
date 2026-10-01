@@ -1,6 +1,5 @@
 """Tests for community detection and summary features."""
 
-import os
 import tempfile
 from pathlib import Path
 
@@ -10,21 +9,6 @@ from mgcp.graph import LessonGraph
 from mgcp.models import CommunitySummary, Lesson, Relationship
 from mgcp.persistence import LessonStore
 from mgcp.qdrant_vector_store import QdrantVectorStore
-
-
-@pytest.fixture
-def temp_db():
-    """Create a temporary database for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "test.db")
-        yield db_path
-
-
-@pytest.fixture
-def temp_qdrant():
-    """Create a temporary Qdrant directory for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield tmpdir
 
 
 def _make_lesson(id: str, tags: list[str] | None = None, usage_count: int = 0) -> Lesson:
@@ -175,36 +159,6 @@ class TestDetectCommunities:
         assert top[0] == "high"
         assert top[1] == "mid"
         assert top[2] == "low"
-
-
-class TestGetCommunityForLesson:
-    """Test finding which community a lesson belongs to."""
-
-    def test_get_community_for_lesson_found(self):
-        """Returns the correct community for a member lesson."""
-        graph = LessonGraph()
-        a1 = _make_lesson("a1")
-        a2 = Lesson(
-            id="a2",
-            trigger="t",
-            action="a",
-            relationships=[Relationship(target="a1", type="related")],
-        )
-        graph.add_lesson(a1)
-        graph.add_lesson(a2)
-
-        community = graph.get_community_for_lesson("a1")
-        assert community is not None
-        assert "a1" in community["members"]
-        assert "a2" in community["members"]
-
-    def test_get_community_for_lesson_not_found(self):
-        """Returns None for a lesson not in the graph."""
-        graph = LessonGraph()
-        graph.add_lesson(_make_lesson("exists"))
-
-        result = graph.get_community_for_lesson("nonexistent")
-        assert result is None
 
 
 class TestCommunitySummaryPersistence:

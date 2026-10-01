@@ -4,7 +4,9 @@ This directory contains example configurations for integrating MGCP with Claude 
 
 ## Claude Code Hooks
 
-The `claude-hooks/` directory contains templates for automatic session initialization and proactive lesson surfacing.
+The shipped hook templates live in `src/mgcp/hook_templates/` — that is the single copy, and the one
+`mgcp-init` installs from. The `claude-hooks/` directory here holds only the `settings.json` registration
+reference and the `legacy/` archive.
 
 ### Available Hooks
 
@@ -28,7 +30,8 @@ mgcp-init --client claude-code
 
 This automatically configures the MCP server and creates project hooks.
 
-For manual setup, copy hooks from the MGCP `.claude/hooks/` directory to your project.
+For manual setup, copy the hooks from `src/mgcp/hook_templates/` in the MGCP checkout to your project and
+register them as shown in `claude-hooks/settings.json`.
 
 Note: The `mgcp-init` command is strongly recommended as it generates the hooks with correct paths.
 
@@ -68,8 +71,7 @@ Example configuration for `~/.config/claude-code/settings.json`:
   "mcpServers": {
     "mgcp": {
       "command": "python",
-      "args": ["-m", "mgcp.server"],
-      "cwd": "/path/to/MGCP"
+      "args": ["-m", "mgcp.server"]
     }
   }
 }

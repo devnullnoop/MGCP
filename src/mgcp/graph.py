@@ -80,11 +80,10 @@ class LessonGraph:
             if rel != "parent" and data.get("bidirectional", True):
                 if relation_type is None or rel == relation_type:
                     related.add(source)
-        return list(related)
-
-    def get_by_relationship_type(self, lesson_id: str, rel_type: str) -> list[str]:
-        """Get lessons connected by a specific relationship type."""
-        return self.get_related(lesson_id, relation_type=rel_type)
+        # Sorted, not set order: set iteration over strings varies between
+        # processes, and spider() turns neighbour order into which nodes fall
+        # outside its depth limit. Callers get the same answer every run.
+        return sorted(related)
 
     def spider(
         self,
@@ -101,16 +100,20 @@ class LessonGraph:
         if start_id not in self.graph:
             return [], []
 
-        visited = set()
+        # Best depth reached per node, not a plain visited set. A node first
+        # reached at depth 2 used to block a later depth-1 path to it, so its
+        # children — well inside the limit — were never traversed at all.
+        # Re-expand whenever we arrive more cheaply.
+        best: dict[str, int] = {}
         paths = []
 
         def traverse(node_id: str, current_path: list[str], current_depth: int):
             if current_depth > depth:
                 return
-            if node_id in visited:
+            if best.get(node_id, current_depth + 1) <= current_depth:
                 return
 
-            visited.add(node_id)
+            best[node_id] = current_depth
             current_path = current_path + [node_id]
 
             if len(current_path) > 1:
@@ -126,17 +129,24 @@ class LessonGraph:
                     traverse(related_id, current_path, current_depth + 1)
 
         traverse(start_id, [], 0)
-        return list(visited), paths
+        return list(best), paths
 
     def get_ancestors(self, lesson_id: str) -> list[str]:
         """Get all ancestors (parents, grandparents, etc.) up to root."""
         ancestors = []
+        # mgcp-import writes parent_id straight from the file without the
+        # existence check the add_lesson tool does, so an imported pair that
+        # parents each other reaches here as a cycle. get_statistics and
+        # to_dict walk every node's ancestry, so an unguarded walk hangs the
+        # whole export rather than one lesson.
+        seen = {lesson_id}
         current = lesson_id
         while True:
             parent = self.get_parent(current)
-            if parent is None:
+            if parent is None or parent in seen:
                 break
             ancestors.append(parent)
+            seen.add(parent)
             current = parent
         return ancestors
 
@@ -271,25 +281,6 @@ class LessonGraph:
         # Sort by size descending
         results.sort(key=lambda c: c["size"], reverse=True)
         return results
-
-    def get_community_for_lesson(
-        self, lesson_id: str, resolution: float = 1.0, seed: int = 42
-    ) -> dict | None:
-        """Get the community containing a specific lesson.
-
-        Args:
-            lesson_id: The lesson to find the community for.
-            resolution: Louvain resolution parameter.
-            seed: Random seed for deterministic results.
-
-        Returns:
-            Community dict or None if lesson not found.
-        """
-        communities = self.detect_communities(resolution=resolution, seed=seed)
-        for community in communities:
-            if lesson_id in community["members"]:
-                return community
-        return None
 
     def load_from_lessons(self, lessons: list[Lesson]) -> None:
         """Load graph from a list of lessons."""

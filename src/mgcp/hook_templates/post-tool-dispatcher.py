@@ -98,12 +98,16 @@ def _save_state(state: dict) -> None:
 
 
 def _extract_output(hook_input: dict) -> str:
-    """Extract text output from tool_response."""
+    """Serialise the whole tool_response for error scanning.
+
+    Preferring "stdout" and returning early meant stderr was never scanned,
+    and stderr is where a failing command puts the evidence: a traceback, or
+    git's `fatal:`/`error:`. A command that fails with empty stdout read as
+    clean. ERROR_PATTERNS are plain-text regexes and match fine inside a JSON
+    blob, so serialising every key is both simpler and strictly more complete.
+    """
     response = hook_input.get("tool_response", "")
     if isinstance(response, dict):
-        for key in ("stdout", "result", "output", "content"):
-            if key in response:
-                return str(response[key])
         return json.dumps(response)
     return str(response)
 

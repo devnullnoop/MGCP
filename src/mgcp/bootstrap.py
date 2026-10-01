@@ -6,10 +6,11 @@ and relationships from YAML files in bootstrap_data/:
 - dev/: Software development lessons, security practices, and workflows
 
 Usage:
-    mgcp-bootstrap           # Seed all (core + dev)
-    mgcp-bootstrap --core-only   # Seed only MGCP core lessons
-    mgcp-bootstrap --dev-only    # Seed only development lessons/workflows
-    mgcp-bootstrap --list        # Show available bootstrap modules
+    mgcp-bootstrap                    # Seed all (core + dev)
+    mgcp-bootstrap --core-only        # Seed only MGCP core lessons
+    mgcp-bootstrap --dev-only         # Seed only development lessons/workflows
+    mgcp-bootstrap --update-triggers  # Refresh trigger fields on existing lessons
+    mgcp-bootstrap --list             # Show available bootstrap modules
 """
 
 import asyncio
@@ -239,45 +240,47 @@ async def run_update_triggers(core_only: bool = False, dev_only: bool = False) -
 
 def main():
     """Run bootstrap seeding."""
-    import sys
+    import argparse
 
-    # Parse arguments
-    core_only = "--core-only" in sys.argv
-    dev_only = "--dev-only" in sys.argv
-    do_update_triggers = "--update-triggers" in sys.argv
+    from . import __version__
 
-    if len(sys.argv) > 1:
-        if sys.argv[1] in ("--help", "-h"):
-            print("""MGCP Bootstrap - Seed database with lessons and workflows
+    parser = argparse.ArgumentParser(
+        prog="mgcp-bootstrap",
+        description="Seed the MGCP database with lessons and workflows.",
+        epilog=(
+            "The bootstrap is safe to run multiple times - existing items are skipped.\n"
+            "Data is stored in ~/.mgcp/ by default.\n\n"
+            "Bootstrap modules:\n"
+            "  core  - MGCP tool usage patterns, session lifecycle, knowledge management\n"
+            "  dev   - Software development practices, security (OWASP), workflows\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("-V", "--version", action="version",
+                        version=f"mgcp-bootstrap {__version__}")
+    # Mutually exclusive, so the hand-rolled "cannot specify both" check goes away.
+    modules = parser.add_mutually_exclusive_group()
+    modules.add_argument("--core-only", action="store_true",
+                         help="Seed only MGCP core lessons (task-agnostic)")
+    modules.add_argument("--dev-only", action="store_true",
+                         help="Seed only development lessons and workflows")
+    parser.add_argument("--update-triggers", action="store_true",
+                        help="Update trigger fields on existing lessons (preserves all other fields)")
+    parser.add_argument("--list", action="store_true",
+                        help="Show available bootstrap modules and exit")
 
-Usage: mgcp-bootstrap [OPTIONS]
+    # argparse, not membership tests on sys.argv: the informational flags used to
+    # be read positionally, so `mgcp-bootstrap --core-only --help` seeded the
+    # database instead of printing help, and a misspelled flag seeded everything.
+    args = parser.parse_args()
 
-Options:
-  -h, --help           Show this help message
-  -V, --version        Show version number
-  --core-only          Seed only MGCP core lessons (task-agnostic)
-  --dev-only           Seed only development lessons and workflows
-  --update-triggers    Update trigger fields on existing lessons (preserves all other fields)
-  --list               Show available bootstrap modules
-
-The bootstrap is safe to run multiple times - existing items will be skipped.
-Data is stored in ~/.mgcp/ by default.
-
-Bootstrap Modules:
-  core  - MGCP tool usage patterns, session lifecycle, knowledge management
-  dev   - Software development practices, security (OWASP), workflows
-""")
-            return
-        elif sys.argv[1] in ("--version", "-V"):
-            print("mgcp-bootstrap 1.1.0")
-            return
-        elif sys.argv[1] == "--list":
-            core_lessons = load_lessons("core")
-            core_rels = load_relationships("core")
-            dev_lessons = load_lessons("dev")
-            dev_rels = load_relationships("dev")
-            dev_workflows = load_workflows("dev")
-            print(f"""Available Bootstrap Modules:
+    if args.list:
+        core_lessons = load_lessons("core")
+        core_rels = load_relationships("core")
+        dev_lessons = load_lessons("dev")
+        dev_rels = load_relationships("dev")
+        dev_workflows = load_workflows("dev")
+        print(f"""Available Bootstrap Modules:
 
 CORE (bootstrap_data/core/):
   - MGCP tool usage patterns (query, save, catalogue, workflows, reminders)
@@ -295,21 +298,17 @@ DEV (bootstrap_data/dev/):
   - Workflows: feature-development, bug-fix, secure-code-review
   Lessons: {len(dev_lessons)} | Relationships: {len(dev_rels)} | Workflows: {len(dev_workflows)}
 """)
-            return
-
-    if core_only and dev_only:
-        print("Error: Cannot specify both --core-only and --dev-only")
-        sys.exit(1)
-
-    if do_update_triggers:
-        print("MGCP Bootstrap - Updating triggers...\n")
-        asyncio.run(run_update_triggers(core_only=core_only, dev_only=dev_only))
         return
 
-    mode = "core only" if core_only else ("dev only" if dev_only else "all")
+    if args.update_triggers:
+        print("MGCP Bootstrap - Updating triggers...\n")
+        asyncio.run(run_update_triggers(core_only=args.core_only, dev_only=args.dev_only))
+        return
+
+    mode = "core only" if args.core_only else ("dev only" if args.dev_only else "all")
     print(f"MGCP Bootstrap - Seeding {mode}...\n")
 
-    asyncio.run(seed_database(core_only=core_only, dev_only=dev_only))
+    asyncio.run(seed_database(core_only=args.core_only, dev_only=args.dev_only))
 
 
 if __name__ == "__main__":

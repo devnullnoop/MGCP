@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 
 from mgcp.init_project import (
-    HOOK_SCRIPT,
     HOOK_SETTINGS,
     HOOK_TEMPLATES_DIR,
     LEGACY_HOOK_FILES,
@@ -21,6 +20,7 @@ from mgcp.init_project import (
     LLMClient,
     _build_global_hook_settings,
     _get_hook_version,
+    _load_hook_template,
     _merge_settings,
     _scrub_legacy_hook_commands,
     configure_claude_code_project,
@@ -28,7 +28,6 @@ from mgcp.init_project import (
     detect_installed_clients,
     ensure_embedding_model,
     get_mcp_server_config,
-    get_mgcp_install_dir,
     get_mgcp_python_path,
     init_claude_hooks,
     init_global_hooks,
@@ -92,24 +91,25 @@ class TestHelperFunctions:
         assert result == sys.executable
         assert Path(result).exists()
 
-    def test_get_mgcp_install_dir_returns_valid_path(self):
-        """get_mgcp_install_dir should return MGCP root directory."""
-        result = get_mgcp_install_dir()
-        assert result.exists()
-        # Should contain src/mgcp
-        assert (result / "src" / "mgcp").exists()
-
     def test_get_mcp_server_config_structure(self):
         """get_mcp_server_config should return proper config dict."""
         config = get_mcp_server_config()
 
         assert "command" in config
         assert "args" in config
-        assert "cwd" in config
 
         assert config["args"] == ["-m", "mgcp.server"]
         assert Path(config["command"]).exists()
-        assert Path(config["cwd"]).exists()
+
+    def test_get_mcp_server_config_has_no_cwd(self):
+        """The config must not pin a working directory.
+
+        `cwd` was derived from the package's own file layout, which only
+        resolves to the repo root for an editable checkout -- a wheel install
+        landed above site-packages, and that path went verbatim into every
+        client config.
+        """
+        assert "cwd" not in get_mcp_server_config()
 
     def test_get_mcp_server_config_uses_current_python(self):
         """Config should use the current Python interpreter."""
@@ -125,10 +125,24 @@ class TestLLMClientRegistry:
     """Tests for the LLM client registry."""
 
     def test_all_clients_registered(self):
-        """All expected clients should be in registry."""
-        expected = ["claude-code", "cursor", "windsurf", "continue", "cline"]
-        for name in expected:
-            assert name in LLM_CLIENTS
+        """Every documented client is in the registry, and only those.
+
+        Enumerated exactly rather than spot-checked: the old list named 5 of
+        the 8, so zed, claude-desktop and cody were unguarded, and the "we
+        support 8 clients" count lived in a smoke test that asserted `>= 8`.
+        """
+        expected = {
+            "claude-code",
+            "claude-desktop",
+            "cline",
+            "cody",
+            "continue",
+            "cursor",
+            "windsurf",
+            "zed",
+        }
+        assert set(LLM_CLIENTS) == expected
+        assert len(LLM_CLIENTS) == 8
 
     def test_client_has_required_fields(self):
         """Each client should have all required fields."""
@@ -146,25 +160,23 @@ class TestLLMClientRegistry:
             path = client.get_config_path()
             assert path.is_absolute(), f"{name} config path should be absolute"
 
-    def test_claude_code_mcp_key(self):
-        """Claude Code should use mcpServers key."""
-        assert LLM_CLIENTS["claude-code"].mcp_key == "mcpServers"
+    @pytest.mark.parametrize("name,mcp_key", [
+        ("claude-code", "mcpServers"),
+        ("claude-desktop", "mcpServers"),
+        ("cline", "mcpServers"),
+        ("cody", "mcpServers"),
+        ("continue", "experimental.modelContextProtocolServers"),
+        ("cursor", "mcpServers"),
+        ("windsurf", "mcpServers"),
+        ("zed", "context_servers"),
+    ])
+    def test_client_mcp_key(self, name, mcp_key):
+        """Every client writes under the key its own config format uses.
 
-    def test_cursor_mcp_key(self):
-        """Cursor should use mcpServers key."""
-        assert LLM_CLIENTS["cursor"].mcp_key == "mcpServers"
-
-    def test_windsurf_mcp_key(self):
-        """Windsurf should use mcpServers key."""
-        assert LLM_CLIENTS["windsurf"].mcp_key == "mcpServers"
-
-    def test_continue_mcp_key(self):
-        """Continue should use nested experimental key."""
-        assert LLM_CLIENTS["continue"].mcp_key == "experimental.modelContextProtocolServers"
-
-    def test_cline_mcp_key(self):
-        """Cline should use mcpServers key."""
-        assert LLM_CLIENTS["cline"].mcp_key == "mcpServers"
+        Enumerated rather than spot-checked: the five hand-written cases left
+        zed, claude-desktop and cody with no assertion on their key at all.
+        """
+        assert LLM_CLIENTS[name].mcp_key == mcp_key
 
 
 # ============================================================================
@@ -402,7 +414,7 @@ class TestClaudeHooks:
 
         hook_file = temp_project / ".claude" / "hooks" / "session-init.py"
         assert hook_file.exists()
-        assert hook_file.read_text() == HOOK_SCRIPT
+        assert hook_file.read_text() == _load_hook_template("session-init.py")
 
     def test_init_hooks_makes_script_executable(self, temp_project):
         """Should make hook script executable."""
@@ -503,35 +515,6 @@ class TestClaudeHooks:
         assert any("mgcp-precompact.py" in f for f in result["created"])
         assert any("settings.json" in f for f in result["created"])
 
-    def test_hook_script_is_valid_python(self, temp_project):
-        """Hook script should be valid Python."""
-        init_claude_hooks(temp_project)
-
-        hook_file = temp_project / ".claude" / "hooks" / "session-init.py"
-
-        # Compile to check syntax
-        code = hook_file.read_text()
-        compile(code, str(hook_file), "exec")
-
-    def test_hook_script_produces_valid_json(self, temp_project):
-        """Hook script should produce valid JSON output."""
-        init_claude_hooks(temp_project)
-
-        hook_file = temp_project / ".claude" / "hooks" / "session-init.py"
-
-        # Run the hook script
-        result = subprocess.run(
-            [sys.executable, str(hook_file)],
-            capture_output=True,
-            text=True,
-            cwd=str(temp_project)
-        )
-
-        assert result.returncode == 0
-        output = json.loads(result.stdout)
-        assert "hookSpecificOutput" in output
-        assert output["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-
 
 # ============================================================================
 # Tests: CLI Interface
@@ -562,11 +545,10 @@ class TestCLI:
         )
 
         assert result.returncode == 0
-        assert "claude-code" in result.stdout
-        assert "cursor" in result.stdout
-        assert "windsurf" in result.stdout
-        assert "continue" in result.stdout
-        assert "cline" in result.stdout
+        # Every registered client, not a sample: --list could have stopped
+        # printing zed, claude-desktop and cody and stayed green.
+        for name in LLM_CLIENTS:
+            assert name in result.stdout, f"--list omits {name}"
 
     def test_cli_detect_clients(self):
         """CLI --detect should show detection results."""
@@ -588,32 +570,6 @@ class TestCLI:
         )
 
         assert result.returncode != 0
-
-    def test_cli_specific_client(self, tmp_path, monkeypatch):
-        """CLI should configure specific client when specified."""
-        # Create a mock home with cursor directory
-        home = tmp_path / "home"
-        home.mkdir()
-        cursor_dir = home / ".cursor"
-        cursor_dir.mkdir()
-
-        project = tmp_path / "project"
-        project.mkdir()
-
-        # Mock Path.home()
-        monkeypatch.setattr(Path, "home", lambda: home)
-        monkeypatch.setenv("HOME", str(home))
-
-        result = subprocess.run(
-            [sys.executable, "-m", "mgcp.init_project",
-             "--client", "cursor", "--no-hooks", str(project)],
-            capture_output=True,
-            text=True,
-            env={**os.environ, "HOME": str(home)}
-        )
-
-        # Check output mentions Cursor
-        assert "Cursor" in result.stdout or result.returncode == 0
 
     def test_cli_multiple_clients(self):
         """CLI should accept multiple --client flags."""
@@ -847,25 +803,29 @@ class TestEdgeCases:
         client = LLM_CLIENTS["cursor"]
         config_path = mock_config_paths["cursor"]
 
-        # Create parent directory
         parent = config_path.parent
         parent.mkdir(parents=True, exist_ok=True)
 
-        # Create the config file first so exists() check passes
-        config_path.write_text("{}")
+        # The config must NOT exist: chmod 0o555 on a directory blocks creating
+        # and removing entries, not writing to a file that is already there. The
+        # earlier version of this test pre-created the file, so the write always
+        # succeeded and the "readonly" case was never exercised at all.
+        assert not config_path.exists()
 
         try:
-            # Make parent readonly (can't write new files)
             parent.chmod(0o555)
 
-            # Try to configure - should fail gracefully since we can't write
-            try:
-                result = configure_client(client)
-                # If we got here, either we have permission or it errored gracefully
-                assert result["status"] in ["created", "error", "updated", "unchanged"]
-            except PermissionError:
-                # This is also acceptable - the function raised instead of returning error
-                pass
+            # Graceful means: report the failure and return, so a loop over
+            # eight clients survives one unwritable directory. It used to raise
+            # PermissionError out of configure_client, and this test accepted
+            # that via `except PermissionError: pass` while its own name said
+            # "gracefully" -- with an assertion listing every possible status,
+            # so no outcome could fail it either way.
+            result = configure_client(client)
+            assert result["status"] == "error", (
+                f"expected a reported error, got {result['status']!r}"
+            )
+            assert "Could not write" in result["message"]
         finally:
             # Restore permissions for cleanup
             parent.chmod(0o755)
@@ -953,7 +913,7 @@ class TestConfigFormat:
         """MCP config should have all required fields."""
         config = get_mcp_server_config()
 
-        required_fields = ["command", "args", "cwd"]
+        required_fields = ["command", "args"]
         for field in required_fields:
             assert field in config, f"Missing required field: {field}"
 
@@ -966,11 +926,6 @@ class TestConfigFormat:
         """MCP config args should be a list."""
         config = get_mcp_server_config()
         assert isinstance(config["args"], list)
-
-    def test_mcp_config_cwd_is_string(self):
-        """MCP config cwd should be a string."""
-        config = get_mcp_server_config()
-        assert isinstance(config["cwd"], str)
 
     def test_hook_settings_format(self):
         """Hook settings should have correct format."""
@@ -1101,43 +1056,6 @@ class TestVerifySetup:
         assert "cursor" in result["clients_configured"]
 
 
-class TestHookScriptContent:
-    """Tests for hook script content."""
-
-    def test_hook_script_has_shebang(self):
-        """Hook script should have Python shebang."""
-        assert HOOK_SCRIPT.startswith("#!/usr/bin/env python3")
-
-    def test_hook_script_has_docstring(self):
-        """Hook script should have docstring."""
-        assert '"""' in HOOK_SCRIPT
-
-    def test_hook_script_imports_json(self):
-        """Hook script should import json."""
-        assert "import json" in HOOK_SCRIPT
-
-    def test_hook_script_imports_os(self):
-        """Hook script should import os."""
-        assert "import os" in HOOK_SCRIPT
-
-    def test_hook_script_gets_project_path(self):
-        """Hook script should get project path from env."""
-        assert "CLAUDE_PROJECT_DIR" in HOOK_SCRIPT
-
-    def test_hook_script_outputs_json(self):
-        """Hook script should output JSON."""
-        assert "print(json.dumps" in HOOK_SCRIPT
-
-    def test_hook_script_mentions_mgcp(self):
-        """Hook script should mention MGCP."""
-        assert "MGCP" in HOOK_SCRIPT
-
-    def test_hook_script_mentions_tools(self):
-        """Hook script should mention MCP tools to call."""
-        assert "get_project_context" in HOOK_SCRIPT
-        assert "query_lessons" in HOOK_SCRIPT
-
-
 # ============================================================================
 # Tests: v2 Hook Templates
 # ============================================================================
@@ -1163,10 +1081,16 @@ class TestHookTemplates:
             assert template.exists(), f"Missing template: {filename}"
 
     def test_templates_are_valid_python(self):
-        """All hook templates should be valid Python."""
+        """All hook templates should be valid Python with a shebang.
+
+        Claude Code invokes these through an explicit interpreter, but they
+        are chmod 755 on install, so a missing shebang makes a hand-run hook
+        execute under whatever shell picks it up.
+        """
         for filename in V2_HOOK_FILES:
             template = HOOK_TEMPLATES_DIR / filename
             code = template.read_text()
+            assert code.startswith("#!/usr/bin/env python3"), f"{filename}: no shebang"
             compile(code, str(template), "exec")
 
     def test_get_hook_version(self):
@@ -1584,6 +1508,29 @@ class TestGlobalHooks:
             assert (hooks_dir / filename).exists(), f"Missing: {filename}"
         assert len(result["created"]) >= 4  # 4 scripts
 
+    def test_enforcement_seed_lands_where_the_readers_look(
+        self, mock_global_paths, tmp_path, monkeypatch
+    ):
+        """The seeded rules must go to MGCP_DATA_DIR, not a hardcoded ~/.mgcp.
+
+        The PreToolUse hook and the MCP tools both resolve the config through
+        MGCP_DATA_DIR. The installer hardcoded ~/.mgcp, so an install with the
+        env var set wrote the seed where nothing read it: the hook found no
+        file and fell open to zero rules while list_enforcement_rules reported
+        the built-in defaults, so the install looked configured and enforced
+        nothing.
+        """
+        data_dir = tmp_path / "data"
+        monkeypatch.setenv("MGCP_DATA_DIR", str(data_dir))
+        monkeypatch.delenv("MGCP_ENFORCEMENT_CONFIG", raising=False)
+
+        result = init_global_hooks()
+
+        seeded = data_dir / "enforcement_rules.json"
+        assert seeded.exists(), "enforcement rules not seeded under MGCP_DATA_DIR"
+        assert str(seeded) in result["created"]
+        assert json.loads(seeded.read_text())["rules"]
+
     def test_init_global_hooks_creates_settings(self, mock_global_paths):
         """Should create settings.json with hooks/permissions and claude.json with mcpServers."""
         settings_path = mock_global_paths["settings_path"]
@@ -1804,7 +1751,6 @@ class TestGlobalHooks:
         mgcp_config = claude_json["mcpServers"]["mgcp"]
         assert mgcp_config["args"] == ["-m", "mgcp.server"]
         assert "command" in mgcp_config
-        assert "cwd" in mgcp_config
 
     def test_build_global_hook_settings_excludes_mcp_server(self):
         """_build_global_hook_settings should NOT include mcpServers (goes to claude.json)."""

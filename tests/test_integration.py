@@ -107,10 +107,10 @@ class TestLessonWorkflow:
             stores["graph"].add_lesson(lesson)
 
         # Verify relationships
-        prereqs = stores["graph"].get_by_relationship_type("lesson-a", "prerequisite")
+        prereqs = stores["graph"].get_related("lesson-a", relation_type="prerequisite")
         assert "lesson-b" in prereqs
 
-        alternatives = stores["graph"].get_by_relationship_type("lesson-a", "alternative")
+        alternatives = stores["graph"].get_related("lesson-a", relation_type="alternative")
         assert "lesson-c" in alternatives
 
     @pytest.mark.asyncio

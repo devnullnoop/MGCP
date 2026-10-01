@@ -1,10 +1,9 @@
 """REM (Recalibrate Everything in Memory) cycle engine.
 
-Coordinates periodic knowledge consolidation operations:
-- Staleness scan: find lessons that may be outdated
-- Duplicate detection: find semantically similar lessons
-- Community detection: discover topic clusters in the graph
-- Knowledge extraction: surface patterns from context history
+Coordinates periodic knowledge consolidation operations. ``DEFAULT_SCHEDULES``
+in ``rem_config`` is the register of which operations exist and how often each
+one runs; a list here would be a second register, and the second one is the one
+that rots — this docstring named four of the seven for several releases.
 """
 
 import json
@@ -51,8 +50,13 @@ class RemEngine:
         schedules: dict[str, OperationSchedule] | None = None,
         *,
         project_id: str,
+        vector_store=None,
     ):
         self.store = store
+        # duplicate_detection needs the caller's live Qdrant client: local mode
+        # allows one client per path, so an engine running inside the MCP server
+        # cannot open its own. None is valid only out-of-process (the CLI).
+        self.vector_store = vector_store
         self.schedules = schedules or DEFAULT_SCHEDULES
         # Which project's schedule cursor this engine reads and writes. The
         # corpus it maintains is global; only the cadence is per project.
@@ -91,14 +95,7 @@ class RemEngine:
                 "last_run_session": last_run,
                 "next_due_session": next_session,
                 "is_due": is_due(schedule, session_number, last_run),
-                "last_run_timestamp": state["last_run_timestamp"] if state else None,
             }
-
-            if state and state.get("last_run_result"):
-                try:
-                    entry["last_result_summary"] = json.loads(state["last_run_result"])
-                except (json.JSONDecodeError, TypeError):
-                    pass
 
             status.append(entry)
         return status
@@ -156,15 +153,18 @@ class RemEngine:
         elif operation == "community_detection":
             findings = await self._community_detection()
         elif operation == "knowledge_extraction":
-            findings = await self._knowledge_extraction(session_number)
-        elif operation == "context_summary":
-            findings = await self._context_summary()
+            findings = await self._knowledge_extraction()
         elif operation == "intent_calibration":
             findings = await self._intent_calibration()
         elif operation == "gate_audit_review":
             findings = await self._gate_audit_review()
         else:
-            findings = []
+            # A misspelled name used to fall through to zero findings and then
+            # write a rem_state row under the bogus name: rem_run answered
+            # "No findings. Knowledge base looks healthy." for a scan that
+            # never ran. run() turns this into a visible "{op} failed"
+            # finding, and the raise happens before the row is written.
+            raise ValueError(f"unknown REM operation: {operation!r}")
 
         # Update rem_state
         schedule = self.schedules.get(operation)
@@ -233,10 +233,31 @@ class RemEngine:
         from .data_ops import find_duplicates
 
         try:
-            pairs = await find_duplicates(threshold=0.85)
+            pairs = await find_duplicates(
+                threshold=0.85,
+                store=self.store,
+                vector_store=self.vector_store,
+            )
         except Exception as e:
+            # Returning [] here read as "no duplicates found", which the report
+            # renders as "Knowledge base looks healthy" — a clean bill of health
+            # from a scan that never ran. Say so instead.
             logger.warning(f"Duplicate detection failed: {e}")
-            return []
+            return [RemFinding(
+                operation="duplicate_detection",
+                title="Duplicate scan could not run",
+                description=(
+                    f"find_duplicates raised: {e}\n\n"
+                    "This is not a statement about duplicates — the scan did not "
+                    "complete, so the corpus is unverified. Run `mgcp-duplicates` "
+                    "out of process to check."
+                ),
+                options=[
+                    {"label": "Acknowledge", "description": "Investigate separately"},
+                ],
+                recommended=0,
+                metadata={"error": str(e)},
+            )]
 
         findings = []
         for pair in pairs:
@@ -282,21 +303,21 @@ class RemEngine:
         communities = graph.detect_communities()
         findings = []
 
-        # Find orphan lessons (not in any community)
-        all_members = set()
-        for comm in communities:
-            all_members.update(comm.get("members", []))
-
-        orphans = [l for l in lessons if l.id not in all_members and len(l.relationships) == 0]
+        # A lesson that clustered with nothing comes back as a singleton
+        # community — that is the only way Louvain can say "did not cluster".
+        # This used to subtract the union of all members from all lessons,
+        # which is always empty: Louvain partitions every node, so the union
+        # is every lesson and the orphan finding could never fire.
+        orphans = [c["members"][0] for c in communities if c.get("size") == 1]
 
         if orphans:
-            orphan_ids = [o.id for o in orphans[:10]]  # Cap at 10
+            orphan_ids = orphans[:10]  # Cap at 10
             findings.append(RemFinding(
                 operation="community_detection",
                 title=f"{len(orphans)} orphan lessons with no relationships",
                 description=(
-                    f"These lessons have no relationships to other lessons and didn't "
-                    f"cluster into any community: {', '.join(orphan_ids)}"
+                    f"These lessons clustered with nothing — no relationships tie "
+                    f"them to the rest of the graph: {', '.join(orphan_ids)}"
                 ),
                 options=[
                     {"label": "Review & link", "description": "Suggest relationships for these lessons"},
@@ -306,7 +327,8 @@ class RemEngine:
                 metadata={"orphan_ids": orphan_ids},
             ))
 
-        # Report new/changed communities
+        # Nothing here compares this run against the last, so this reports the
+        # current cluster count, not a change in it.
         if communities:
             findings.append(RemFinding(
                 operation="community_detection",
@@ -317,7 +339,7 @@ class RemEngine:
                 ),
                 options=[
                     {"label": "Update summaries", "description": "Generate/update community summaries"},
-                    {"label": "Skip", "description": "Communities haven't changed significantly"},
+                    {"label": "Skip", "description": "Existing summaries are good enough"},
                 ],
                 recommended=0,
                 metadata={"community_count": len(communities)},
@@ -325,7 +347,7 @@ class RemEngine:
 
         return findings
 
-    async def _knowledge_extraction(self, session_number: int) -> list[RemFinding]:
+    async def _knowledge_extraction(self) -> list[RemFinding]:
         """Extract patterns from context history."""
 
         # Get all projects and scan their recent history
@@ -337,14 +359,12 @@ class RemEngine:
             if len(history) < 3:
                 continue
 
-            # Look for recurring themes in notes
-            all_notes = [h["notes"] for h in history if h.get("notes")]
-            if not all_notes:
-                continue
-
-            # Find stale todos (pending for 5+ sessions)
-            latest = history[0] if history else None
-            if latest and latest.get("todos"):
+            # Flag projects carrying 3+ pending todos. This used to skip the
+            # whole project when no snapshot carried a note, gated on a list of
+            # notes nothing read — the todo and decision checks below do not
+            # depend on notes.
+            latest = history[0]
+            if latest.get("todos"):
                 try:
                     todos = json.loads(latest["todos"])
                     stale_todos = [
@@ -366,14 +386,14 @@ class RemEngine:
                             recommended=0,
                             metadata={
                                 "project_id": project.project_id,
-                                "stale_count": len(stale_todos),
+                                "pending_count": len(stale_todos),
                             },
                         ))
                 except (json.JSONDecodeError, TypeError):
                     pass
 
             # Check for decisions that could become lessons
-            if latest and latest.get("recent_decisions"):
+            if latest.get("recent_decisions"):
                 try:
                     decisions = json.loads(latest["recent_decisions"])
                     if len(decisions) >= 2:
@@ -397,44 +417,16 @@ class RemEngine:
 
         return findings
 
-    async def _context_summary(self) -> list[RemFinding]:
-        """Summarize context history into compressed narratives."""
-        projects = await self.store.get_all_project_contexts()
-        findings = []
-
-        for project in projects:
-            history = await self.store.get_context_history(project.project_id, limit=50)
-            if len(history) < 10:
-                continue
-
-            findings.append(RemFinding(
-                operation="context_summary",
-                title=f"Context history available for {project.project_name}",
-                description=(
-                    f"Project '{project.project_name}' has {len(history)} history snapshots "
-                    f"spanning sessions. A summary could compress older entries into narratives "
-                    f"while preserving key transitions."
-                ),
-                options=[
-                    {"label": "Generate summary", "description": "Compress older history into narrative"},
-                    {"label": "Skip", "description": "Keep raw history for now"},
-                ],
-                recommended=0,
-                metadata={"project_id": project.project_id, "snapshot_count": len(history)},
-            ))
-
-        return findings
-
     async def _gate_audit_review(self) -> list[RemFinding]:
         """Sample the enforcement gate's audit log for human review.
 
         The attest-or-comply gate (v2.11) lets the agent contest a fire on
         the record instead of being hard-blocked. That design is only
         honest if somebody reads the record. This operation is that
-        somebody's assistant: it summarizes fires, compliances,
-        adjudications and human bypasses since the last review, surfaces
-        every contested verdict with its reasoning, and flags a contest
-        rate that suggests the gate is being talked around.
+        somebody's assistant: it summarizes the fires, compliances,
+        adjudications and human bypasses in the recent tail of the log,
+        surfaces every contested verdict with its reasoning, and flags a
+        contest rate that suggests the gate is being talked around.
         """
         import json as _json
         import os as _os
@@ -468,7 +460,11 @@ class RemEngine:
                     if e.get("event") == "adjudication"
                     and e.get("verdict") == "apology"]
         bypasses = [e for e in events if e.get("event") == "human_bypass"]
-        known = {"deny", "comply", "adjudication", "human_bypass"}
+        # A hook_error is the PreToolUse gate crashing and failing open: the
+        # one event that means enforcement was skipped. Left out of `known` it
+        # was filed as "unrecognised type", which buries it.
+        hook_errors = [e for e in events if e.get("event") == "hook_error"]
+        known = {"deny", "comply", "adjudication", "human_bypass", "hook_error"}
         unknown = [e for e in events if e.get("event") not in known]
 
         findings = []
@@ -477,7 +473,8 @@ class RemEngine:
             f"denial(s) ({len(denies) - len(gate_denies)} from data rules), "
             f"{len(complies)} compliance(s), {len(contests)} contested / "
             f"{len(confirms)} confirmed adjudication(s), "
-            f"{len(bypasses)} human bypass(es)."
+            f"{len(bypasses)} human bypass(es), "
+            f"{len(hook_errors)} hook fail-open(s)."
         )
         if unknown:
             # A future event type must be REPORTED, not silently dropped: the
@@ -508,6 +505,7 @@ class RemEngine:
                 "fires": len(gate_denies), "complies": len(complies),
                 "contests": len(contests), "confirms": len(confirms),
                 "bypasses": len(bypasses), "rule_denies": len(denies) - len(gate_denies),
+                "hook_errors": len(hook_errors),
             },
         ))
         if len(contests) >= 3 and len(contests) * 2 >= max(len(gate_denies), 1):

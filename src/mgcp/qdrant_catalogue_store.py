@@ -15,7 +15,6 @@ store the original ID in the payload for retrieval.
 
 import logging
 import os
-import uuid
 from pathlib import Path
 from typing import Literal
 
@@ -24,6 +23,7 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    FilterSelector,
     MatchAny,
     MatchValue,
     PointStruct,
@@ -43,26 +43,12 @@ from .models import (
     SecurityNote,
 )
 
+# Both stores share one Qdrant directory and one UUID namespace, so these were
+# byte-identical copies here. Importing rather than re-declaring keeps a single
+# definition: two copies of the namespace is two chances for point ids to diverge.
+from .qdrant_vector_store import DEFAULT_QDRANT_PATH, string_to_uuid
+
 logger = logging.getLogger("mgcp.qdrant_catalogue_store")
-
-# Namespace for generating deterministic UUIDs from catalogue IDs
-MGCP_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
-
-
-def string_to_uuid(s: str) -> str:
-    """Convert a string to a deterministic UUID string."""
-    return str(uuid.uuid5(MGCP_NAMESPACE, s))
-
-
-def get_default_qdrant_path() -> str:
-    """Get the default Qdrant path, respecting MGCP_DATA_DIR env var."""
-    data_dir = os.environ.get("MGCP_DATA_DIR")
-    if data_dir:
-        return str(Path(data_dir) / "qdrant")
-    return os.path.expanduser("~/.mgcp/qdrant")
-
-
-DEFAULT_QDRANT_PATH = get_default_qdrant_path()
 
 ItemType = Literal[
     "arch", "security", "framework", "library", "tool",
@@ -71,11 +57,7 @@ ItemType = Literal[
 
 
 class QdrantCatalogueStore:
-    """Semantic search over project catalogue items using Qdrant.
-
-    Provides the same interface as the ChromaDB-based CatalogueVectorStore for
-    drop-in replacement.
-    """
+    """Semantic search over project catalogue items using Qdrant."""
 
     def __init__(
         self,
@@ -87,15 +69,9 @@ class QdrantCatalogueStore:
         self.persist_path.mkdir(parents=True, exist_ok=True)
         self.collection_name = collection_name
 
-        # Use provided client or create new one
         # IMPORTANT: Qdrant local mode only allows ONE client per path.
         # Share clients between stores to avoid lock conflicts.
-        if client is not None:
-            self.client = client
-            self._owns_client = False
-        else:
-            self.client = QdrantClient(path=str(self.persist_path))
-            self._owns_client = True
+        self.client = client or QdrantClient(path=str(self.persist_path))
 
         # Ensure collection exists
         self._ensure_collection()
@@ -299,11 +275,13 @@ class QdrantCatalogueStore:
             parts.append(f"Metadata: {', '.join(f'{k}={v}' for k, v in item.metadata.items())}")
         return "\n".join(parts)
 
-    def remove_item(self, project_id: str, item_type: ItemType, identifier: str) -> bool:
+    def remove_item(self, project_id: str, item_type: ItemType, identifier: str) -> None:
         """Remove a single item from the vector store.
 
-        Returns:
-            True if removal succeeded, False if not found or error occurred.
+        Deleting an absent point is a no-op in Qdrant, so there is no
+        not-found case to report. The warning below covers the one real
+        failure: Qdrant erroring after the catalogue itself was already
+        written, which leaves an orphaned vector.
         """
         doc_id = self._make_id(project_id, item_type, identifier)
         point_id = string_to_uuid(doc_id)
@@ -312,37 +290,15 @@ class QdrantCatalogueStore:
                 collection_name=self.collection_name,
                 points_selector=[point_id],
             )
-            return True
         except Exception as e:
             logger.warning(f"Failed to remove catalogue item '{doc_id}': {e}")
-            return False
 
     def remove_project(self, project_id: str) -> None:
         """Remove all items for a project."""
-        # Query for all items with this project_id
-        offset = None
-        ids_to_delete = []
-
-        while True:
-            result, offset = self.client.scroll(
-                collection_name=self.collection_name,
-                scroll_filter=Filter(
-                    must=[FieldCondition(key="project_id", match=MatchValue(value=project_id))]
-                ),
-                limit=1000,
-                offset=offset,
-                with_payload=False,
-                with_vectors=False,
-            )
-            ids_to_delete.extend(p.id for p in result)
-            if offset is None:
-                break
-
-        if ids_to_delete:
-            self.client.delete(
-                collection_name=self.collection_name,
-                points_selector=ids_to_delete,
-            )
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=FilterSelector(filter=self._project_filter(project_id)),
+        )
 
     def search(
         self,
@@ -397,28 +353,17 @@ class QdrantCatalogueStore:
 
     def count(self, project_id: str | None = None) -> int:
         """Get count of items, optionally filtered by project."""
-        if project_id:
-            # Count items for specific project
-            offset = None
-            count = 0
-            while True:
-                result, offset = self.client.scroll(
-                    collection_name=self.collection_name,
-                    scroll_filter=Filter(
-                        must=[FieldCondition(key="project_id", match=MatchValue(value=project_id))]
-                    ),
-                    limit=1000,
-                    offset=offset,
-                    with_payload=False,
-                    with_vectors=False,
-                )
-                count += len(result)
-                if offset is None:
-                    break
-            return count
+        return self.client.count(
+            collection_name=self.collection_name,
+            count_filter=self._project_filter(project_id) if project_id else None,
+        ).count
 
-        info = self.client.get_collection(self.collection_name)
-        return info.points_count
+    @staticmethod
+    def _project_filter(project_id: str) -> Filter:
+        """Filter matching every item belonging to one project."""
+        return Filter(
+            must=[FieldCondition(key="project_id", match=MatchValue(value=project_id))]
+        )
 
     # Text conversion methods
     def _arch_note_to_text(self, note: ArchitecturalNote) -> str:

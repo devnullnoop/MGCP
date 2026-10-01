@@ -1,15 +1,15 @@
-"""Migration tool for ChromaDB to Qdrant.
+"""Rebuild the Qdrant index from SQLite.
 
-This module handles migration of existing ChromaDB data to Qdrant with
-the new BGE embedding model.
+Named for a ChromaDB migration it never performed: nothing here has ever
+opened a `chroma` directory or imported chromadb, which is not a dependency.
+What it does is:
 
-Migration Process:
-1. Load lessons from SQLite (source of truth)
-2. Re-embed with new BGE model (bge-base-en-v1.5, 768 dimensions)
-3. Insert into Qdrant collections
+1. Load lessons, project contexts and workflows from SQLite (source of truth)
+2. Re-embed with the BGE model (bge-base-en-v1.5, 768 dimensions)
+3. Insert into the Qdrant collections
 4. Verify counts match
 
-Rollback: SQLite contains all data; can always re-run migration.
+Safe to re-run: SQLite holds all the data, so the index is disposable.
 """
 
 import argparse
@@ -24,8 +24,6 @@ from .persistence import LessonStore
 from .qdrant_catalogue_store import QdrantCatalogueStore
 from .qdrant_vector_store import QdrantVectorStore
 
-logger = logging.getLogger("mgcp.migration")
-
 
 def get_default_data_dir() -> Path:
     """Get the default MGCP data directory."""
@@ -35,18 +33,12 @@ def get_default_data_dir() -> Path:
     return Path.home() / ".mgcp"
 
 
-def check_chromadb_exists(data_dir: Path) -> bool:
-    """Check if ChromaDB data exists."""
-    chroma_path = data_dir / "chroma"
-    return chroma_path.exists() and any(chroma_path.iterdir())
-
-
 async def migrate(
     data_dir: Path | None = None,
     force: bool = False,
     dry_run: bool = False,
 ) -> dict:
-    """Migrate from ChromaDB to Qdrant.
+    """Rebuild the Qdrant index from the SQLite store.
 
     Args:
         data_dir: Data directory (default: ~/.mgcp)
@@ -67,21 +59,21 @@ async def migrate(
         "errors": [],
     }
 
-    # Check for existing ChromaDB data
-    has_chromadb = check_chromadb_exists(data_dir)
-    if has_chromadb:
-        print(f"Found ChromaDB data at {data_dir / 'chroma'}")
-    else:
-        print("No existing ChromaDB data found. Starting fresh with Qdrant.")
-
     # Check for existing Qdrant data
     qdrant_path = data_dir / "qdrant"
     has_qdrant = qdrant_path.exists() and any(qdrant_path.iterdir())
-    if has_qdrant and not force:
+    # --dry-run writes nothing, so existing data is no reason to refuse it.
+    # This guard used to run first, which made `--dry-run` exit non-zero
+    # without previewing anything on every install that already had Qdrant.
+    if has_qdrant and not force and not dry_run:
         print(f"Qdrant data already exists at {qdrant_path}")
         print("Use --force to overwrite existing Qdrant data")
         results["errors"].append("Qdrant data already exists")
         return results
+
+    if has_qdrant and dry_run:
+        print(f"Note: Qdrant data already exists at {qdrant_path};")
+        print("      a real run would need --force to overwrite it.")
 
     if dry_run:
         print("\n=== DRY RUN - No changes will be made ===\n")
@@ -229,12 +221,12 @@ async def migrate(
 def main():
     """CLI entry point for migration."""
     parser = argparse.ArgumentParser(
-        description="Migrate MGCP data from ChromaDB to Qdrant",
+        description="Rebuild the MGCP Qdrant index from SQLite",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  mgcp-migrate                    # Migrate with default settings
-  mgcp-migrate --dry-run          # Preview what would be migrated
+  mgcp-migrate                    # Rebuild with default settings
+  mgcp-migrate --dry-run          # Preview what would be rebuilt
   mgcp-migrate --force            # Overwrite existing Qdrant data
   mgcp-migrate --data-dir /path   # Use custom data directory
         """,

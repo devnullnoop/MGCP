@@ -24,14 +24,17 @@ This compiler is designed to avoid that failure mode:
    match at compile time. Same input always produces the same output,
    regardless of embedding model changes or new workflows being added later.
 
-4. **Stale detection.** Skill files include a generated-on timestamp in a
-   comment. The web UI compares the timestamp against backing lesson
-   ``updated_at`` values and badges stale skills so the user knows when to
-   recompile.
+4. **Stale detection.** The web UI compares the SKILL.md file's mtime against
+   the ``intent_config.json`` mtime and each backing lesson's ``last_refined``,
+   and badges stale skills so the user knows when to recompile. The
+   generated-on comment in the file is for the reader, not for that
+   comparison — editing a SKILL.md by hand bumps its mtime and hides real
+   staleness, which is what the DO-NOT-EDIT header is there to prevent.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,20 +43,18 @@ from .intent_config import IntentDefinition, load_config
 from .persistence import LessonStore
 
 
-def _user_skills_dir() -> Path:
-    return Path.home() / ".claude" / "skills"
-
-
-def _project_skills_dir(project_path: Path | None = None) -> Path:
-    return (project_path or Path.cwd()) / ".claude" / "skills"
-
-
 def _resolve_skill_path(intent_name: str, scope: str, project_path: Path | None) -> Path:
     """Return the SKILL.md path for the given intent + scope."""
     if scope == "user":
-        base = _user_skills_dir()
+        base = Path.home() / ".claude" / "skills"
     elif scope == "project":
-        base = _project_skills_dir(project_path)
+        # The MCP server's cwd is the MGCP checkout (that is what CLAUDE.md's
+        # install snippet configures), so falling straight back to cwd wrote
+        # project skills into MGCP itself and reported success. Same resolution
+        # order as every other project-scoped tool: argument, then the session's
+        # project dir, then cwd.
+        root = project_path or Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path.cwd())
+        base = root / ".claude" / "skills"
     else:
         raise ValueError(f"scope must be 'user' or 'project', got {scope!r}")
     return base / intent_name / "SKILL.md"
@@ -85,8 +86,6 @@ def _generation_header(intent: IntentDefinition, workflow_id: str | None) -> str
 
 def _render_gate_section(intent: IntentDefinition) -> str:
     """If the intent has a hard keyword gate, render it as a STOP preamble."""
-    if not intent.gate_message:
-        return ""
     return (
         "## Hard rule\n\n"
         f"{intent.gate_message}\n"
@@ -217,7 +216,8 @@ async def compile_intent_to_skill(
         store: An initialized LessonStore for fetching workflows and lessons.
         scope: 'user' (writes to ``~/.claude/skills/``) or 'project'
             (writes to ``<project_path>/.claude/skills/``).
-        project_path: Required for project scope; defaults to cwd otherwise.
+        project_path: Project root for project scope; falls back to
+            CLAUDE_PROJECT_DIR, then cwd.
 
     Returns:
         CompileResult summarizing what was written.
@@ -280,7 +280,7 @@ def find_skill_path(intent_name: str, scope: str = "user", project_path: Path | 
     """Return the path to a previously-compiled skill, or None if not present.
 
     Used by the web UI to detect whether an intent has a compiled skill and
-    to compute stale-vs-fresh status against backing lesson updated_at.
+    to compute stale-vs-fresh status against its backing sources.
     """
     path = _resolve_skill_path(intent_name, scope, project_path)
     return path if path.exists() else None
@@ -296,7 +296,7 @@ async def is_skill_stale(
 
     Returns None if no skill file exists (not stale, just absent).
     Compares the skill file mtime against:
-    - The linked workflow's lessons' updated_at (if any)
+    - The linked workflow's lessons' last_refined (if any)
     - The intent_config.json mtime (since intent edits update the file)
     """
     skill_path = find_skill_path(intent_name, scope, project_path)

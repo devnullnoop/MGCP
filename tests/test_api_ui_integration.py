@@ -11,7 +11,13 @@ Run with: pytest tests/test_api_ui_integration.py -v
 import pytest
 from fastapi.testclient import TestClient
 
-from src.mgcp.web_server import app
+# The installed package, not `src.mgcp`: without src/__init__.py the two
+# import paths are separate module objects, so `src.mgcp.web_server` would
+# build a second LessonStore and a second QdrantVectorStore on the same
+# files as the rest of the suite -- the Qdrant "already accessed by another
+# instance" failure conftest.py exists to prevent -- and would not be the
+# app that mgcp.web_server:main actually serves.
+from mgcp.web_server import app
 
 
 @pytest.fixture
@@ -170,12 +176,21 @@ class TestUIPages:
         response = client.get("/")
         assert response.status_code == 200
 
-    def test_projects_page_loads(self, client):
-        """Test projects page."""
-        response = client.get("/projects")
-        assert response.status_code == 200
+    @pytest.mark.parametrize(
+        "path", ["/projects", "/lessons", "/signal", "/enforcement", "/rem", "/journal"]
+    )
+    def test_view_paths_serve_the_app(self, client, path):
+        """Every view path serves the one document; the hash router picks the view.
 
-    def test_lessons_page_loads(self, client):
-        """Test lessons page."""
-        response = client.get("/lessons")
+        The old per-page routes are gone, but /lessons and /projects are in
+        people's bookmarks, so they fall through to the app rather than 404.
+        """
+        response = client.get(path)
         assert response.status_code == 200
+        assert "MGCP Instrument" in response.text
+
+    @pytest.mark.parametrize("path", ["/api/nope", "/openapi.json"])
+    def test_reserved_paths_do_not_fall_through(self, client, path):
+        """The catch-all must not swallow the API or the schema."""
+        response = client.get(path)
+        assert response.status_code != 200 or "MGCP Instrument" not in response.text

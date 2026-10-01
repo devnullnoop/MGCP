@@ -39,13 +39,9 @@ def is_due(schedule: OperationSchedule, current_session: int, last_run_session: 
     return False
 
 
-MAX_LOOKAHEAD = 1000
-
-
 def next_due_session(
     schedule: OperationSchedule,
     last_run_session: int,
-    lookahead: int = MAX_LOOKAHEAD,
 ) -> int | None:
     """The first session after ``last_run_session`` at which `is_due` fires.
 
@@ -62,11 +58,11 @@ def next_due_session(
     always passed the last run, and the old name is what made a grid look
     like a reasonable reading.
 
-    Returns None when the schedule does not fire within ``lookahead``
+    Returns None when the schedule does not fire within the next thousand
     sessions (e.g. a non-positive interval, which is never due). Callers and
     the `next_due_session` column already treat that as unknown.
     """
-    for session in range(last_run_session + 1, last_run_session + lookahead + 1):
+    for session in range(last_run_session + 1, last_run_session + 1001):
         if is_due(schedule, session, last_run_session):
             return session
     return None
@@ -112,7 +108,6 @@ DEFAULT_SCHEDULES: dict[str, OperationSchedule] = {
     "knowledge_extraction": OperationSchedule(
         strategy="logarithmic", base_interval=10, scale=2.0
     ),
-    "context_summary": OperationSchedule(strategy="linear", interval=20),
     "intent_calibration": OperationSchedule(strategy="linear", interval=10),
     "gate_audit_review": OperationSchedule(strategy="linear", interval=10),
 }

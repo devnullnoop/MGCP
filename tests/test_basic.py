@@ -1,7 +1,10 @@
 """Basic tests for MGCP (Memory Graph Core Primitives)."""
 
 import os
+import subprocess
+import sys
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -9,21 +12,6 @@ from mgcp.graph import LessonGraph
 from mgcp.models import Example, Lesson, ProjectContext, ProjectTodo, Relationship
 from mgcp.persistence import LessonStore
 from mgcp.qdrant_vector_store import QdrantVectorStore
-
-
-@pytest.fixture
-def temp_db():
-    """Create a temporary database for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "test.db")
-        yield db_path
-
-
-@pytest.fixture
-def temp_qdrant():
-    """Create a temporary Qdrant directory for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield tmpdir
 
 
 @pytest.fixture
@@ -129,6 +117,17 @@ class TestLessonGraph:
 
         assert graph.get_parent("child") == "parent"
         assert "child" in graph.get_children("parent")
+
+    def test_ancestor_walk_survives_a_parent_cycle(self):
+        """A cycle from mgcp-import truncates the walk instead of hanging."""
+        graph = LessonGraph()
+        graph.add_lesson(Lesson(id="a", trigger="a", action="A", parent_id="b"))
+        graph.add_lesson(Lesson(id="b", trigger="b", action="B", parent_id="a"))
+
+        assert graph.get_ancestors("a") == ["b"]
+        # get_statistics walks every node's ancestry, so the guard has to hold
+        # for the whole graph, not just the node asked about.
+        assert graph.get_statistics()["max_depth"] == 1
 
     def test_spider_traversal(self):
         """Test graph traversal."""
@@ -250,7 +249,7 @@ class TestTypedRelationships:
         assert "lesson-b" in related
 
         # Check typed getter
-        prereqs = graph.get_by_relationship_type("lesson-a", "prerequisite")
+        prereqs = graph.get_related("lesson-a", relation_type="prerequisite")
         assert "lesson-b" in prereqs
 
 
@@ -347,3 +346,121 @@ class TestProjectContext:
         retrieved = await store.get_project_context_by_path("/unique/path/to/project")
         assert retrieved is not None
         assert retrieved.project_id == "path-test"
+
+
+class TestSpiderTraversalCorrectness:
+    """spider() regressions: nondeterminism, and dropping in-limit nodes."""
+
+    @staticmethod
+    def _diamond() -> LessonGraph:
+        # root -> a -> deep, and root -> deep directly.
+        # Reaching `deep` via `a` first (depth 2) used to mark it visited, so
+        # the direct depth-1 arrival returned early and `leaf` (depth 2, well
+        # inside a depth=2 spider) was never traversed.
+        def rel(*targets):
+            return [Relationship(target=t, type="related") for t in targets]
+
+        g = LessonGraph()
+        g.add_lesson(Lesson(id="root", trigger="t", action="a", relationships=rel("a", "deep")))
+        g.add_lesson(Lesson(id="a", trigger="t", action="a", relationships=rel("deep")))
+        g.add_lesson(Lesson(id="deep", trigger="t", action="a", relationships=rel("leaf")))
+        g.add_lesson(Lesson(id="leaf", trigger="t", action="a"))
+        return g
+
+    def test_in_limit_node_is_not_dropped_by_a_deeper_first_visit(self):
+        visited, _ = self._diamond().spider("root", depth=2)
+        assert "leaf" in visited, (
+            "leaf sits at depth 2 via root->deep->leaf and must be reached; "
+            f"got {sorted(visited)}"
+        )
+
+    def test_repeated_traversals_agree(self):
+        g = self._diamond()
+        runs = {tuple(sorted(g.spider("root", depth=2)[0])) for _ in range(12)}
+        assert len(runs) == 1, f"spider returned different node sets: {runs}"
+
+    def test_get_related_order_is_stable(self):
+        g = self._diamond()
+        assert g.get_related("root") == sorted(g.get_related("root"))
+
+
+class TestProcessExitsAfterStoreUse:
+    """A process that opened a LessonStore must be able to exit.
+
+    aiosqlite's connection worker thread is non-daemon, so a single connection
+    still running at interpreter exit blocks threading._shutdown forever. The
+    leak had one origin: when schema init raised on a corrupt database, the
+    connection just created in `_acquire_conn` was neither pooled nor closed.
+    `pytest tests/test_failure_recovery.py` — the file that deliberately
+    corrupts databases — printed "28 passed in 3.1s" and then hung forever,
+    which is why the suite could never be run to completion.
+
+    Asserted in a subprocess: the thing under test is interpreter shutdown,
+    which cannot be observed from inside the process performing it.
+    """
+
+    CORRUPT_DB = """
+import asyncio, os, sys, tempfile
+sys.path.insert(0, {src!r})
+from mgcp.persistence import LessonStore
+
+async def main():
+    path = os.path.join(tempfile.mkdtemp(), "corrupt.db")
+    with open(path, "wb") as fh:
+        fh.write(b"not a sqlite database at all" * 64)
+    store = LessonStore(path)
+    try:
+        await store.get_all_lessons()
+    except Exception:
+        pass          # the failure is expected; exiting afterwards is the test
+
+asyncio.run(main())
+print("done")
+"""
+
+    HEALTHY_DB = """
+import asyncio, os, sys, tempfile
+sys.path.insert(0, {src!r})
+from mgcp.persistence import LessonStore
+from mgcp.models import Lesson
+
+async def main():
+    store = LessonStore(os.path.join(tempfile.mkdtemp(), "ok.db"))
+    await store.add_lesson(Lesson(id="x", trigger="t", action="a"))
+    await store.get_lesson("x")
+    # Deliberately no close_pool(): the exit path is what is under test.
+
+asyncio.run(main())
+print("done")
+"""
+
+    def _run_script(self, body: str) -> subprocess.CompletedProcess:
+        src = str(Path(__file__).resolve().parent.parent / "src")
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as fh:
+            fh.write(body.format(src=src))
+            path = fh.name
+        try:
+            return subprocess.run(
+                [sys.executable, path], capture_output=True, text=True, timeout=30
+            )
+        finally:
+            os.unlink(path)
+
+    @pytest.mark.parametrize(
+        "script_name,what",
+        [
+            ("CORRUPT_DB", "a database that fails schema init"),
+            ("HEALTHY_DB", "a normal store whose pool was never closed"),
+        ],
+    )
+    def test_process_exits(self, script_name, what):
+        try:
+            result = self._run_script(getattr(self, script_name))
+        except subprocess.TimeoutExpired:
+            pytest.fail(
+                f"process did not exit within 30s after opening {what}: a "
+                "non-daemon aiosqlite worker thread is still running at "
+                "interpreter shutdown"
+            )
+        assert result.returncode == 0, result.stderr[-2000:]
+        assert "done" in result.stdout

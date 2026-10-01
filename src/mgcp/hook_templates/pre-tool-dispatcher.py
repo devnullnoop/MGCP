@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse dispatcher for MGCP v2.4 — generic enforcement evaluator.
+"""PreToolUse dispatcher for MGCP — generic enforcement evaluator.
 
 This hook is **data-driven**. It reads enforcement rules from
 ``~/.mgcp/enforcement_rules.json`` (override with ``MGCP_DATA_DIR``) and
@@ -77,8 +77,17 @@ def _audit(event: dict) -> None:
 
 
 SHELL_SEPARATORS = {"&&", "||", "&", ";", ";;", "|", "(", ")", "{", "}"}
-# `git` at a command boundary. Applied to raw text only when tokenizing fails.
-_GIT_AT_BOUNDARY_RE = re.compile(r"(?:^|[\s;&|(){}])git(?=\s)")
+# `git` at a command boundary, possibly invoked by path (`/usr/bin/git`).
+# Applied to raw text only when tokenizing fails.
+_GIT_AT_BOUNDARY_RE = re.compile(r"(?:^|[\s;&|(){}])(?:[^\s;&|(){}]*/)?git(?=\s)")
+# Commands that run another command: `git` after one of these is still the
+# command being run, so the boundary has to survive them.
+_COMMAND_WRAPPERS = {
+    "env", "sudo", "doas", "time", "timeout", "nohup", "xargs",
+    "command", "stdbuf", "nice", "ionice",
+}
+# A `VAR=value` prefix, which the shell strips before the command word.
+_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # Global flags that consume the NEXT token as their value, so the subcommand
 # sits one slot further along: `git -C /path commit` is still a commit.
 _GIT_VALUE_FLAGS = {
@@ -180,10 +189,20 @@ def _detect_git_subcommand(command: str, subcommands: list) -> bool:
             if tok in SHELL_SEPARATORS:
                 at_command_start = True
                 continue
-            if at_command_start and tok == "git":
+            if at_command_start and tok.rsplit("/", 1)[-1] == "git":
                 if _subcommand_after_git(tokens, i) in subcommands:
                     return True
-            at_command_start = False
+            # The boundary survives anything the shell itself treats as
+            # preamble: a `VAR=value` assignment, a wrapper like `sudo` or
+            # `env`, and a wrapper's own flags. Dropping it on the first
+            # token meant one word in front of the command -- `sudo git
+            # push`, `env git commit`, or just the absolute path -- walked
+            # straight through the gate with nothing malformed about it.
+            at_command_start = (
+                _ASSIGNMENT_RE.match(tok) is not None
+                or tok.rsplit("/", 1)[-1] in _COMMAND_WRAPPERS
+                or (at_command_start and tok.startswith("-"))
+            )
     return False
 
 
@@ -192,7 +211,10 @@ def _trigger_matches(trigger: dict, tool_name: str, tool_input: dict) -> bool:
     if t_tool != "*" and t_tool != tool_name:
         return False
     cm = trigger.get("command_match")
-    if not cm:
+    # Absent means "match the tool whatever the command is"; an empty dict
+    # means a matcher with no type, which the schema rejects outright. Reading
+    # both as absent made `"command_match": {}` match every call to the tool.
+    if cm is None:
         return True
     if tool_name != "Bash":
         return False
@@ -355,7 +377,10 @@ def _evaluate_precondition(pre: dict, state: dict, staged_files: list, tool_inpu
                 continue
         return True, ""
 
-    # Unknown type — fail open
+    # Unknown type — fail open, but on the record. A typo'd type disables the
+    # whole rule silently, and the schema that would have rejected it never
+    # sees a hand-edited rules file.
+    _audit({"event": "skipped_precondition", "type": pre_type})
     return True, ""
 
 
@@ -385,12 +410,22 @@ def _load_state() -> dict:
     number) parses cleanly and then raises on .get() -- crashing the hook
     PAST the rule loop, which the harness reads as allow. Malformed state
     must degrade to "no state", never to "no enforcement".
+
+    The per-turn lists are coerced for the same reason one level down: a
+    STRING turn_tools_called makes `name in called` a substring test, so
+    any text mentioning the required tool satisfies every
+    tool_called_this_turn precondition, and a string turn_bypass_scopes of
+    "*" becomes the set {"*"} -- bypass-all written by whatever last
+    touched the file.
     """
     try:
         if STATE_FILE.exists():
             with open(STATE_FILE) as f:
                 loaded = json.load(f)
             if isinstance(loaded, dict):
+                for key in ("turn_tools_called", "turn_bypass_scopes"):
+                    if key in loaded and not isinstance(loaded[key], list):
+                        loaded[key] = []
                 return loaded
     except (json.JSONDecodeError, OSError):
         pass

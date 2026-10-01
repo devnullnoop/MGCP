@@ -108,19 +108,11 @@ class TestTagMapping:
 # ---------------------------------------------------------------------------
 
 class TestRendering:
-    def test_full_routing_includes_all_intents(self):
+    def test_terse_routing_includes_all_intents(self):
         config = default_config()
-        rendered = config.render_full_routing()
+        rendered = config.render_terse_routing()
         assert "<intent-routing>" in rendered
         assert "</intent-routing>" in rendered
-        for intent in config.intents:
-            assert intent.name in rendered
-
-    def test_actions_block_includes_all_intents(self):
-        config = default_config()
-        rendered = config.render_actions()
-        assert "<intent-actions>" in rendered
-        assert "Multi-intent" in rendered
         for intent in config.intents:
             assert intent.name in rendered
 
@@ -171,11 +163,9 @@ class TestPersistence:
         assert "tag_to_intent" in data
         assert "rendered" in data
         rendered = data["rendered"]
-        assert "session_init_routing" in rendered
-        assert "session_init_actions" in rendered
         assert "dispatcher_routing" in rendered
         assert "keyword_gates" in rendered
-        assert "<intent-routing>" in rendered["session_init_routing"]
+        assert "<intent-routing>" in rendered["dispatcher_routing"]
 
     def test_round_trip(self, tmp_config_dir):
         config_path = tmp_config_dir / "intent_config.json"
@@ -224,6 +214,5 @@ class TestExtensibility:
         assert "phishing_research" in names
         # Custom tags appear in the tag map
         assert loaded.tag_to_intent().get("phishing") == "phishing_research"
-        # And in the rendered prompts
-        assert "phishing_research" in loaded.render_full_routing()
+        # And in the rendered prompt
         assert "phishing_research" in loaded.render_terse_routing()

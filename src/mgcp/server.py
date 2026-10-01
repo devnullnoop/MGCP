@@ -6,18 +6,21 @@ https://github.com/modelcontextprotocol/python-sdk
 """
 
 import asyncio
+import hashlib
 import json
+import logging
 import os
 import re
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import get_args
 
 from mcp.server.fastmcp import FastMCP
 from qdrant_client import QdrantClient
 
 from .graph import LessonGraph
-from .logging_config import configure_logging, get_logger
+from .logging_config import configure_logging
 from .models import (
     ArchitecturalNote,
     CommunitySummary,
@@ -30,6 +33,7 @@ from .models import (
     Lesson,
     ProjectContext,
     ProjectTodo,
+    RelationshipType,
     SecurityNote,
     Workflow,
     WorkflowStep,
@@ -43,7 +47,7 @@ from .telemetry import TelemetryLogger
 
 # Configure logging with rotation (CRITICAL: logs to file, not stdout which breaks MCP STDIO)
 configure_logging(console_output=False)
-logger = get_logger("server")
+logger = logging.getLogger("mgcp.server")
 
 # Initialize FastMCP server
 mcp = FastMCP("mgcp")
@@ -58,10 +62,14 @@ _initialized = False
 _init_lock = asyncio.Lock()
 
 # Validation constants
-VALID_RELATIONSHIP_TYPES = frozenset({
-    "related", "prerequisite", "sequence_next", "alternative",
-    "complements", "specializes", "generalizes", "contradicts"
-})
+# Derived from the model's Literal so the two cannot drift; the Literal itself
+# now carries the note about why hierarchy is not a relationship type.
+VALID_RELATIONSHIP_TYPES = frozenset(get_args(RelationshipType))
+# Community-bridge tuning. The pool is a single scored search whose results are
+# intersected with the matched community's members; the floor is what a bridged
+# lesson must score against the query to be worth injecting at all.
+BRIDGE_POOL_SIZE = 60
+BRIDGE_MIN_SCORE = 0.25
 LESSON_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9\-]*[a-z0-9]$|^[a-z0-9]$")
 MAX_LESSON_ID_LENGTH = 100
 
@@ -217,6 +225,7 @@ async def query_lessons(task_description: str, limit: int = 5) -> str:
     # Community bridge: search community summaries for additional relevant lessons
     # that direct search missed (bridges semantic gaps between queries and lessons)
     bridged_lessons = []
+    bridged_scores = []
     bridge_source = None
     try:
         community_results = vector_store.query_community_summaries(
@@ -228,19 +237,40 @@ async def query_lessons(task_description: str, limit: int = 5) -> str:
             summary = await store.get_community_summary(comm_id)
             if not summary:
                 continue
-            # Get member lessons not already in direct results
+            # Rank the community's members by their OWN relevance to the query.
+            #
+            # This used to sort by usage_count and then call record_usage on
+            # whatever it picked -- ranking by a number it incremented itself.
+            # Measured over 9 months of telemetry the loop had closed: 31.8% of
+            # all retrieved slots arrived through the bridge, 66% of those went
+            # to just three lessons, and ~30 lessons had never been surfaced
+            # once, because a lesson with no usage can never out-rank three
+            # siblings that have some. Scoring against the query breaks the
+            # ratchet: a bridged lesson earns its place or is not appended.
+            member_scores = dict(
+                vector_store.search(
+                    task_description, limit=BRIDGE_POOL_SIZE, min_score=0.0
+                )
+            )
             candidates = []
             for member_id in summary.member_ids:
-                if member_id not in direct_ids:
-                    member = await store.get_lesson(member_id)
-                    if member:
-                        candidates.append(member)
-            # Sort by usage_count to surface most important first
-            candidates.sort(key=lambda l: l.usage_count, reverse=True)
-            for lesson in candidates[:3]:
+                if member_id in direct_ids:
+                    continue
+                member_score = member_scores.get(member_id, 0.0)
+                if member_score < BRIDGE_MIN_SCORE:
+                    continue
+                member = await store.get_lesson(member_id)
+                if member:
+                    candidates.append((member_score, member))
+            candidates.sort(key=lambda pair: pair[0], reverse=True)
+            for member_score, lesson in candidates[:3]:
                 bridged_lessons.append(lesson)
+                bridged_scores.append(member_score)
                 direct_ids.add(lesson.id)
-                await store.record_usage(lesson.id)
+                # Deliberately NOT record_usage: usage_count means "was
+                # matched", and conflating it with "was appended" is what
+                # produced the ratchet above. The bridge reads that number;
+                # it must not also write it.
             if bridged_lessons:
                 bridge_source = summary.title
                 break  # Use top matching community only
@@ -250,7 +280,11 @@ async def query_lessons(task_description: str, limit: int = 5) -> str:
     # Log retrieval
     latency_ms = (time.time() - start_time) * 1000
     all_ids = [l.id for l in lessons] + [l.id for l in bridged_lessons]
-    all_scores = scores + [0.0] * len(bridged_lessons)
+    # Bridged lessons carry their real similarity to the query. Logging them as
+    # 0.0 made a third of all telemetry unscored and every per-lesson mean score
+    # meaningless -- a lesson could read as 0.023 average relevance while
+    # scoring 0.51 whenever it was genuinely matched.
+    all_scores = scores + bridged_scores
     await telemetry.log_retrieve(
         query_id=query_id,
         lesson_ids=all_ids,
@@ -269,9 +303,12 @@ async def query_lessons(task_description: str, limit: int = 5) -> str:
 
     if bridged_lessons:
         lines.append(f"\n**Also relevant** (via community: _{bridge_source}_):\n")
-        for lesson in bridged_lessons:
+        for lesson, score in zip(bridged_lessons, bridged_scores):
             lines.append(lesson.to_context())
-            lines.append("")
+            # Shown for the same reason the direct hits show it: a bridged
+            # lesson used to arrive with no relevance at all, so the reader had
+            # no way to weigh it against the matched ones.
+            lines.append(f"  (relevance: {score:.0%}, via community)\n")
 
     return "\n".join(lines)
 
@@ -293,11 +330,9 @@ async def get_lesson(lesson_id: str) -> str:
 
     lines = [
         f"**{lesson.id}**",
-    ]
-    lines.extend([
         f"Trigger: {lesson.trigger}",
         f"Action: {lesson.action}",
-    ])
+    ]
     if lesson.rationale:
         lines.append(f"Rationale: {lesson.rationale}")
     if lesson.examples:
@@ -329,7 +364,7 @@ async def spider_lessons(lesson_id: str, depth: int = 2) -> str:
 
     depth = min(depth, 5)  # Cap depth
 
-    if lesson_id not in [n for n in graph.graph.nodes()]:
+    if lesson_id not in graph.graph:
         return f"Lesson not found in graph: {lesson_id}"
 
     visited_ids, paths = graph.spider(lesson_id, depth=depth)
@@ -487,12 +522,12 @@ async def refine_lesson(
     if new_action:
         lesson.action = new_action
 
-    # Append refinement to rationale
+    # Append refinement to rationale. The [vN] marker goes on even when there
+    # was no rationale to append to: it is the only in-band record of which
+    # version introduced which sentence, and a first refinement stored as bare
+    # prose reads afterwards as if it had always been part of v1.
     version_note = f"\n\n[v{lesson.version + 1}] {refinement}"
-    if lesson.rationale:
-        lesson.rationale = lesson.rationale + version_note
-    else:
-        lesson.rationale = refinement
+    lesson.rationale = lesson.rationale + version_note if lesson.rationale else version_note.lstrip()
 
     lesson.version += 1
     lesson.last_refined = datetime.now(UTC)
@@ -671,9 +706,13 @@ async def get_project_context(project_path: str) -> str:
     if not context:
         return f"No saved context for project at: {project_path}\nUse save_project_context to create one."
 
-    # Update access time and session count
+    # Update access time and session count. The count must advance once per
+    # SESSION, not once per call: it is the clock REM's cadence and the
+    # SessionStart overdue detector both read, so counting calls made every
+    # operation come due early and warn about work that was not yet due.
     context.last_accessed = datetime.now(UTC)
-    context.session_count += 1
+    if context.last_session_id != telemetry.session_id:
+        context.session_count += 1
     context.last_session_id = telemetry.session_id
     try:
         await store.save_project_context(context)
@@ -721,9 +760,6 @@ async def save_project_context(
         active_files: Comma-separated list of files being worked on
         decision: A recent decision to add to history
     """
-    import hashlib
-    from pathlib import Path
-
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
 
     # Sanitize the decision string up front: it gets appended into a list, and
@@ -731,37 +767,21 @@ async def save_project_context(
     # paths are covered by the model layer when they're assigned below.
     decision = sanitize_tool_call_xml(decision)
 
-    # Look up by path first (handles legacy project IDs)
-    context = await store.get_project_context_by_path(project_path)
+    # Creation goes through the one helper (handles legacy project IDs on the
+    # lookup); see it for why this must not seed the session clock itself.
+    context = await _get_or_create_project_context(store, project_path)
 
-    if context:
-        # Update existing
-        if project_name:
-            context.project_name = project_name
-        if notes:
-            context.notes = notes
-        if active_files:
-            context.active_files = [f.strip() for f in active_files.split(",") if f.strip()]
-        if decision:
-            context.recent_decisions.append(decision)
-            # Keep only last 10 decisions
-            context.recent_decisions = context.recent_decisions[-10:]
-        context.last_accessed = datetime.now(UTC)
-        context.last_session_id = telemetry.session_id
-    else:
-        # Create new
-        project_id = hashlib.sha256(project_path.encode()).hexdigest()[:12]
-        name = project_name or Path(project_path).name
-        context = ProjectContext(
-            project_id=project_id,
-            project_name=name,
-            project_path=project_path,
-            notes=notes or None,
-            active_files=[f.strip() for f in active_files.split(",") if f.strip()] if active_files else [],
-            recent_decisions=[decision] if decision else [],
-            last_session_id=telemetry.session_id,
-            session_count=1,
-        )
+    if project_name:
+        context.project_name = project_name
+    if notes:
+        context.notes = notes
+    if active_files:
+        context.active_files = [f.strip() for f in active_files.split(",") if f.strip()]
+    if decision:
+        context.recent_decisions.append(decision)
+        # Keep only last 10 decisions
+        context.recent_decisions = context.recent_decisions[-10:]
+    context.last_accessed = datetime.now(UTC)
 
     await store.save_project_context(context)
     return f"Project context saved for: {context.project_name}"
@@ -782,24 +802,9 @@ async def add_project_todo(
         priority: Priority 0-9 (higher = more urgent)
         notes: Additional context or blockers
     """
-    import hashlib
-    from pathlib import Path
-
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
 
-    # Look up by path first (handles legacy project IDs)
-    context = await store.get_project_context_by_path(project_path)
-
-    if not context:
-        # Create minimal context
-        from .models import ProjectContext
-        project_id = hashlib.sha256(project_path.encode()).hexdigest()[:12]
-        context = ProjectContext(
-            project_id=project_id,
-            project_name=Path(project_path).name,
-            project_path=project_path,
-            last_session_id=telemetry.session_id,
-        )
+    context = await _get_or_create_project_context(store, project_path)
 
     # Add todo
     new_todo = ProjectTodo(
@@ -886,84 +891,38 @@ async def list_projects() -> str:
 
 
 # ============================================================================
-# RESOURCES
-# ============================================================================
-
-
-@mcp.resource("lessons://bootstrap")
-async def get_bootstrap_lessons() -> str:
-    """Critical lessons loaded at session start.
-
-    Returns the top 10 most-used lessons for immediate context.
-    """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
-
-    lessons = await store.get_all_lessons()
-    top_lessons = sorted(lessons, key=lambda l: l.usage_count, reverse=True)[:10]
-
-    if not top_lessons:
-        return "No lessons available yet. Add lessons using add_lesson tool."
-
-    lines = ["# Bootstrap Lessons\n"]
-    for lesson in top_lessons:
-        lines.append(lesson.to_context())
-        lines.append("")
-
-    return "\n".join(lines)
-
-
-@mcp.resource("lessons://graph")
-async def get_lesson_graph() -> str:
-    """Full lesson graph structure as JSON.
-
-    Returns nodes and edges for visualization.
-    """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
-    return json.dumps(graph.to_dict(), indent=2)
-
-
-@mcp.resource("lessons://stats")
-async def get_statistics() -> str:
-    """Usage statistics for all lessons.
-
-    Returns analytics data in JSON format.
-    """
-    store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
-
-    usage = await telemetry.get_lesson_usage()
-    graph_stats = graph.get_statistics()
-
-    stats = {
-        "graph": graph_stats,
-        "lesson_usage": usage[:20],  # Top 20
-        "total_lessons": len(await store.get_all_lessons()),
-    }
-
-    return json.dumps(stats, indent=2)
-
-
-# ============================================================================
 # CATALOGUE TOOLS
 # ============================================================================
 
 
-async def _get_or_create_project_context(project_path: str) -> ProjectContext:
-    """Get or create a project context by path."""
-    import hashlib
-    context = await _store.get_project_context_by_path(project_path)
+async def _get_or_create_project_context(
+    store: LessonStore, project_path: str
+) -> ProjectContext:
+    """Get a project context by path, or build a fresh one if there is none.
+
+    Every tool that can be the first to touch a project comes through here:
+    the project_id derivation and the session_count seed must not depend on
+    which tool got there first, because session_count is the clock REM's
+    cadence is scheduled against. A new context therefore starts at the model
+    default with no last_session_id, and only get_project_context advances the
+    count -- writing last_session_id from any other tool would mark the
+    session as already counted and lose it.
+
+    A new context is NOT persisted here. Every caller saves it as part of its
+    own write, and saving first would leave a stub project behind whenever
+    that write is rejected downstream -- a leaked tool-call envelope in
+    `notes` is refused, and the refusal must not still create the project.
+    """
+    context = await store.get_project_context_by_path(project_path)
     if context:
         return context
 
-    # Create new context using pathlib for cross-platform compatibility
-    project_id = hashlib.sha256(project_path.encode()).hexdigest()[:12]
-    project_name = Path(project_path).name or "Unknown"
-    context = ProjectContext(
-        project_id=project_id,
-        project_name=project_name,
+    # pathlib for cross-platform basenames; a trailing slash leaves it empty.
+    return ProjectContext(
+        project_id=hashlib.sha256(project_path.encode()).hexdigest()[:12],
+        project_name=Path(project_path).name or "Unknown",
         project_path=project_path,
     )
-    await _store.save_project_context(context)
-    return context
 
 
 @mcp.tool()
@@ -986,8 +945,12 @@ async def search_catalogue(
     project_id = None
     if project_path:
         context = await store.get_project_context_by_path(project_path)
-        if context:
-            project_id = context.project_id
+        if not context:
+            # Falling through with project_id=None searches every project,
+            # which is the opposite of what the caller asked for -- they would
+            # get another project's security findings with no signal.
+            return f"Project not found: {project_path}"
+        project_id = context.project_id
 
     types = None
     if item_types:
@@ -1065,7 +1028,7 @@ async def add_catalogue_item(
     """
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
 
-    context = await _get_or_create_project_context(project_path)
+    context = await _get_or_create_project_context(store, project_path)
 
     # Parse extra key-value pairs
     extra_dict = {}
@@ -1255,12 +1218,16 @@ async def remove_catalogue_item(
         ]
         cat.error_patterns = kept
     else:
-        # Custom items - identifier can be "type:title" or just "title"
-        if ":" in identifier:
+        # Custom items, matching get_catalogue_item: item_type may be the
+        # custom type itself, or "custom" with a "type:title" identifier.
+        # Matching on title alone would delete every custom type sharing that
+        # title, and their Qdrant docs with them, since the doc id is derived
+        # from (item_type, title).
+        if item_type == "custom" and ":" in identifier:
             custom_type, custom_title = identifier.split(":", 1)
-            matches = lambda i: i.item_type == custom_type and i.title == custom_title  # noqa: E731
         else:
-            matches = lambda i: i.title == identifier  # noqa: E731
+            custom_type, custom_title = item_type, identifier
+        matches = lambda i: i.item_type == custom_type and i.title == custom_title  # noqa: E731
         kept = [i for i in cat.custom_items if not matches(i)]
         vector_ids = [(i.item_type, i.title) for i in cat.custom_items if matches(i)]
         cat.custom_items = kept
@@ -1737,7 +1704,6 @@ async def add_workflow_step(
 
 @mcp.tool()
 async def detect_communities(
-    resolution: float = 1.0,
     min_community_size: int = 2,
 ) -> str:
     """Detect natural topic clusters in the lesson graph using Louvain algorithm.
@@ -1746,12 +1712,15 @@ async def detect_communities(
     Use save_community_summary to persist LLM-generated summaries for each community.
 
     Args:
-        resolution: Controls granularity. Higher = more, smaller communities. Default 1.0.
         min_community_size: Minimum members to include a community. Default 2.
+
+    Detection always runs at the default resolution: community_id is a hash of
+    the membership, so IDs minted at another resolution are IDs that
+    save_community_summary and search_communities can never resolve.
     """
     store, vector_store, catalogue_vector, graph, telemetry = await _ensure_initialized()
 
-    communities = graph.detect_communities(resolution=resolution)
+    communities = graph.detect_communities()
 
     # Filter by minimum size
     communities = [c for c in communities if c["size"] >= min_community_size]
@@ -1972,8 +1941,12 @@ async def schedule_reminder(
     from .reminder_state import get_status
     from .reminder_state import schedule_reminder as do_schedule
 
-    # If no parameters, just return current status
-    if after_calls is None and after_minutes is None and not note and not message:
+    # If no parameters, just return current status. Every schedulable
+    # parameter has to be listed: reminder_state persists lesson_ids and
+    # workflow_step independently, so leaving them out dropped those calls and
+    # answered them with a status line that read like success.
+    if (after_calls is None and after_minutes is None and not note
+            and not message and not lesson_ids and not workflow_step):
         status = get_status()
         sched = status["scheduled_reminder"]
         if sched["has_content"]:
@@ -2089,8 +2062,6 @@ async def _rem_project(store: LessonStore, project_path: str) -> ProjectContext 
     dir, then cwd. Returns None when no context exists for that path — REM has
     no session number to schedule against and the caller must say so.
     """
-    import os
-
     path = project_path or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     return await store.get_project_context_by_path(path)
 
@@ -2131,7 +2102,13 @@ async def rem_run(
         )
     session_number = project.session_count
 
-    engine = RemEngine(store=store, project_id=project.project_id)
+    # Hand over the live Qdrant client: duplicate_detection cannot open its own
+    # inside this process, and used to report a clean corpus it never scanned.
+    engine = RemEngine(
+        store=store,
+        project_id=project.project_id,
+        vector_store=vector_store,
+    )
 
     ops = [o.strip() for o in operations.split(",") if o.strip()] if operations else None
 
@@ -2165,10 +2142,12 @@ async def rem_run(
 
 @mcp.tool()
 async def rem_report(project_path: str = "") -> str:
-    """View the last REM cycle's findings without running a new one.
+    """Show each REM operation's last run, next due session and finding count.
 
-    Shows schedule state and results from the most recent run of each operation,
-    for THIS project's schedule. Another project's cycles are not reported here.
+    Not the findings themselves: only `{"finding_count": N}` is persisted to
+    `rem_state`, so a past cycle's findings cannot be re-read here. Re-run the
+    operation to see them. Scoped to THIS project's schedule; another
+    project's cycles are not reported here.
 
     Args:
         project_path: Project root whose schedule to report.
@@ -2199,7 +2178,6 @@ async def rem_report(project_path: str = "") -> str:
         if state.get("next_due_session"):
             lines.append(f"  Next due: session {state['next_due_session']}")
         if state.get("last_run_result"):
-            import json
             try:
                 result = json.loads(state["last_run_result"])
                 lines.append(f"  Result: {result}")
@@ -2855,7 +2833,7 @@ async def toggle_enforcement_rule(name: str, enabled: bool) -> str:
 
 @mcp.tool()
 async def adjudicate_apology_gate(
-    flagged_sentence: str, verdict: str, reasoning: str, session_id: str = ""
+    flagged_sentence: str, verdict: str, reasoning: str
 ) -> str:
     """Contest or confirm an apology-gate fire, on the record.
 
@@ -2869,18 +2847,12 @@ async def adjudicate_apology_gate(
         verdict: "not_apology" -- false positive, the gate opens for this
                  turn; or "apology" -- genuine, the gate stays shut until
                  add_lesson is called.
-        session_id: Optional. The session this verdict speaks for; the hook
-                 ignores an adjudication recorded by a different session,
-                 because workflow_state.json is shared across concurrent
-                 sessions and a verdict is not a global fact.
         reasoning: Why. Required, minimum 20 characters. This is written to
                  the append-only audit log next to the flagged sentence,
                  where REM sampling and the human can review it. An
                  attestation is cheap to make and cheap to audit -- that
                  asymmetry is the design.
     """
-    import datetime as _dt
-
     verdict = verdict.strip().lower()
     if verdict not in ("not_apology", "apology"):
         return "verdict must be 'not_apology' or 'apology'."
@@ -2889,6 +2861,27 @@ async def adjudicate_apology_gate(
                 "not you acknowledging your own error (>=20 chars).")
 
     base = Path(os.environ.get("MGCP_DATA_DIR", str(Path.home() / ".mgcp")))
+    state_file = Path(
+        os.environ.get("MGCP_STATE_FILE", str(base / "workflow_state.json"))
+    )
+
+    # The session this verdict speaks for. It is read from the state file, not
+    # accepted as an argument: the hook requires an EXACT match against the
+    # harness session_id, and nothing ever tells the model that value -- while
+    # the gate is armed it cannot even read the transcript to look it up. So the
+    # parameter could only ever be wrong, and every adjudication ever recorded
+    # carried "" or an invented id and silently failed to open the gate.
+    # UserPromptSubmit writes turn_session_id each turn.
+    state = {}
+    try:
+        if state_file.exists():
+            state = json.loads(state_file.read_text() or "{}")
+        if not isinstance(state, dict):
+            state = {}
+    except (OSError, json.JSONDecodeError):
+        state = {}
+    session_id = state.get("turn_session_id") or ""
+
     entry = {
         "event": "adjudication",
         "gate": "apology",
@@ -2896,7 +2889,7 @@ async def adjudicate_apology_gate(
         "session_id": session_id,
         "flagged_sentence": flagged_sentence.strip()[:500],
         "reasoning": reasoning.strip()[:1000],
-        "ts": _dt.datetime.now(_dt.UTC).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
     }
     try:
         base.mkdir(parents=True, exist_ok=True)
@@ -2907,13 +2900,7 @@ async def adjudicate_apology_gate(
 
     # The hook reads this to open (or keep) the gate for the current turn;
     # UserPromptSubmit deletes it on the next user message.
-    state_file = Path(
-        os.environ.get("MGCP_STATE_FILE", str(base / "workflow_state.json"))
-    )
     try:
-        state = {}
-        if state_file.exists():
-            state = json.loads(state_file.read_text() or "{}")
         state["turn_apology_adjudication"] = {
             "verdict": verdict,
             "sentence": entry["flagged_sentence"],
@@ -2971,6 +2958,8 @@ Other commands:
   mgcp-export            Export lessons to JSON
   mgcp-import            Import lessons from JSON
   mgcp-duplicates        Find duplicate lessons
+  mgcp-backup            Back up / restore ~/.mgcp
+  mgcp-migrate           Migrate ChromaDB data to Qdrant
 
 Data is stored in ~/.mgcp/ by default.
 """)

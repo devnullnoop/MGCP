@@ -124,21 +124,41 @@ The LLM reminds itself to not skip steps.
 
 ## Screenshots
 
-### Knowledge Graph Dashboard
-Interactive visualization with usage heatmaps and real-time updates.
-![Dashboard](docs/screenshots/dashboard.png)
+The dashboard was rebuilt in v2.13 as a single instrument panel. The eight pages it replaced each
+answered "what is stored"; none covered enforcement, REM scheduling, the gate audit or the journal,
+all of which shipped after the UI was last touched.
 
-### Lesson Management
-Browse, search, and manage lessons with relationship tracking.
-![Lessons](docs/screenshots/lessons.png)
+> Every image below is rendered from a **synthetic seed store**, never from a real one. A live
+> MGCP store holds query text, absolute paths from unrelated repositories, gate-audit transcripts
+> and the soliloquy journal, so a screenshot of it is a publication of someone's work.
 
-### Project Catalogue
-Architecture notes, security concerns, conventions, decisions.
-![Projects](docs/screenshots/projects.png)
+### Signal — is the memory working?
+Match quality over time, and the split between results matched by relevance and results appended
+by the community bridge. A slot logged with score `0.0` was appended, not matched; keeping the two
+apart is the difference between a meaningful mean and a meaningless one.
+![Signal](docs/screenshots/instrument-signal.png)
 
-### Intent Routing Config (v2.2)
-The routing prompt is data, not code. Edit intents in the UI (or via `add_intent`/`update_intent` MCP tools, or directly in `~/.mgcp/intent_config.json`). REM intent_calibration writes back to this same file when community detection finds misfit clusters.
-![Intents](docs/screenshots/intents.png)
+### Effectiveness — which lessons earn their place?
+Every lesson placed by how often relevance matched it against how well it scored when it did.
+Dot size is total appearances. Lessons never matched have no score, so they are counted and listed
+rather than plotted at a false origin.
+![Effectiveness](docs/screenshots/instrument-effectiveness.png)
+
+### Enforcement — is the gate real or theatre?
+Denials against lessons actually written, which rules fire, which have never fired, and every
+contested fire with the sentence that triggered it beside the reasoning given.
+![Enforcement](docs/screenshots/instrument-enforcement.png)
+
+### REM — what maintenance is actually due?
+Per project, per operation, on that project's own session clock. Overdue and never-run states
+carry a glyph and a word rather than a colour: `good` and `critical` measure a CVD ΔE of 4.1, so
+hue alone cannot carry that distinction.
+![REM](docs/screenshots/instrument-rem.png)
+
+### Graph — what shape is the knowledge?
+Lessons, the categories they hang under, workflows and their steps. Only nodes carrying an edge
+appear, which is itself diagnostic.
+![Graph](docs/screenshots/instrument-graph.png)
 
 ## Quick Start
 
@@ -243,7 +263,7 @@ Each operation runs on its own schedule — staleness scans every 5 sessions, du
 | Tool | Purpose |
 |------|---------|
 | `rem_run` | Run consolidation cycle (staleness, duplicates, communities) |
-| `rem_report` | View last cycle's findings |
+| `rem_report` | Per-operation last run, next due, and finding count |
 | `rem_status` | Show schedule state and what's due |
 
 ### Workflow State (1)
@@ -318,7 +338,7 @@ Anthropic's plugin system distributes prompt-only "skills" as `SKILL.md` files i
 
 The compiled skill is **purely additive**. The intent stays in `intent_config.json` and continues to drive the hook keyword gates and LLM intent classification. Backing lessons stay in the active query pool. Compiling does not remove, hide, or graduate anything. This is the inverse of the Phase 8 *strategy*, which was dropped for degrading reliability — Phase 8 graduated lessons out of `query_lessons`, which hid knowledge from the LLM. The compiler was never the problem and was not removed. v2.3 keeps the source of truth in MGCP and treats the SKILL.md as a downstream export format that can be recompiled at any time.
 
-A new `compile_intent_to_skill` MCP tool, a `POST /api/intent-config/intents/{name}/compile` web endpoint, and a "Compile to skill" button on the `/intents` page all converge on the same `compile_intent_to_skill()` function. The web UI badges compiled skills as **fresh** (green) or **stale** (orange) by comparing the SKILL.md mtime against the backing lessons' `last_refined` timestamps and the `intent_config.json` mtime, so users know when to recompile.
+A new `compile_intent_to_skill` MCP tool, a `POST /api/intent-config/intents/{name}/compile` web endpoint, and a "Compile skill" button in the instrument panel's Curate view all converge on the same `compile_intent_to_skill()` function.
 
 ### v2.3 hook templates: enforcement, not just advice
 
@@ -380,7 +400,127 @@ This is the closest thing MGCP has to a self-improving loop, stated carefully: t
 
 The v2.3 gate's detector needed hardening. Quote-aware tokenization alone was not enough, and three shapes walked straight past the gate until 2026-07-29, when replaying a commit this repo's own gate had just allowed exposed all three. A newline is a command separator, but `shlex` with `whitespace_split` consumes it, so `cd /repo` ⏎ `git commit` tokenized as one command and `git` no longer sat at a command boundary — `&&` was handled, the newline every multi-line block uses was not. An unterminated quote made the detector report "not a git command", so any message containing an apostrophe (`the project's fix`) turned the git gates off. And global flags pushed the subcommand one slot along, so `git -C /path commit` read its subcommand as `-C` and matched nothing.
 
-Detection now runs per line, skips git's global flags, and **fails closed** when a line cannot be tokenized: a command the detector cannot parse is not evidence that the command is safe. Failing closed stays scoped to git — `echo don't` is still allowed — because blocking everything unparseable would stop unrelated work. Both `enforcement.py` and the stdlib-only hook carry the fix, and the shared contract suite now exercises every one of these shapes; it previously tested only single-line, balanced-quote commands, which is why one bug lived in two implementations and both suites stayed green. **Upgrading the package does not redeploy hooks** — run `mgcp-init --force` to pick this up, or an existing install keeps the vulnerable detector.
+Detection now runs per line, skips git's global flags, and **fails closed** when a line cannot be tokenized: a command the detector cannot parse is not evidence that the command is safe. Failing closed stays scoped to git — `echo don't` is still allowed — because blocking everything unparseable would stop unrelated work. The fix had to be written twice, once in `enforcement.py` and once in the stdlib-only hook, and that is precisely why one bug lived in two implementations while both suites stayed green. v2.13 removed the second copy: the hook is now the only detector, because it was always the only one that ran (see below). **Upgrading the package does not redeploy hooks** — run `mgcp-init --force` to pick this up, or an existing install keeps the vulnerable detector.
+
+### v2.13: the copies that never ran, and three channels that were never connected
+
+A whole-module review (10 readers over disjoint slices, every finding then put to two
+refute-by-default verifiers) found that several mechanisms this README describes were
+wired to nothing. Each item below is a *measured* failure, not a tidy-up.
+
+**The apology gate's contest exit had never once opened the gate.** The hook requires the
+adjudication's `session_id` to match the harness session exactly; `adjudicate_apology_gate`
+took that id as an argument, and nothing anywhere tells the model what it is — while the
+gate is armed the model cannot even read the transcript to look it up. The live audit log
+settles it: 93 denials carrying harness UUIDs, 16 adjudications carrying `""` or an
+invented API-style id, intersection empty. The id now comes from `turn_session_id`, which
+UserPromptSubmit records each turn, and the parameter is gone — a value the caller cannot
+know is not a parameter. Point 2 above finally describes what the code does.
+
+**`schedule_reminder` and `update_workflow_state` wrote to a file no hook reads.**
+`reminder_state.py` wrote `~/.mgcp/reminder_state.json`; every hook reads
+`~/.mgcp/workflow_state.json`. Both files were live on disk with divergent counters
+(`current_call_count` 0 vs 3). The self-directed reminder channel had been inert since
+2026-02-10. One file now, not two halves of a channel that never met — and `reset_state`
+merges instead of replacing, since that file also holds the per-turn enforcement keys.
+
+**REM's duplicate scan could not run in-process, and said the corpus was healthy anyway.**
+`find_duplicates` constructed its own `QdrantVectorStore`, but local-mode Qdrant permits
+one client per path, so inside the MCP server it always raised — and the `except` returned
+`[]`, which renders as "Knowledge base looks healthy". A scan that cannot run now reports
+that it could not run. The engine passes its live client down.
+
+**`context_history` grew a row per write, not per session.** 1,315 rows for 212 real
+sessions. A REM operation gated on `len(history) >= 10`, treating the rows as
+"snapshots spanning sessions", so it fired after one or two. Now upserted on
+`(project_id, session_number)`; an idempotent migration collapses existing rows to the
+newest per session. On this repo's own store that took the database from 14.4 MB to
+3.5 MB after `VACUUM`.
+
+**`spider_lessons` returned different lesson sets on different runs.** `get_related`
+returned a `set`, whose iteration order over strings varies between processes, and
+`spider` turned neighbour order into which nodes fell outside the depth limit. Worse, a
+node first reached *too deep* was marked visited, so a later shallower path to it returned
+early and its in-limit children were never traversed. Neighbours are sorted and traversal
+tracks best-depth per node.
+
+**The enforcement evaluator existed twice and ran once.** `server.py` imports the schema
+and `load_config`/`save_config`; every evaluator symbol in `enforcement.py` —
+`evaluate_rules`, `trigger_matches`, `evaluate_precondition`, `check_coupling`,
+`detect_git_subcommand`, `parse_bypass_scopes` — was imported only by its own tests. The
+"shared behavioral contract" was two suites over two implementations, one of which decided
+nothing. The copy is deleted (573 → 260 lines) and its unit tests were retargeted at the
+hook, the code that actually runs. That retargeting exposed a real gap: the live
+`MGCP_BYPASS` parse in UserPromptSubmit had **no** test, because the only tests of that
+logic were testing the dead copy.
+
+**A corrupt rules file was silently replaced.** `load_config` returned `DEFAULT_RULES` for
+a file that existed but did not parse, and every write tool then persisted the
+substitution — overwriting rules the hook was still enforcing out of that same file. A
+missing file still yields defaults (a fresh install has no other truth); an unparseable
+one now raises, and the calling tool reports it.
+
+Also: error detection was blind to stderr (it preferred `stdout` and returned early, so a
+command that failed with an empty stdout read as clean); `mgcp-migrate --dry-run` exited
+non-zero without previewing on any install that already had Qdrant data; and
+`update_workflow_state`'s "new workflow resets step tracking" branch was unreachable
+because the state was assigned before the comparison.
+
+**The suite could not be run to completion, and that is how all of this stayed hidden.**
+v2.12 recorded the test-suite exit hang as fixed. It was not. `pytest
+tests/test_failure_recovery.py` printed `28 passed in 3.1s` and then never exited; a
+`faulthandler` dump put the main thread in `threading._shutdown` with two live aiosqlite
+worker threads. Those threads are non-daemon, so one orphan blocks shutdown forever. The
+v2.12 hook stopped connections sitting in a store's pool, but the leak starts elsewhere:
+when schema init raises on a corrupt database, the connection just opened is neither
+pooled nor closed — and `test_failure_recovery.py` is precisely the file that corrupts
+databases on purpose. Initialisation failure now closes its connection, and the exit hook
+tracks connections rather than only pools. The suite now runs end to end: 866 passed,
+1 xfailed, process exits in 60s.
+
+**Deleted, each after a repo-wide usage sweep:** `examples/claude-hooks/*.py` (1,314 lines
+byte-identical to `src/mgcp/hook_templates/`, no reader, no sync mechanism, already drifted
+once); `llm-memory-mcp-design.md` (516 lines, pre-v2.2, contradicting the shipped system);
+`check_install.py` (288 lines, no caller, a numpy pin contradicting pyproject);
+`data_ops.suggest_tags` (no caller but its own four tests); `tests/test_smoke.py`
+(subsumed — its one unique assertion, the client count, moved into
+`test_init_project.py` and strengthened from 5 spot-checks to all 8 exactly);
+`TestMemoryUsage` in `test_stress.py` (misused `ru_maxrss` twice: it is peak RSS, so the
+delta can only be ≥0, and on macOS it is already bytes so `* 1024` inflated it 1024× —
+the file is `slow`-marked and CI runs `-m "not slow"`, so it failed locally and never ran
+remotely); `TestGapDetection` in `test_trigger_coverage.py` (both tests print a report and
+assert nothing); and two tables in `lessons.db` that duplicated `telemetry.db`'s schema
+and held zero rows after 102 sessions.
+
+**Enforcement was bypassable four ways, and none of them were exotic.** A second pass applied the
+remaining 89 findings. Four of them were ways a gated tool call got through: `git` detection missed
+an absolute path (`/usr/bin/git commit`), a wrapper (`sudo git commit`) and a `VAR=value git commit`
+prefix; a *string* rather than a list in `turn_tools_called` made `in` match substrings, so one
+malformed state write opened every gate; an empty `"command_match": {}` matched every call to the
+tool instead of none; and `MGCP_BYPASS:GIT` did not bypass, because the scope was compared
+case-sensitively against a lowercase `bypass_scope`. Separately `get_ancestors` **span forever on a
+parent cycle** — which `mgcp-import` can create — and `get_statistics` walks every node's ancestry,
+so one cycle hung the call. Row parsers swallowed malformed JSON into empty edges rather than
+reporting corruption. REM reported a clean run for a misspelled operation name *and* wrote a junk
+schedule row that the SessionStart detector then reported as overdue. And one test was deleted for
+triggering an unbounded 415 MB model download to assert something that could not fail.
+
+**Two documents were rebuilt rather than patched.** `docs/mgcp-interception-flow.html` described
+v2.4 — 553 lines and 8 diagrams with no mention of `apology`, `adjudicate`, `gate_audit`,
+`turn_session_id` or `rem_state`, on a document whose whole subject is enforcement, while CLAUDE.md
+sent readers to it for "the full interception map". CLAUDE.md's hook table had become
+changelog-in-a-table (`v2.5: … v2.6: … v2.7: … v2.11: …`), which is exactly why it kept going
+stale: each release appended a clause instead of restating the present. Both now describe current
+behaviour, and `docs/CAPABILITIES.md` lost 30 line-number anchors that had rotted three times in
+one day. Ledger row **E05** — which had asked for "a measurement of whether bridging surfaces
+useful neighbours" and correctly predicted the `0.0` score — moved to VERIFIED.
+
+**One finding was rejected on review.** A reader proposed cutting ~627 of the 682 lines of
+`tests/test_intent_benchmark.py` as "asserting nothing or testing its own constants". Both
+verifiers upheld it; both were wrong. `classify_regex` and `GraphCommunityClassifier` are
+defined in that file because they are the two *baselines* behind the measured claim above —
+"LLM self-routing improved accuracy by ~50% over regex … graph-community was not
+competitive". Deleting them would have orphaned a published result. The file stays.
 
 ### v2.11: a second exit, and a record
 
@@ -393,7 +533,7 @@ The v2.9 gate had one exit: write the lesson. Two problems surfaced when it was 
 v2.11 adds exactly three things, and each one survived adversarial review:
 
 1. **Discovery calls are never gated** (`ToolSearch`, `ListMcpResourcesTool`, `ReadMcpResourceTool`). Stateless, exact-match, and it cannot mutate anything. This is the whole deadlock fix.
-2. **A second exit**: `adjudicate_apology_gate` records a verdict, the flagged text, and ≥20 characters of reasoning to the audit log. `not_apology` opens the gate for *that session only*; `apology` keeps it shut until the lesson is written — attesting "genuine" is never a way around capture.
+2. **A second exit**: `adjudicate_apology_gate` records a verdict, the flagged text, and ≥20 characters of reasoning to the audit log. `not_apology` opens the gate for the rest of *that turn, in that session only* — the hook matches the session id exactly and UserPromptSubmit clears the verdict on the next prompt; `apology` keeps it shut until the lesson is written — attesting "genuine" is never a way around capture.
 3. **An append-only audit log** at `~/.mgcp/gate_audit.jsonl`: every denial (gate *and* data rules), every compliance with its lesson id, every adjudication with its reasoning, every human bypass. REM's `gate_audit_review` summarises it and surfaces contested verdicts; SessionStart warns on a contest-rate spike.
 
 **What was built and deliberately cut.** A widened acknowledgment tier, a quote-and-code stripper, a first-person sentence window, a per-turn denial counter, and an advisory-degrade valve were all implemented and then removed after red-teaming. They produced six confirmed defects between them — the valve short-circuited *every other enforcement rule*, a malformed counter crashed the hook into a silent unaudited bypass, and the quote-stripper's apostrophe handling stopped `you're right` from firing at all. The reduction is the result, not a compromise: each mechanism added to handle a failure mode generated two more.
@@ -407,7 +547,7 @@ The control principle, transferable beyond MGCP: you don't need a perfect classi
 | Hook | Event | Type | Purpose |
 |------|-------|------|---------|
 | `session-init.py` | SessionStart | advisory | Inject the session-start bootstrap checklist (read_soliloquy / get_project_context / query_lessons) and workflow execution discipline. v2.5: no longer duplicates the dispatcher's routing/actions block. v2.6: detects stale `.py` hook references in settings.json. v2.7: detects overdue REM operations from `rem_state` and recommends `rem_run`. |
-| `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Hard keyword gates (data-driven from `intent_config.json` — both git and session_end fire from one loop), full classifier+actions re-injection every message, scheduled reminders, workflow state, per-turn enforcement state reset |
+| `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Hard keyword gates (data-driven from `intent_config.json` — both git and session_end fire from one loop), terse routing re-injection every message, `turn_session_id` and `MGCP_BYPASS[:scope]` capture, scheduled reminders, workflow state, per-turn enforcement state reset |
 | `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Generic evaluator reading `~/.mgcp/enforcement_rules.json`. Applies every enabled rule; denies when preconditions unsatisfied. Scoped bypass via `MGCP_BYPASS:<scope>` or bare `MGCP_BYPASS` |
 | `post-tool-dispatcher.py` | PostToolUse | advisory | Routes by tool: Edit/Write triggers knowledge-capture; Bash triggers error detection; appends every tool name to `turn_tools_called` for PreToolUse rules |
 | `mgcp-precompact.py` | PreCompact | advisory | Save context (and write_soliloquy) before compression |
@@ -426,7 +566,7 @@ The dispatcher falls back to a minimal hard-coded intent set if the JSON file is
 | `mgcp-import` | Import lessons from JSON |
 | `mgcp-duplicates` | Find semantically similar lessons |
 | `mgcp-backup` | Backup/restore all MGCP data |
-| `mgcp-migrate` | Migrate from ChromaDB to Qdrant (legacy installs) |
+| `mgcp-migrate` | Rebuild the Qdrant index from `lessons.db` |
 
 ## API & Dashboard
 

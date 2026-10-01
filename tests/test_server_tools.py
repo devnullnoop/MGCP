@@ -1,4 +1,9 @@
-"""Tests for all 35 MCP server tools in server.py.
+"""Tests for 35 of the 50 MCP server tools in server.py.
+
+The 35 are the lesson, project, catalogue, workflow, community, REM and
+reminder tools. The other 15 live in their own files: the 6 intent-config and
+6 enforcement-rule tools, the 2 soliloquy tools, skill compilation and gate
+adjudication.
 
 Tests the tool functions directly by injecting temp stores into server globals.
 Embeddings are mocked to avoid model download dependency.
@@ -214,6 +219,101 @@ class TestQueryLessons:
         assert "Found" in result
 
 
+class TestCommunityBridge:
+    """The bridge appends lessons the direct search missed.
+
+    It used to rank candidates by usage_count and then call record_usage on
+    whatever it appended -- ranking by the number it wrote. Nine months of
+    telemetry showed the loop had closed: 31.8% of retrieved slots arrived
+    through the bridge, 66% of those went to three lessons, and ~30 lessons had
+    never surfaced once, because a lesson with zero usage can never out-rank
+    three siblings that have some.
+
+    `limit=1` is the lever that forces a bridge: only the top match becomes a
+    direct result, so its community siblings are left as bridge candidates.
+    """
+
+    @staticmethod
+    async def _seed_community() -> bool:
+        """Four linked lessons plus a summary. False if no community formed."""
+        import re as _re
+
+        for i in range(4):
+            await add_lesson(
+                id=f"hydro-{i}",
+                trigger=f"greenhouse hydroponic nutrient dosing step {i}",
+                action=f"Dose the nutrient reservoir for stage {i}",
+            )
+        for i in range(3):
+            await link_lessons(f"hydro-{i}", f"hydro-{i+1}")
+
+        detected = await detect_communities(min_community_size=2)
+        ids = _re.findall(r"`([0-9a-f]{12})`", detected)
+        if not ids:
+            return False
+        await save_community_summary(
+            community_id=ids[0],
+            title="Greenhouse Hydroponics",
+            summary="Greenhouse hydroponic nutrient dosing and irrigation practice",
+        )
+        return True
+
+    @pytest.mark.asyncio
+    async def test_bridged_lessons_do_not_gain_usage_count(self, server_stores):
+        import mgcp.server as srv
+
+        if not await self._seed_community():
+            pytest.skip("Louvain formed no community on this graph")
+        store, _vs, _cv, _g, _t = await srv._ensure_initialized()
+
+        ids = [f"hydro-{i}" for i in range(4)]
+        before = {i: (await store.get_lesson(i)).usage_count for i in ids}
+
+        result = await query_lessons("greenhouse hydroponic nutrient dosing", limit=1)
+        if "via community" not in result:
+            pytest.skip("no lesson was bridged for this query")
+
+        after = {i: (await store.get_lesson(i)).usage_count for i in ids}
+        bridged = [i for i in ids if i in result.split("Also relevant")[-1]]
+        assert bridged, "expected at least one bridged lesson id in the response"
+        for i in bridged:
+            assert after[i] == before[i], (
+                f"{i} was appended by the bridge and gained usage_count "
+                f"({before[i]} -> {after[i]}). The bridge ranks by that number, "
+                "so writing it is the ratchet that starved ~30 lessons."
+            )
+
+    @pytest.mark.asyncio
+    async def test_bridged_slots_carry_a_real_score(self, server_stores):
+        """Bridged slots were logged as exactly 0.0, which made 31.8% of all
+        telemetry unscored and every per-lesson mean score meaningless."""
+        import json
+
+        import mgcp.server as srv
+
+        if not await self._seed_community():
+            pytest.skip("Louvain formed no community on this graph")
+        _s, _vs, _cv, _g, tel = await srv._ensure_initialized()
+
+        result = await query_lessons("greenhouse hydroponic nutrient dosing", limit=1)
+        if "via community" not in result:
+            pytest.skip("no lesson was bridged for this query")
+
+        conn = await tel._get_conn()
+        cur = await conn.execute(
+            "SELECT payload FROM events WHERE event_type='retrieve' "
+            "ORDER BY timestamp DESC LIMIT 1"
+        )
+        row = await cur.fetchone()
+        payload = json.loads(row[0])
+        scores = payload.get("scores") or []
+        assert len(scores) > 1, "expected a direct hit plus at least one bridged slot"
+        assert all(sc > 0 for sc in scores), f"a slot was logged unscored: {scores}"
+        assert "relevance" in result.split("Also relevant")[-1], (
+            "a bridged lesson should show its relevance now that it has one"
+        )
+
+
 class TestGetLesson:
     @pytest.mark.asyncio
     async def test_exists(self, seeded_lesson):
@@ -381,6 +481,28 @@ class TestRefineLesson:
             refinement="Can't refine what doesn't exist",
         )
         assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_first_refinement_is_versioned_without_a_prior_rationale(
+        self, server_stores
+    ):
+        """The [vN] prefix is the only in-band record of which version said what.
+
+        A lesson created with no rationale used to have the refinement stored as
+        bare prose, so its v2 sentence read afterwards like original v1 text
+        while the next refinement arrived labelled [v3].
+        """
+        await add_lesson(
+            id="no-rationale",
+            trigger="refining a lesson that has no rationale",
+            action="Refine it anyway",
+        )
+        await refine_lesson(
+            lesson_id="no-rationale",
+            refinement="Mind the empty-rationale case",
+        )
+        lesson = await get_lesson("no-rationale")
+        assert "[v2] Mind the empty-rationale case" in lesson
 
     @pytest.mark.asyncio
     async def test_with_new_action(self, seeded_lesson):
@@ -623,6 +745,31 @@ class TestAddProjectTodo:
             todo="First todo",
         )
         assert "Todo added" in result
+
+    @pytest.mark.asyncio
+    async def test_created_project_still_gets_its_first_session_counted(
+        self, server_stores
+    ):
+        """session_count is the clock REM's cadence is scheduled against.
+
+        A project first seen through add_project_todo used to be stamped with
+        the current session id at count 0, so get_project_context saw no new
+        session and that session was never counted at all.
+        """
+        from mgcp.server import add_project_todo, get_project_context
+
+        await add_project_todo(project_path="/tmp/clock-project", todo="First todo")
+        ctx = await server_stores["store"].get_project_context_by_path(
+            "/tmp/clock-project"
+        )
+        assert ctx.session_count == 0
+        assert ctx.last_session_id is None
+
+        await get_project_context("/tmp/clock-project")
+        ctx = await server_stores["store"].get_project_context_by_path(
+            "/tmp/clock-project"
+        )
+        assert ctx.session_count == 1
 
 
 class TestUpdateProjectTodo:
@@ -883,6 +1030,43 @@ class TestRemoveCatalogueItem:
         )
         assert "Removed" in result
 
+    @pytest.mark.asyncio
+    async def test_remove_custom_item_spares_other_types_with_the_same_title(
+        self, seeded_project
+    ):
+        """Custom removal is scoped by type, like get_catalogue_item.
+
+        Matching on title alone removed every custom type sharing that title,
+        and their Qdrant docs with them, since the doc id is derived from
+        (item_type, title).
+        """
+        for item_type in ("gotcha", "tip"):
+            await add_catalogue_item(
+                project_path="/tmp/test-project",
+                item_type=item_type,
+                title="Cache warmup",
+                content=f"{item_type} body",
+            )
+        result = await remove_catalogue_item(
+            project_path="/tmp/test-project",
+            item_type="gotcha",
+            identifier="Cache warmup",
+        )
+        assert "Removed" in result
+
+        gone = await get_catalogue_item(
+            project_path="/tmp/test-project",
+            item_type="gotcha",
+            identifier="Cache warmup",
+        )
+        assert "not found" in gone.lower()
+        survivor = await get_catalogue_item(
+            project_path="/tmp/test-project",
+            item_type="tip",
+            identifier="Cache warmup",
+        )
+        assert json.loads(survivor)["content"] == "tip body"
+
 
 class TestGetCatalogueItem:
     @pytest.mark.asyncio
@@ -980,6 +1164,25 @@ class TestSearchCatalogue:
     async def test_no_results(self, server_stores):
         result = await search_catalogue(query="quantum physics")
         assert "No matching" in result
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_project_path_does_not_widen_the_search(
+        self, seeded_project
+    ):
+        """A path with no saved context used to drop the filter and search
+        every project, so the caller got another project's security findings
+        back under a docstring promising the opposite."""
+        await add_catalogue_item(
+            project_path="/tmp/test-project",
+            item_type="security",
+            title="Hardcoded Credential",
+            content="API key committed to the repo",
+        )
+        result = await search_catalogue(
+            query="hardcoded credential",
+            project_path="/tmp/test-project-typo",
+        )
+        assert result == "Project not found: /tmp/test-project-typo"
 
 
 # ============================================================================
@@ -1205,18 +1408,23 @@ class TestSaveCommunityAndSearch:
 
         if "No communities" not in detect_result:
             # Extract community ID from result (it's in backticks)
+            # community_id is a bare 12-char sha256 prefix (graph.py:234). The
+            # old pattern here was `comm_\w+`, which cannot match it -- so
+            # comm_ids was always empty, the `if` never entered, and this test
+            # asserted nothing from the day it was written.
             import re
-            comm_ids = re.findall(r"`(comm_\w+)`", detect_result)
-            if comm_ids:
-                save_result = await save_community_summary(
-                    community_id=comm_ids[0],
-                    title="Safety Practices",
-                    summary="Lessons about safety and security practices",
-                )
-                assert "Saved" in save_result or "Updated" in save_result
+            comm_ids = re.findall(r"`([0-9a-f]{12})`", detect_result)
+            assert comm_ids, f"no community id parsed from:\n{detect_result}"
 
-                search_result = await search_communities("safety")
-                assert "Safety" in search_result or "No community" in search_result
+            save_result = await save_community_summary(
+                community_id=comm_ids[0],
+                title="Safety Practices",
+                summary="Lessons about safety and security practices",
+            )
+            assert "Saved" in save_result or "Updated" in save_result
+
+            search_result = await search_communities("safety")
+            assert "Safety Practices" in search_result
 
 
 # ============================================================================
@@ -1257,6 +1465,29 @@ class TestScheduleReminder:
         )
         assert "scheduled" in result.lower()
         assert "5 minutes" in result
+
+
+    @pytest.mark.asyncio
+    async def test_lesson_ids_alone_is_scheduled_not_reported(
+        self, server_stores, monkeypatch, tmp_path
+    ):
+        """reminder_state persists lesson_ids and workflow_step independently.
+
+        The status branch tested only four of the six parameters, so a call
+        carrying just lessons or just a step was dropped and answered with a
+        status line that read like success.
+        """
+        monkeypatch.setattr("mgcp.reminder_state.STATE_FILE", tmp_path / "state.json")
+        monkeypatch.setattr("mgcp.reminder_state.STATE_DIR", tmp_path)
+        from mgcp.reminder_state import load_state
+
+        result = await schedule_reminder(lesson_ids="root-cause-analysis")
+        assert "scheduled" in result.lower()
+        assert load_state()["lesson_ids"] == ["root-cause-analysis"]
+
+        result = await schedule_reminder(workflow_step="bug-fix/investigate")
+        assert "scheduled" in result.lower()
+        assert load_state()["workflow_step"] == "bug-fix/investigate"
 
 
 class TestResetReminderState:

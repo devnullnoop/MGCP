@@ -87,3 +87,52 @@ def test_existing_state_is_merged_not_clobbered(sandbox):
     assert state["turn_tools_called"] == ["Bash"]
     assert state["current_call_count"] == 7
     assert state["turn_apology_adjudication"]["verdict"] == "not_apology"
+
+
+class TestSessionScopingActuallyConnects:
+    """The contest exit was unreachable: the hook demands an exact session_id
+    match and the tool took it as an argument nothing ever supplied, so every
+    recorded adjudication carried "" or an invented id. The id now comes from
+    turn_session_id, which UserPromptSubmit writes."""
+
+    def test_tool_adopts_the_session_id_written_by_the_prompt_hook(self, sandbox):
+        state_file = sandbox / "workflow_state.json"
+        state_file.write_text(json.dumps({"turn_session_id": "9517ac4b-real-harness-id"}))
+
+        _call(
+            flagged_sentence="I said the word sorry while quoting a log line.",
+            verdict="not_apology",
+            reasoning="Quoted a log line containing the trigger word, not an apology.",
+        )
+
+        state = json.loads(state_file.read_text())
+        assert state["turn_apology_adjudication"]["session_id"] == "9517ac4b-real-harness-id"
+        assert _audit(sandbox)[-1]["session_id"] == "9517ac4b-real-harness-id"
+
+    def test_no_recorded_session_id_yields_empty_not_a_crash(self, sandbox):
+        # Fresh state file with no turn_session_id: the tool must still record.
+        _call(
+            flagged_sentence="apologies appears inside this quoted string.",
+            verdict="not_apology",
+            reasoning="The trigger word sits inside quoted material, not my own voice.",
+        )
+        assert _audit(sandbox)[-1]["session_id"] == ""
+
+    def test_session_id_is_not_a_parameter_the_caller_can_spoof(self):
+        import inspect
+
+        params = inspect.signature(adjudicate_apology_gate).parameters
+        assert "session_id" not in params, (
+            "session_id must not be caller-supplied: the model cannot know the "
+            "harness id, so the parameter could only ever be wrong"
+        )
+        assert set(params) == {"flagged_sentence", "verdict", "reasoning"}
+
+    def test_corrupt_state_file_does_not_block_adjudication(self, sandbox):
+        (sandbox / "workflow_state.json").write_text("{not json")
+        result = _call(
+            flagged_sentence="sorry shows up in a variable name here.",
+            verdict="not_apology",
+            reasoning="Identifier text, not an acknowledgement of my own error.",
+        )
+        assert "false positive" in result.lower()

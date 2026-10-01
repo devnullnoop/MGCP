@@ -4,11 +4,12 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -140,13 +141,20 @@ REST API for managing lessons, projects, and viewing telemetry.
 
 Real-time events at `/ws/events`
 
-### UI Pages
+### Analytics
 
-- `/` - Dashboard
-- `/lessons` - Lesson browser
-- `/intents` - Intent config and compiled-skill status
-- `/projects` - Project contexts
-- `/docs` - This API documentation
+Read-only views over the three stores, used by the instrument panel:
+`/api/signal`, `/api/retrieval/timeseries`, `/api/retrieval/misses`,
+`/api/effectiveness`, `/api/gate-audit`, `/api/enforcement/rules`,
+`/api/rem/state`, `/api/soliloquies`
+
+### UI
+
+The instrument panel is one document served at `/`, routed client-side on the
+hash (`#/signal`, `#/enforcement`, ...). Unknown top-level paths fall through to
+it so old bookmarks still land somewhere, which is why no page path is listed
+here as an endpoint — none of them resolve to a route of their own.
+`/docs` is this API documentation.
 """,
     version="2.1.0",
     lifespan=lifespan,
@@ -827,66 +835,34 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 @app.get("/")
-async def serve_dashboard():
-    """Serve the main dashboard."""
-    dashboard_path = STATIC_DIR / "dashboard.html"
-    if dashboard_path.exists():
-        return FileResponse(dashboard_path)
-    return HTMLResponse("<!DOCTYPE html><html><body><h1>Dashboard not found.</h1></body></html>")
+async def serve_app():
+    """Serve the instrument panel.
+
+    One app, seven views, client-side routed on the hash. It replaced eight
+    separate pages that each answered "what is stored" and none of which
+    covered enforcement, REM, the gate audit or the journal.
+    """
+    index = STATIC_DIR / "app" / "index.html"
+    if index.exists():
+        return FileResponse(index)
+    return HTMLResponse(
+        "<!DOCTYPE html><html><body><h1>UI not installed.</h1>"
+        "<p>Expected <code>static/app/index.html</code>.</p></body></html>",
+        status_code=500,
+    )
 
 
-@app.get("/visualizer")
-async def serve_visualizer():
-    """Serve the memory visualizer."""
-    viz_path = STATIC_DIR / "memory-visualizer.html"
-    if viz_path.exists():
-        return FileResponse(viz_path)
-    return HTMLResponse("<!DOCTYPE html><html><body><h1>Visualizer not found.</h1></body></html>")
+@app.get("/{view}", include_in_schema=False)
+async def serve_app_view(view: str):
+    """Deep links land on the same document; the hash router picks the view.
 
-
-@app.get("/session")
-async def serve_session_detail():
-    """Serve the session detail page."""
-    session_path = STATIC_DIR / "session-detail.html"
-    if session_path.exists():
-        return FileResponse(session_path)
-    return HTMLResponse("<!DOCTYPE html><html><body><h1>Session detail page not found.</h1></body></html>")
-
-
-@app.get("/query-tree")
-async def serve_query_tree():
-    """Serve the query decision tree visualization."""
-    tree_path = STATIC_DIR / "query-tree.html"
-    if tree_path.exists():
-        return FileResponse(tree_path)
-    return HTMLResponse("<!DOCTYPE html><html><body><h1>Query tree visualization not found.</h1></body></html>")
-
-
-@app.get("/projects")
-async def serve_projects():
-    """Serve the project contexts management page."""
-    projects_path = STATIC_DIR / "projects.html"
-    if projects_path.exists():
-        return FileResponse(projects_path)
-    return HTMLResponse("<!DOCTYPE html><html><body><h1>Projects page not found.</h1></body></html>")
-
-
-@app.get("/lessons")
-async def serve_lessons():
-    """Serve the lessons management page."""
-    lessons_path = STATIC_DIR / "lessons.html"
-    if lessons_path.exists():
-        return FileResponse(lessons_path)
-    return HTMLResponse("<!DOCTYPE html><html><body><h1>Lessons page not found.</h1></body></html>")
-
-
-@app.get("/intents")
-async def serve_intents():
-    """Serve the intent routing config management page."""
-    intents_path = STATIC_DIR / "intents.html"
-    if intents_path.exists():
-        return FileResponse(intents_path)
-    return HTMLResponse("<!DOCTYPE html><html><body><h1>Intents page not found.</h1></body></html>")
+    Anything that is not a known view falls through to the app rather than a
+    404, because the old page paths (/lessons, /projects, /intents...) are in
+    people's history and bookmarks.
+    """
+    if view.startswith("api") or view in {"docs", "openapi.json", "redoc", "static", "ws"}:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await serve_app()
 
 
 # ============================================================================
@@ -1044,6 +1020,374 @@ async def intent_skill_status_api(name: str, scope: str = "user") -> dict[str, A
         "skill_path": str(path),
         "stale": stale,
     }
+
+
+# ============================================================================
+# Analytics — the instrument panel's data
+#
+# These read the three stores the dashboard needs together: telemetry.db for
+# retrieval behaviour, lessons.db for the corpus and REM schedule, and
+# gate_audit.jsonl for enforcement. They live here rather than in a module of
+# their own because the dashboard is their only consumer.
+#
+# The load-bearing distinction throughout: a retrieved slot logged with score
+# 0.0 was appended by the community bridge, not matched by relevance. Averaging
+# the two together is what made per-lesson mean scores meaningless before
+# v2.13, so every figure below keeps them apart.
+# ============================================================================
+
+BRIDGED_SENTINEL = 0.0
+DEFAULT_MISS_THRESHOLD = 0.45
+
+
+def _gate_audit_path() -> Path:
+    base = os.environ.get("MGCP_DATA_DIR") or str(Path.home() / ".mgcp")
+    return Path(base) / "gate_audit.jsonl"
+
+
+def _read_gate_audit() -> list[dict[str, Any]]:
+    """Every audit line we can parse. A corrupt line is skipped, not fatal."""
+    path = _gate_audit_path()
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(entry, dict):
+            rows.append(entry)
+    return rows
+
+
+async def _retrieval_pairs() -> list[dict[str, Any]]:
+    """Join every `retrieve` event back to the `query` that caused it.
+
+    The link is `payload.query_id`, so this is a JSON join. Retrieves whose
+    query row is missing are dropped rather than reported with an empty query.
+    """
+    conn = await telemetry._get_conn()
+    cursor = await conn.execute(
+        "SELECT id, timestamp, json_extract(payload,'$.query_text') AS q "
+        "FROM events WHERE event_type='query'"
+    )
+    queries = {r[0]: {"ts": r[1], "text": r[2] or ""} for r in await cursor.fetchall()}
+
+    cursor = await conn.execute(
+        "SELECT json_extract(payload,'$.query_id') AS qid, payload "
+        "FROM events WHERE event_type='retrieve' ORDER BY timestamp"
+    )
+    pairs = []
+    for qid, payload in await cursor.fetchall():
+        q = queries.get(qid)
+        if not q:
+            continue
+        try:
+            body = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        ids = body.get("lesson_ids") or []
+        scores = body.get("scores") or []
+        matched = [s for s in scores if s > BRIDGED_SENTINEL]
+        pairs.append({
+            "ts": q["ts"],
+            "query": q["text"],
+            "lesson_ids": ids,
+            "scores": scores,
+            "matched": len(matched),
+            "bridged": sum(1 for s in scores if s == BRIDGED_SENTINEL),
+            "top": max(matched) if matched else None,
+            "latency_ms": body.get("latency_ms"),
+        })
+    return pairs
+
+
+@app.get("/api/signal")
+async def get_signal(miss_threshold: float = DEFAULT_MISS_THRESHOLD) -> dict[str, Any]:
+    """Headline vitals: is the memory working, and where is it not."""
+    await ensure_initialized()
+    pairs = await _retrieval_pairs()
+    scored = [p for p in pairs if p["top"] is not None]
+    tops = sorted(p["top"] for p in scored)
+
+    lessons = await store.get_all_lessons()
+    # Derived from the retrieve events themselves, not from lesson_stats: the
+    # two disagree on 24 lessons, and "did a query ever return this" is a fact
+    # about the events, not about a counter that another writer also touches.
+    ever_returned = {lid for p in pairs for lid in p["lesson_ids"]}
+    dead = [le.id for le in lessons if le.id not in ever_returned]
+
+    slots_matched = sum(p["matched"] for p in pairs)
+    slots_bridged = sum(p["bridged"] for p in pairs)
+    slots = slots_matched + slots_bridged
+
+    return {
+        "corpus": {
+            "lessons": len(lessons),
+            "never_retrieved": len(dead),
+            "never_retrieved_ids": dead[:60],
+            "workflows": len(await store.get_all_workflows()),
+        },
+        "retrieval": {
+            "queries": len(pairs),
+            "slots": slots,
+            "slots_matched": slots_matched,
+            "slots_bridged": slots_bridged,
+            "bridged_share": (slots_bridged / slots) if slots else 0.0,
+            "top1_median": tops[len(tops) // 2] if tops else None,
+            "top1_mean": (sum(tops) / len(tops)) if tops else None,
+            "misses": sum(1 for p in scored if p["top"] < miss_threshold),
+            "miss_threshold": miss_threshold,
+            "zero_result_queries": sum(1 for p in pairs if not p["lesson_ids"]),
+        },
+    }
+
+
+@app.get("/api/retrieval/timeseries")
+async def get_retrieval_timeseries(bucket: str = "month") -> list[dict[str, Any]]:
+    """Matched vs bridged volume and match quality per period.
+
+    Two measures of different scale never share an axis, so the caller gets
+    them as separate series to plot separately.
+    """
+    await ensure_initialized()
+    width = 7 if bucket == "month" else 10  # YYYY-MM or YYYY-MM-DD
+    buckets: dict[str, dict[str, Any]] = {}
+    for p in await _retrieval_pairs():
+        key = (p["ts"] or "")[:width]
+        if not key:
+            continue
+        b = buckets.setdefault(key, {"period": key, "queries": 0, "matched": 0,
+                                     "bridged": 0, "_tops": [], "misses": 0})
+        b["queries"] += 1
+        b["matched"] += p["matched"]
+        b["bridged"] += p["bridged"]
+        if p["top"] is not None:
+            b["_tops"].append(p["top"])
+            if p["top"] < DEFAULT_MISS_THRESHOLD:
+                b["misses"] += 1
+    out = []
+    for key in sorted(buckets):
+        b = buckets[key]
+        tops = b.pop("_tops")
+        b["top1_mean"] = (sum(tops) / len(tops)) if tops else None
+        b["scored_queries"] = len(tops)
+        out.append(b)
+    return out
+
+
+@app.get("/api/retrieval/misses")
+async def get_retrieval_misses(
+    threshold: float = DEFAULT_MISS_THRESHOLD, limit: int = 100
+) -> list[dict[str, Any]]:
+    """Queries whose best MATCHED result scored below the threshold.
+
+    The threshold is a choice, not a fact: BGE cosine scores cluster high, so
+    the caller sets it and the UI labels it as chosen.
+    """
+    await ensure_initialized()
+    misses = [
+        {
+            "ts": p["ts"],
+            "query": p["query"],
+            "top": p["top"],
+            "returned": p["lesson_ids"][:5],
+            "bridged": p["bridged"],
+        }
+        for p in await _retrieval_pairs()
+        if p["top"] is not None and p["top"] < threshold
+    ]
+    misses.sort(key=lambda m: m["top"])
+    return misses[:limit]
+
+
+# NOT /api/lessons/effectiveness: `/api/lessons/{lesson_id}` is registered
+# earlier and would capture it, returning null for a lesson called
+# "effectiveness" instead of 404ing or matching here.
+@app.get("/api/effectiveness")
+async def get_lesson_effectiveness() -> list[dict[str, Any]]:
+    """Per lesson: how often it was matched, how well, and how often appended.
+
+    `mean_matched_score` deliberately excludes bridged slots. Including them is
+    what made `mgcp-save-on-shutdown` read as 0.023 average relevance when it
+    scored 0.510 every time it was genuinely matched.
+    """
+    await ensure_initialized()
+    matched: dict[str, list[float]] = {}
+    bridged: dict[str, int] = {}
+    for p in await _retrieval_pairs():
+        for i, score in enumerate(p["scores"]):
+            if i >= len(p["lesson_ids"]):
+                break
+            lid = p["lesson_ids"][i]
+            if score == BRIDGED_SENTINEL:
+                bridged[lid] = bridged.get(lid, 0) + 1
+            else:
+                matched.setdefault(lid, []).append(score)
+
+    out = []
+    for lesson in await store.get_all_lessons():
+        scores = matched.get(lesson.id, [])
+        out.append({
+            "id": lesson.id,
+            "tags": lesson.tags,
+            "trigger": lesson.trigger[:140],
+            "usage_count": lesson.usage_count,
+            "matched": len(scores),
+            "bridged": bridged.get(lesson.id, 0),
+            "mean_matched_score": (sum(scores) / len(scores)) if scores else None,
+            "best_score": max(scores) if scores else None,
+            "created_at": lesson.created_at.isoformat() if lesson.created_at else None,
+            "last_refined": lesson.last_refined.isoformat() if lesson.last_refined else None,
+        })
+    out.sort(key=lambda r: -(r["matched"] + r["bridged"]))
+    return out
+
+
+@app.get("/api/gate-audit")
+async def get_gate_audit(limit: int = 400) -> dict[str, Any]:
+    """Enforcement activity: what fired, what it cost, what was contested."""
+    await ensure_initialized()
+    rows = _read_gate_audit()
+    denials = [r for r in rows if r.get("event") == "deny"]
+    complies = [r for r in rows if r.get("event") == "comply"]
+    adjudications = [r for r in rows if r.get("event") == "adjudication"]
+
+    rule_fires: dict[str, int] = {}
+    for r in denials:
+        for name in (r.get("rules") or []):
+            rule_fires[name] = rule_fires.get(name, 0) + 1
+
+    per_day: dict[str, dict[str, int]] = {}
+    for r in rows:
+        day = (r.get("ts") or "")[:10]
+        if not day:
+            continue
+        slot = per_day.setdefault(day, {"day": day, "deny": 0, "comply": 0,
+                                        "adjudication": 0, "human_bypass": 0})
+        event = r.get("event")
+        if event in slot:
+            slot[event] += 1
+
+    tools: dict[str, int] = {}
+    for r in denials:
+        tools[r.get("tool_denied") or "unknown"] = tools.get(r.get("tool_denied") or "unknown", 0) + 1
+
+    return {
+        "totals": {
+            "entries": len(rows),
+            "deny": len(denials),
+            "comply": len(complies),
+            "adjudication": len(adjudications),
+            "human_bypass": sum(1 for r in rows if r.get("event") == "human_bypass"),
+            "apology_denials": sum(1 for r in denials if r.get("gate") == "apology"),
+            "rule_denials": sum(1 for r in denials if r.get("gate") == "rules"),
+            "sessions_affected": len({r.get("session_id") for r in denials if r.get("session_id")}),
+        },
+        "rule_fires": [{"rule": k, "fires": v}
+                       for k, v in sorted(rule_fires.items(), key=lambda kv: -kv[1])],
+        "tools_denied": [{"tool": k, "denials": v}
+                         for k, v in sorted(tools.items(), key=lambda kv: -kv[1])],
+        "per_day": [per_day[d] for d in sorted(per_day)],
+        "adjudications": [
+            {"ts": r.get("ts"), "verdict": r.get("verdict"),
+             "flagged": (r.get("flagged_sentence") or "")[:400],
+             "reasoning": (r.get("reasoning") or "")[:600]}
+            for r in adjudications[-limit:]
+        ],
+    }
+
+
+@app.get("/api/enforcement/rules")
+async def get_enforcement_rules_api() -> list[dict[str, Any]]:
+    """Live rules, each with how often it has actually denied something.
+
+    A rule that has never fired is either dead or mis-triggered, and the audit
+    log alone cannot tell you which — so the count is shown, not judged.
+    """
+    await ensure_initialized()
+    from .enforcement import load_config
+
+    fires: dict[str, int] = {}
+    for r in _read_gate_audit():
+        if r.get("event") != "deny":
+            continue
+        for name in (r.get("rules") or []):
+            fires[name] = fires.get(name, 0) + 1
+    try:
+        config = load_config()
+    except (json.JSONDecodeError, ValueError) as exc:
+        return [{"error": f"enforcement_rules.json does not parse: {exc}"}]
+
+    return [
+        {
+            "name": rule.name,
+            "enabled": rule.enabled,
+            "bypass_scope": rule.bypass_scope,
+            "deny_reason": rule.deny_reason,
+            "trigger": rule.trigger.model_dump(),
+            "preconditions": [p.model_dump() for p in rule.preconditions],
+            "fires": fires.get(rule.name, 0),
+        }
+        for rule in config.rules
+    ]
+
+
+@app.get("/api/rem/state")
+async def get_rem_state_api() -> list[dict[str, Any]]:
+    """Every project's REM schedule, with what is overdue.
+
+    The cadence is per project; the corpus it maintains is global. Both halves
+    matter, so the project's own session_count is reported beside each row.
+    """
+    await ensure_initialized()
+    from .rem_config import DEFAULT_SCHEDULES
+
+    out = []
+    for project in await store.get_all_project_contexts():
+        states = {s["operation"]: s for s in await store.get_rem_state(project.project_id)}
+        for operation, schedule in DEFAULT_SCHEDULES.items():
+            state = states.get(operation)
+            next_due = state.get("next_due_session") if state else None
+            out.append({
+                "project_id": project.project_id,
+                "project": project.project_name,
+                "session_count": project.session_count,
+                "operation": operation,
+                "strategy": getattr(schedule, "strategy", None) or str(schedule),
+                "last_run_session": (state or {}).get("last_run_session"),
+                "next_due_session": next_due,
+                "overdue": bool(next_due and project.session_count >= next_due),
+                "never_run": state is None,
+            })
+    return out
+
+
+@app.get("/api/soliloquies")
+async def get_soliloquies_api(limit: int = 40) -> list[dict[str, Any]]:
+    """The journal, newest first. Currently invisible in every other surface."""
+    await ensure_initialized()
+    # read_soliloquies returns (entry, project_id) pairs: the journal is stored
+    # globally but read project-aware, so the caller can mark which entries came
+    # from somewhere else. Entries written before tagging existed have no id.
+    pairs = await store.read_soliloquies(limit=limit)
+    projects = {p.project_id: p.project_name for p in await store.get_all_project_contexts()}
+    return [
+        {
+            "id": entry.id,
+            "timestamp": entry.timestamp.isoformat() if entry.timestamp else None,
+            "session_number": entry.session_number,
+            "project_id": project_id,
+            "project": projects.get(project_id) if project_id else None,
+            "mood": entry.mood,
+            "content": entry.content,
+        }
+        for entry, project_id in pairs
+    ]
 
 
 # Mount static files for other assets

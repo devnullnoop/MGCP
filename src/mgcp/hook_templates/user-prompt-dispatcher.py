@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit dispatcher for MGCP v2.4.
+"""UserPromptSubmit dispatcher for MGCP.
 
 Responsibilities:
 1. Read keyword gates and the terse routing block from intent_config.json.
@@ -105,7 +105,6 @@ def _load_state() -> dict:
         "reminder_message": "",
         "lesson_ids": [],
         "workflow_step": "",
-        "task_note": "",
         "active_workflow": None,
         "current_step": None,
         "workflow_complete": False,
@@ -184,12 +183,22 @@ def main():
     #   bypass_scope. Parsed from MGCP_BYPASS and MGCP_BYPASS:<scope>
     #   tokens in the prompt.
     state["turn_tools_called"] = []
+    # - turn_session_id: this session's harness id, recorded so the
+    #   adjudicate_apology_gate MCP tool can scope its verdict to this session
+    #   without the model having to know a value nothing ever tells it. The
+    #   PreToolUse gate requires an exact match, so before this was written
+    #   here the gate's contest exit could never open.
+    state["turn_session_id"] = hook_input.get("session_id", "") or ""
     bypass_scopes = []
     for match in re.finditer(
         r"MGCP_BYPASS(?::([A-Za-z0-9_-]+))?", prompt, re.IGNORECASE
     ):
         scope = match.group(1)
-        bypass_scopes.append(scope if scope else "*")
+        # Lowercased: the token itself matches case-insensitively, so a user
+        # who types MGCP_BYPASS:GIT gets a scope no rule's lowercase
+        # bypass_scope can ever equal -- a deliberate opt-out discarded in
+        # silence while the deny message kept advertising the mechanism.
+        bypass_scopes.append(scope.lower() if scope else "*")
     state["turn_bypass_scopes"] = bypass_scopes
     # v2.11: an adjudication only ever opens the gate for ITS turn.
     state.pop("turn_apology_adjudication", None)
@@ -243,8 +252,6 @@ def main():
                 else:
                     lines.extend([f'**Workflow:** Call get_workflow("{workflow_step}")', ""])
             if lesson_ids:
-                if isinstance(lesson_ids, str):
-                    lesson_ids = [lid.strip() for lid in lesson_ids.split(",") if lid.strip()]
                 lines.extend(["**Lessons:** " + ", ".join(lesson_ids), ""])
             lines.append("</scheduled-reminder>")
             output_parts.append("\n".join(lines))

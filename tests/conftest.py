@@ -14,6 +14,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # The suite does not get to touch the operator's data
 #
@@ -57,14 +59,24 @@ def pytest_sessionfinish(session, exitstatus):
 
 _LEDGER = LEDGER_PATH
 _CLAIM_OUTCOMES: dict[str, bool] = {}
+_CLAIM_SKIPPED: set[str] = set()
 
 
 def pytest_runtest_logreport(report):
-    """Record pass/fail for every test_<ID>_* in the claim ledger suite."""
-    if report.when != "call":
-        return
+    """Record pass/fail/skip for every test_<ID>_* in the claim ledger suite."""
     m = re.search(r"::test_([CE]\d\d)_", report.nodeid)
-    if m:
+    if not m:
+        return
+    if report.skipped:
+        # A skip is neither a pass nor a fail: no evidence was produced, and
+        # dropping it reopens the silent exemption this checker exists to end.
+        # C13, C15 and C22 need a live store or deployed hooks, so on a clean
+        # checkout -- which is exactly CI -- three VERIFIED rows went unchecked
+        # and nothing said so. Both phases matter: skipif skips in setup, while
+        # C13's in-body pytest.skip lands in the call phase with
+        # report.passed False, where it was reported as an outright FAILURE.
+        _CLAIM_SKIPPED.add(m.group(1))
+    elif report.when == "call":
         _CLAIM_OUTCOMES[m.group(1)] = report.passed
 
 
@@ -87,10 +99,11 @@ def _assert_ledger_matches_its_tests(session):
 
     Only runs when the claim suite was actually collected, so `pytest -k
     something_else` is not derailed by it. Rows with no test_<ID>_* function
-    are prose judgements a machine cannot settle; they are reported, not
+    are prose judgements a machine cannot settle, and rows whose only test
+    skipped here could not be settled on this machine; both are reported, not
     enforced.
     """
-    if not _CLAIM_OUTCOMES or not _LEDGER.exists():
+    if not (_CLAIM_OUTCOMES or _CLAIM_SKIPPED) or not _LEDGER.exists():
         return
 
     ledger = parse_rows(_LEDGER.read_text())
@@ -110,9 +123,18 @@ def _assert_ledger_matches_its_tests(session):
         elif status == "RETRACTED" and passed:
             wrong.append(f"{cid}: ledger says RETRACTED, its test still PASSES")
 
+    # A VERIFIED row whose only test skipped is not a lie, so it does not fail
+    # the run — but a green run must not be mistaken for one that checked it.
+    unverified = [
+        f"{cid}: ledger says VERIFIED, its test SKIPPED on this machine"
+        for cid in sorted(_CLAIM_SKIPPED)
+        if ledger.get(cid) == "VERIFIED" and cid not in _CLAIM_OUTCOMES
+    ]
+
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+
     if wrong:
         session.exitstatus = 1
-        reporter = session.config.pluginmanager.get_plugin("terminalreporter")
         if reporter:
             reporter.write_sep("=", "CAPABILITIES.md disagrees with its own tests", red=True)
             for w in wrong:
@@ -122,3 +144,34 @@ def _assert_ledger_matches_its_tests(session):
                 "is worse than none — it is a false statement with a test "
                 "next to it."
             )
+
+    if unverified and reporter:
+        reporter.write_sep("=", "CAPABILITIES.md rows this run could not check", yellow=True)
+        for u in unverified:
+            reporter.write_line(f"  {u}")
+        reporter.write_line(
+            "  Run the suite where the live store and the deployed hooks are, "
+            "or treat these rows as CLAIMED."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Shared throwaway-path fixtures
+#
+# These were defined identically in seven test modules. One definition means a
+# change to how tests get a scratch database or Qdrant directory happens once.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def temp_db():
+    """A path for a throwaway SQLite database, removed with its directory."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yield os.path.join(tmpdir, "test.db")
+
+
+@pytest.fixture
+def temp_qdrant():
+    """A throwaway directory for a local-mode Qdrant store."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yield tmpdir

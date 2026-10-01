@@ -30,7 +30,6 @@ When you discover a phrasing that should match but doesn't:
 
 import os
 import shutil
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -194,13 +193,6 @@ LESSON_PHRASINGS = {
 # =============================================================================
 # FIXTURES
 # =============================================================================
-
-@pytest.fixture
-def temp_qdrant():
-    """Create a temporary Qdrant directory."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield tmpdir
-
 
 @pytest.fixture
 def vector_store_with_workflows(temp_qdrant):
@@ -473,90 +465,6 @@ class TestLessonTriggers:
             f"'{phrasing}' did not match any API lessons with >= {MIN_RELEVANCE:.0%} relevance. "
             f"Found: {[(lid, f'{s:.0%}') for lid, s in results[:3]]}"
         )
-
-
-# =============================================================================
-# GAP DETECTION TESTS
-# =============================================================================
-
-class TestGapDetection:
-    """Tests that help identify coverage gaps in triggers."""
-
-    def test_report_workflow_coverage(self, vector_store_with_workflows):
-        """Generate a coverage report for workflow triggers."""
-        store = vector_store_with_workflows
-
-        report = []
-        failures = []
-
-        for workflow_id, test_case in WORKFLOW_PHRASINGS.items():
-            report.append(f"\n## {workflow_id} ({test_case.intent})")
-
-            for phrasing in test_case.phrasings:
-                results = store.search(phrasing, limit=2)
-
-                if not results:
-                    report.append(f"  - '{phrasing}' - NO MATCH")
-                    failures.append((workflow_id, phrasing, "no match"))
-                    continue
-
-                # Find target workflow
-                target_result = None
-                for lesson_id, score in results:
-                    if lesson_id == workflow_id:
-                        target_result = (lesson_id, score)
-                        break
-
-                if target_result is None:
-                    best_id, best_rel = results[0]
-                    report.append(f"  - '{phrasing}' - matched {best_id} ({best_rel:.0%}) instead")
-                    failures.append((workflow_id, phrasing, f"wrong match: {best_id}"))
-                else:
-                    relevance = target_result[1]
-                    if relevance >= MIN_RELEVANCE:
-                        report.append(f"  + '{phrasing}' - {relevance:.0%}")
-                    else:
-                        report.append(f"  ? '{phrasing}' - {relevance:.0%} (below threshold)")
-                        failures.append((workflow_id, phrasing, f"low relevance: {relevance:.0%}"))
-
-        # Print report for visibility
-        print("\n".join(report))
-
-        # This test passes but prints gaps for visibility
-        # Uncomment the assert to make it fail on gaps:
-        # assert not failures, f"Found {len(failures)} coverage gaps"
-
-    def test_report_lesson_coverage(self, vector_store_with_lessons):
-        """Generate a coverage report for lesson triggers."""
-        store = vector_store_with_lessons
-
-        report = []
-        failures = []
-
-        for category, test_case in LESSON_PHRASINGS.items():
-            report.append(f"\n## {category} ({test_case.intent})")
-            expected = getattr(test_case, 'expected_lessons', [])
-
-            for phrasing in test_case.phrasings:
-                results = store.search(phrasing, limit=5)
-
-                if not results:
-                    report.append(f"  - '{phrasing}' - NO MATCH")
-                    failures.append((category, phrasing, "no match"))
-                    continue
-
-                # Check if any expected lesson matched
-                found = [(lid, s) for lid, s in results if lid in expected and s >= MIN_RELEVANCE]
-
-                if found:
-                    best_match = found[0]
-                    report.append(f"  + '{phrasing}' - {best_match[0]} ({best_match[1]:.0%})")
-                else:
-                    top_match = results[0]
-                    report.append(f"  ? '{phrasing}' - got {top_match[0]} ({top_match[1]:.0%})")
-                    failures.append((category, phrasing, f"unexpected: {top_match[0]}"))
-
-        print("\n".join(report))
 
 
 # =============================================================================

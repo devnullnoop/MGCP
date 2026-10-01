@@ -940,3 +940,34 @@ def test_C31_readme_apology_gate_description_matches_the_shipped_hook():
         f"hook has {len(patterns)} apology patterns; README says seven — update both together"
     )
     assert "MGCP_BYPASS:apology" in v29 and hook_ns["APOLOGY_BYPASS_SCOPE"] == "apology"
+
+
+def test_every_store_honours_MGCP_DATA_DIR(monkeypatch, tmp_path):
+    """A sandboxed data dir must redirect EVERY store, telemetry included.
+
+    telemetry.py hardcoded `~/.mgcp/telemetry.db` while lessons.db and both
+    Qdrant stores honoured the override, so a process pointed at a throwaway
+    directory still read and wrote the operator's live telemetry. That is how a
+    dashboard seeded with synthetic data rendered 1,094 real queries, and it is
+    a disclosure risk the moment anything is screenshotted or shipped.
+    """
+    import importlib
+
+    monkeypatch.setenv("MGCP_DATA_DIR", str(tmp_path))
+
+    import mgcp.persistence as persistence
+    import mgcp.qdrant_vector_store as qvs
+    import mgcp.telemetry as telemetry
+
+    resolved = {
+        "lessons.db": persistence.get_default_db_path(),
+        "telemetry.db": telemetry.get_default_telemetry_path(),
+        "qdrant": qvs.get_default_qdrant_path(),
+    }
+    importlib.reload  # keep the import meaningful for linters
+
+    escaped = {name: path for name, path in resolved.items()
+               if not str(path).startswith(str(tmp_path))}
+    assert not escaped, (
+        f"these stores ignored MGCP_DATA_DIR and resolved to the live location: {escaped}"
+    )

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MGCP Instrument</title>
+<link rel="stylesheet" href="/static/app/app.css">
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js" defer></script>
+<script type="module" src="/static/app/app.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <span class="name">MGCP</span>
+    <span class="sub">instrument</span>
+  </div>
+  <nav id="nav" aria-label="Views"></nav>
+  <div class="topbar-right">
+    <span id="freshness" class="freshness" title="When this data was read"></span>
+    <button id="theme" class="ghost" type="button" aria-label="Toggle light and dark">◐</button>
+  </div>
+</header>
+
+<main id="view" tabindex="-1">
+  <div class="loading">Reading the stores…</div>
+</main>
+
+<div id="tooltip" role="tooltip" aria-hidden="true"></div>
+
+<footer class="pagefoot">
+  <span>Every figure here is computed from <code>telemetry.db</code>, <code>lessons.db</code> and
+  <code>gate_audit.jsonl</code>. Nothing is sampled or estimated.</span>
+</footer>
+
+</body>
+</html>

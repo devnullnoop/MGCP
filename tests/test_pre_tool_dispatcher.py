@@ -80,6 +80,19 @@ class TestCommandDetector:
             "git -C /repo commit -m x",
             "git -c user.name=x commit -m y",
             "git --git-dir=/r/.git push origin main",
+            # One word in front of the command used to move `git` off the
+            # command boundary and out of the gate entirely -- no malformed
+            # input required, just a path, a wrapper or an env assignment.
+            "/usr/bin/git commit -m x",
+            "./bin/git push",
+            "env git commit -m x",
+            "GIT_AUTHOR_NAME=x git commit -m y",
+            "GIT_AUTHOR_NAME=x GIT_AUTHOR_EMAIL=y git commit -m z",
+            "sudo git push",
+            "time git push",
+            "xargs git commit",
+            "nohup /usr/bin/git push origin main",
+            "cd /repo && sudo git commit -m x",
         ],
     )
     def test_matches_real_git_invocations(self, hook_module, command):
@@ -98,6 +111,12 @@ class TestCommandDetector:
             "echo hi\npython3 train.py",
             "cd /repo\ngit status",
             "git -C /repo status",
+            # The wrapper/assignment allowance must not turn an ordinary
+            # argument list into a command boundary.
+            "echo --dry-run git commit",
+            "grep git commit README.md",
+            "sudo git status",
+            "/usr/bin/git log",
         ],
     )
     def test_does_not_match_non_invocations(self, hook_module, command):
@@ -109,6 +128,10 @@ class TestCommandDetector:
             "git commit -m 'oops",
             "git commit -F - <<'MSG'\nthe project's fix\nMSG",
             "cd /repo\ngit commit -F - <<'M'\ndon't\nM",
+            # The raw scan is the only detector left on this path, so it has
+            # to see a path-invoked git too.
+            "/usr/bin/git commit -m 'oops",
+            "sudo git commit -m 'oops",
         ],
     )
     def test_unparseable_command_fails_closed(self, hook_module, command):
@@ -667,6 +690,32 @@ class TestApologyGateExitsAndAudit:
             assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny", \
                 f"git rule not enforced with state={raw!r}"
 
+    def test_string_per_turn_values_do_not_open_the_gate(self, tmp_path):
+        """workflow_state.json is agent-writable. With a STRING
+        turn_tools_called, `name in called` is a substring test that any text
+        naming the tool satisfies; set("*") from a string turn_bypass_scopes
+        is bypass-all. Both must read as "no state", not "no enforcement"."""
+        state_file = tmp_path / "state.json"
+        rules_file = tmp_path / "enforcement_rules.json"
+        rules_file.write_text(json.dumps({"version": 1, "rules": [GIT_GATE_RULE]}))
+        for raw in ('{"turn_tools_called": "mcp__mgcp__query_lessons"}',
+                    '{"turn_tools_called": "ran mcp__mgcp__query_lessons already"}',
+                    '{"turn_bypass_scopes": "*"}',
+                    '{"turn_bypass_scopes": "git"}'):
+            state_file.write_text(raw)
+            r = subprocess.run(
+                [sys.executable, str(HOOK_PATH)],
+                input=json.dumps({"tool_name": "Bash",
+                                  "tool_input": {"command": "git commit -m x"}}),
+                capture_output=True, text=True,
+                env={"MGCP_STATE_FILE": str(state_file),
+                     "MGCP_ENFORCEMENT_CONFIG": str(rules_file),
+                     "MGCP_DATA_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"},
+            )
+            assert r.returncode == 0, f"crashed on state={raw!r}: {r.stderr[:200]}"
+            assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny", \
+                f"git rule not enforced with state={raw!r}"
+
     def test_adjudication_session_match_is_exact(self, tmp_path):
         """A malformed session_id must not normalise to '' and thereby match
         every caller — type confusion into a global gate-opener."""
@@ -707,3 +756,120 @@ class TestApologyGateExitsAndAudit:
             {"turn_tools_called": [], "turn_bypass_scopes": ["apology"]},
             tmp_path, rules=None)
         assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+class TestTriggerMatches:
+    """Trigger semantics, ported off the deleted enforcement.py copy.
+
+    These ran against a module with no production caller. The hook's
+    _trigger_matches is the one that decides real tool calls.
+    """
+
+    def test_wildcard_tool_matches_any(self, hook_module):
+        trig = {"tool_name": "*"}
+        assert hook_module._trigger_matches(trig, "Edit", {}) is True
+        assert hook_module._trigger_matches(trig, "Bash", {"command": "ls"}) is True
+
+    def test_exact_tool_matches(self, hook_module):
+        trig = {"tool_name": "Edit"}
+        assert hook_module._trigger_matches(trig, "Edit", {}) is True
+        assert hook_module._trigger_matches(trig, "Write", {}) is False
+
+    def test_command_match_requires_bash(self, hook_module):
+        # command_match on a non-Bash tool is a no-match: there is no command.
+        trig = {"tool_name": "*", "command_match": {"type": "contains", "pattern": "git"}}
+        assert hook_module._trigger_matches(trig, "Edit", {"command": "git"}) is False
+
+    def test_git_subcommand(self, hook_module):
+        trig = {
+            "tool_name": "Bash",
+            "command_match": {"type": "git_subcommand", "subcommands": ["push"]},
+        }
+        assert hook_module._trigger_matches(trig, "Bash", {"command": "git push"}) is True
+        assert hook_module._trigger_matches(trig, "Bash", {"command": "git commit"}) is False
+
+    def test_empty_command_match_is_not_a_wildcard(self, hook_module):
+        """`{}` is a matcher with no type, which the schema rejects. Reading it
+        as "no matcher" made the rule fire on every call to the tool."""
+        trig = {"tool_name": "Bash", "command_match": {}}
+        assert hook_module._trigger_matches(trig, "Bash", {"command": "ls"}) is False
+
+    def test_regex(self, hook_module):
+        trig = {"tool_name": "Bash", "command_match": {"type": "regex", "pattern": r"rm\s+-rf"}}
+        assert hook_module._trigger_matches(trig, "Bash", {"command": "rm -rf /"}) is True
+        assert hook_module._trigger_matches(trig, "Bash", {"command": "ls"}) is False
+
+    def test_contains(self, hook_module):
+        trig = {"tool_name": "Bash", "command_match": {"type": "contains", "pattern": "sudo"}}
+        assert hook_module._trigger_matches(trig, "Bash", {"command": "sudo apt"}) is True
+        assert hook_module._trigger_matches(trig, "Bash", {"command": "apt"}) is False
+
+
+class TestPreconditionTypes:
+    """Every precondition type CLAUDE.md documents, against the live hook."""
+
+    def test_tool_called_this_turn(self, hook_module):
+        pre = {"type": "tool_called_this_turn", "tool_name": "foo"}
+        ok, _ = hook_module._evaluate_precondition(pre, {"turn_tools_called": ["foo"]}, [])
+        assert ok is True
+        ok, _ = hook_module._evaluate_precondition(pre, {"turn_tools_called": []}, [])
+        assert ok is False
+
+    def test_tool_not_called_this_turn(self, hook_module):
+        pre = {"type": "tool_not_called_this_turn", "tool_name": "bad"}
+        ok, _ = hook_module._evaluate_precondition(pre, {"turn_tools_called": ["good"]}, [])
+        assert ok is True
+        ok, _ = hook_module._evaluate_precondition(pre, {"turn_tools_called": ["bad"]}, [])
+        assert ok is False
+
+    @staticmethod
+    def _coupling_pre():
+        return {
+            "type": "staged_files_coupling",
+            "couplings": [{"when_staged": ["src/*.py"], "require_one_of": ["README.md"]}],
+        }
+
+    def test_staged_files_coupling_satisfied(self, hook_module):
+        ok, _ = hook_module._evaluate_precondition(
+            self._coupling_pre(), {}, ["src/foo.py", "README.md"]
+        )
+        assert ok is True
+
+    def test_staged_files_coupling_violated_names_the_trigger(self, hook_module):
+        ok, detail = hook_module._evaluate_precondition(self._coupling_pre(), {}, ["src/foo.py"])
+        assert ok is False
+        assert "src/foo.py" in detail
+
+    def test_staged_files_coupling_does_not_apply_when_unmatched(self, hook_module):
+        ok, _ = hook_module._evaluate_precondition(self._coupling_pre(), {}, ["docs/foo.md"])
+        assert ok is True
+
+    def test_tool_input_glob_denies_on_match(self, hook_module):
+        pre = {"type": "tool_input_glob", "field": "file_path", "deny_globs": ["**/settings.json"]}
+        ok, _ = hook_module._evaluate_precondition(
+            pre, {}, [], {"file_path": "/x/.claude/settings.json"}
+        )
+        assert ok is False
+
+    def test_tool_input_glob_fails_open_on_missing_or_nonstring_field(self, hook_module):
+        pre = {"type": "tool_input_glob", "field": "file_path", "deny_globs": ["**/*.json"]}
+        ok, _ = hook_module._evaluate_precondition(pre, {}, [], {})
+        assert ok is True
+        ok, _ = hook_module._evaluate_precondition(pre, {}, [], {"file_path": 17})
+        assert ok is True
+
+
+class TestCheckCoupling:
+    def test_empty_staged(self, hook_module):
+        ok, trig = hook_module._check_coupling([], ["a"], ["b"])
+        assert ok is True and trig == []
+
+    def test_when_hit_req_hit(self, hook_module):
+        ok, trig = hook_module._check_coupling(
+            ["src/x.py", "README.md"], ["src/*.py"], ["README.md"]
+        )
+        assert ok is True and "src/x.py" in trig
+
+    def test_when_hit_req_miss(self, hook_module):
+        ok, trig = hook_module._check_coupling(["src/x.py"], ["src/*.py"], ["README.md"])
+        assert ok is False and "src/x.py" in trig

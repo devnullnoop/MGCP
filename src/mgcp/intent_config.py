@@ -13,9 +13,8 @@ Config is stored at ``~/.mgcp/intent_config.json`` (override with
 :data:`DEFAULT_INTENTS`.
 
 The on-disk JSON contains both the structured intent definitions
-(``intents``, ``tag_to_intent``) AND a pre-rendered cache of every prompt
-section the hooks need (``rendered.session_init_routing``,
-``rendered.session_init_actions``, ``rendered.dispatcher_routing``,
+(``intents``, ``tag_to_intent``) AND a pre-rendered cache of the two prompt
+sections the hooks read (``rendered.dispatcher_routing``,
 ``rendered.keyword_gates``). The hooks read the rendered cache as plain
 strings so they don't need to import this module — keeping them portable
 across Python environments where the mgcp package isn't on sys.path.
@@ -118,32 +117,6 @@ class IntentConfig(BaseModel):
 
     # ---- Rendering (called by save_config to refresh the on-disk cache) ----
 
-    def render_full_routing(self) -> str:
-        """Verbose routing block — injected once at SessionStart."""
-        lines = [
-            "<intent-routing>",
-            "Classify each user message into zero or more intents before acting.",
-            "Only include intents where the user clearly performs or requests the action.",
-            "",
-        ]
-        for intent in self.intents:
-            lines.append(f"- {intent.name}: {intent.description}")
-        lines.extend([
-            "",
-            "If none apply: proceed normally.",
-            "</intent-routing>",
-        ])
-        return "\n".join(lines)
-
-    def render_actions(self) -> str:
-        """Intent → action map — injected once at SessionStart."""
-        lines = ["<intent-actions>"]
-        for intent in self.intents:
-            lines.append(f"{intent.name} → {intent.action}")
-        lines.append("Multi-intent → union all actions")
-        lines.append("</intent-actions>")
-        return "\n".join(lines)
-
     def render_terse_routing(self) -> str:
         """Compact routing block re-injected on every UserPromptSubmit.
 
@@ -183,8 +156,6 @@ class IntentConfig(BaseModel):
             "intents": [intent.model_dump() for intent in self.intents],
             "tag_to_intent": self.tag_to_intent(),
             "rendered": {
-                "session_init_routing": self.render_full_routing(),
-                "session_init_actions": self.render_actions(),
                 "dispatcher_routing": self.render_terse_routing(),
                 "keyword_gates": self.keyword_gates(),
             },

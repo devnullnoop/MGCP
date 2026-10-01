@@ -306,6 +306,22 @@ class TestScopes:
         assert ".claude/skills/session_end/SKILL.md" in str(result.skill_path)
 
     @pytest.mark.asyncio
+    async def test_project_scope_without_path_uses_claude_project_dir(
+        self, isolated_dirs, temp_db, seeded_intent_config, monkeypatch
+    ):
+        """Not the server's cwd, which is the MGCP checkout under Claude Code."""
+        store = LessonStore(db_path=temp_db)
+        project_root = isolated_dirs / "users-project"
+        project_root.mkdir()
+        monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_root))
+        monkeypatch.chdir(isolated_dirs / "home")
+
+        result = await compile_intent_to_skill("session_end", store, scope="project")
+
+        assert result.skill_path == project_root / ".claude" / "skills" / "session_end" / "SKILL.md"
+        assert result.skill_path.exists()
+
+    @pytest.mark.asyncio
     async def test_invalid_scope_raises(
         self, isolated_dirs, temp_db, seeded_intent_config
     ):

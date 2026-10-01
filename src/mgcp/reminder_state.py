@@ -3,7 +3,8 @@
 This module manages scheduled reminders that the LLM sets for itself.
 Use case: At step N, schedule knowledge needed for step N+1.
 
-State file location: ~/.mgcp/reminder_state.json
+State file location: ~/.mgcp/workflow_state.json (shared with the hooks;
+overridable via MGCP_STATE_FILE / MGCP_DATA_DIR)
 
 How it works:
 1. LLM calls schedule_reminder(after_calls=2, message="...", lesson_ids="...", workflow_step="...")
@@ -13,18 +14,31 @@ How it works:
 """
 
 import json
+import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-# State file location
-STATE_DIR = Path.home() / ".mgcp"
-STATE_FILE = STATE_DIR / "reminder_state.json"
+# The hooks' state file, resolved exactly as they resolve it. This module used
+# to write ~/.mgcp/reminder_state.json while every hook read workflow_state.json,
+# so schedule_reminder and update_workflow_state wrote to a file nothing read.
+# One file, not two halves of a channel that never met.
+STATE_FILE = Path(
+    os.environ.get(
+        "MGCP_STATE_FILE",
+        str(Path(os.environ.get("MGCP_DATA_DIR", str(Path.home() / ".mgcp"))) / "workflow_state.json"),
+    )
+)
+STATE_DIR = STATE_FILE.parent
 
 
-def load_state() -> dict:
-    """Load current state from file, or return defaults."""
-    defaults = {
+def _defaults() -> dict:
+    """The full default shape. load_state and reset_state carried their own
+    copies and had already drifted apart by four keys. Rebuilt per call, not a
+    module constant, because callers mutate it — update_workflow_state appends
+    to ``steps_completed`` in place.
+    """
+    return {
         "current_call_count": 0,
         "last_updated": datetime.now(UTC).isoformat(),
         # Reminder scheduling
@@ -35,8 +49,17 @@ def load_state() -> dict:
         "reminder_message": "",  # Custom message to inject
         "lesson_ids": [],  # Lesson IDs to surface
         "workflow_step": "",  # Workflow/step to load (e.g., "bug-fix/investigate")
+        # Workflow execution state
+        "active_workflow": None,
+        "current_step": None,
+        "steps_completed": [],
+        "workflow_complete": False,
     }
 
+
+def load_state() -> dict:
+    """Load current state from file, or return defaults."""
+    defaults = _defaults()
     try:
         if STATE_FILE.exists():
             with open(STATE_FILE) as f:
@@ -135,22 +158,16 @@ def get_status() -> dict:
 
 
 def reset_state() -> dict:
-    """Reset state to defaults."""
-    state = {
-        "current_call_count": 0,
-        "last_updated": datetime.now(UTC).isoformat(),
-        "remind_at_call": 0,
-        "remind_at_time": 0,
-        "task_note": "",
-        "reminder_message": "",
-        "lesson_ids": [],
-        "workflow_step": "",
-        # Workflow execution state (preserved across resets unless explicit)
-        "active_workflow": None,
-        "current_step": None,
-        "steps_completed": [],
-        "workflow_complete": False,
-    }
+    """Reset the reminder and workflow fields to defaults.
+
+    Merges rather than replaces: this file is also the hooks' per-turn
+    enforcement state. Writing a fresh dict here would drop
+    ``turn_tools_called``, ``turn_bypass_scopes`` and
+    ``turn_apology_adjudication`` mid-turn, which re-shuts the apology gate
+    and fails every ``tool_called_this_turn`` precondition.
+    """
+    state = load_state()
+    state.update(_defaults())
     save_state(state)
     return state
 
@@ -170,7 +187,7 @@ def update_workflow_state(
 
     Args:
         active_workflow: Set the active workflow ID (e.g., "feature-development").
-                        Empty string = no change, None-like values clear it.
+                        Empty string = no change.
         current_step: Set the current step ID (e.g., "research").
         step_completed: Mark a step as completed (appends to steps_completed).
         workflow_complete: Mark the entire workflow as complete.
@@ -181,12 +198,14 @@ def update_workflow_state(
     state = load_state()
 
     if active_workflow:
-        state["active_workflow"] = active_workflow
-        # Starting a new workflow resets step tracking
+        # Compare BEFORE assigning — assigning first made this branch
+        # unreachable, so switching workflows kept the old workflow's step
+        # list and its completion flag.
         if active_workflow != state.get("active_workflow"):
             state["current_step"] = None
             state["steps_completed"] = []
             state["workflow_complete"] = False
+        state["active_workflow"] = active_workflow
 
     if current_step:
         state["current_step"] = current_step

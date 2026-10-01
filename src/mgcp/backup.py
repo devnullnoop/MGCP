@@ -6,6 +6,8 @@ import tarfile
 from datetime import datetime
 from pathlib import Path
 
+from . import __version__
+
 # Default data directory
 DEFAULT_DATA_DIR = Path.home() / ".mgcp"
 
@@ -152,7 +154,7 @@ Examples:
     parser.add_argument(
         "-V", "--version",
         action="version",
-        version="mgcp-backup 1.0.0",
+        version=f"mgcp-backup {__version__}",
     )
 
     args = parser.parse_args()
@@ -193,12 +195,6 @@ Examples:
             print(f"Backup created: {archive}")
             print(f"Size: {size:,} bytes ({size / 1024 / 1024:.1f} MB)")
 
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-    except FileExistsError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)

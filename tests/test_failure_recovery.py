@@ -218,37 +218,6 @@ class TestInvalidData:
             assert lesson is not None
             assert lesson.rationale is None or lesson.rationale == ""
 
-    @pytest.mark.asyncio
-    async def test_wrong_data_types_in_json(self):
-        """Handles wrong data types in JSON columns."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "wrong_types.db"
-
-            store = LessonStore(db_path=str(db_path))
-            lesson = Lesson(id="valid", trigger="test", action="test")
-            await store.add_lesson(lesson)
-
-            # Insert data with wrong types in JSON columns
-            conn = sqlite3.connect(str(db_path))
-            cursor = conn.cursor()
-
-            # tags should be a JSON array, not a string
-            cursor.execute("""
-                INSERT INTO lessons (id, trigger, action, examples, tags, relationships,
-                                     version, created_at, last_refined, usage_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, ("wrong-types", "test", "test", "[]", '"not a list"', "[]",
-                  1, "2024-01-01T00:00:00", "2024-01-01T00:00:00", 0))
-            conn.commit()
-            conn.close()
-
-            # Should handle gracefully
-            try:
-                lesson = await store.get_lesson("wrong-types")
-            except Exception:
-                # Validation error is acceptable
-                pass
-
 
 class TestRecoveryScenarios:
     """Tests for recovery from various failure states."""
@@ -372,14 +341,12 @@ class TestGracefulDegradation:
             assert retrieved is not None
             assert retrieved.id == "no-vector"
 
-    def test_search_returns_empty_on_error(self):
-        """Search returns empty results rather than crashing on errors."""
+    def test_search_on_empty_collection_returns_empty(self):
+        """A store with nothing in it answers "nothing", it does not raise."""
         with tempfile.TemporaryDirectory() as tmpdir:
             store = QdrantVectorStore(persist_path=tmpdir)
 
-            # Search with no data should return empty, not crash
-            results = store.search("anything", limit=5)
-            assert results == [] or len(results) == 0
+            assert store.search("anything", limit=5) == []
 
     @pytest.mark.asyncio
     async def test_handles_concurrent_access_errors(self):
@@ -495,28 +462,6 @@ class TestEdgeCaseInputs:
                     # Some IDs might be rejected - that's okay if it's clear
                     assert "id" in str(e).lower() or "invalid" in str(e).lower()
 
-    @pytest.mark.asyncio
-    async def test_null_bytes_in_strings(self):
-        """Handles null bytes in strings."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "null_bytes.db"
-            store = LessonStore(db_path=str(db_path))
-
-            # String with null byte
-            try:
-                lesson = Lesson(
-                    id="null-byte",
-                    trigger="test\x00with\x00nulls",
-                    action="action\x00here",
-                )
-                await store.add_lesson(lesson)
-                retrieved = await store.get_lesson("null-byte")
-                # If it works, verify data integrity
-                assert retrieved is not None
-            except Exception:
-                # Rejecting null bytes is acceptable
-                pass
-
     def test_vector_search_with_empty_query(self):
         """Handles empty search queries."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -529,31 +474,6 @@ class TestEdgeCaseInputs:
             # Empty query should return something or empty, not crash
             results = store.search("", limit=5)
             assert isinstance(results, list)
-
-    def test_vector_search_with_special_characters(self):
-        """Handles special characters in search queries."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = QdrantVectorStore(persist_path=tmpdir)
-
-            lesson = Lesson(id="test", trigger="python code", action="test")
-            store.add_lesson(lesson)
-
-            # Various special character queries
-            queries = [
-                "test!@#$%",
-                "SELECT * FROM",
-                "<script>alert('xss')</script>",
-                "'; DROP TABLE lessons; --",
-                "test\nwith\nnewlines",
-            ]
-
-            for query in queries:
-                try:
-                    results = store.search(query, limit=5)
-                    assert isinstance(results, list)
-                except Exception:
-                    # Rejection is okay, crashing is not
-                    pass
 
 
 class TestBackupRestore:

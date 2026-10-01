@@ -102,25 +102,3 @@ def configure_logging(
     )
 
     return root_logger
-
-
-def get_logger(name: str) -> logging.Logger:
-    """Get a logger for an MGCP component.
-
-    Args:
-        name: Component name (e.g., 'persistence', 'server', 'vector_store')
-
-    Returns:
-        A logger instance under the mgcp namespace.
-
-    Example:
-        logger = get_logger("persistence")
-        logger.info("Database initialized")
-        # Logs as: mgcp.persistence - INFO - Database initialized
-    """
-    global _configured
-    if not _configured:
-        # Auto-configure with defaults if not already configured
-        configure_logging(console_output=False)
-
-    return logging.getLogger(f"mgcp.{name}")

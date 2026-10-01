@@ -194,8 +194,10 @@ RelationshipType = Literal[
     "specializes",    # More specific version of
     "generalizes",    # More general version of
     "contradicts",    # Conflicting approaches
-    "child_of",       # Hierarchical parent (can have multiple)
 ]
+# No "child_of": hierarchy lives in Lesson.parent_id, which the graph stores as
+# relation="parent". A child_of edge would read as hierarchical while
+# get_parent/get_children never looked at it. Zero were ever stored.
 
 
 class Relationship(SanitizedModel):
@@ -358,13 +360,6 @@ class Soliloquy(SanitizedModel):
     session_number: int = Field(default=0, description="Session when written")
     mood: str | None = Field(None, description="Optional self-assessed mood/tone tag")
 
-    def to_context(self) -> str:
-        """Format for LLM consumption."""
-        header = f"[{self.timestamp.strftime('%Y-%m-%d %H:%M')}]"
-        if self.mood:
-            header += f" ({self.mood})"
-        return f"{header}\n{self.content}"
-
 
 class CommunitySummary(SanitizedModel):
     """Summary of an auto-detected lesson community (cluster)."""
@@ -472,27 +467,23 @@ class Workflow(SanitizedModel):
 class ProjectCatalogue(SanitizedModel):
     """Structured knowledge base for a project - the bootstrap guide."""
 
+    # Every field here must be reachable by add_catalogue_item (and its web
+    # equivalent), or it is a field no session can ever fill. Seven such fields
+    # were removed for exactly that reason — languages, patterns_used,
+    # entry_points, test_commands, build_commands, known_issues, key_concepts —
+    # two of which to_context() rendered, so the "**Stack**" and "Entry Points"
+    # sections could never appear. Add the item_type branch first.
+
     # Technology stack
-    languages: list[str] = Field(default_factory=list, description="Programming languages used")
     frameworks: list[Dependency] = Field(default_factory=list, description="Major frameworks")
     libraries: list[Dependency] = Field(default_factory=list, description="Key libraries")
     tools: list[Dependency] = Field(default_factory=list, description="Build tools, dev tools")
 
     # Architecture & patterns
     architecture_notes: list[ArchitecturalNote] = Field(default_factory=list, description="Key architectural decisions")
-    patterns_used: list[str] = Field(default_factory=list, description="Design patterns (e.g., 'MVC', 'Repository')")
-
-    # Development
-    entry_points: dict[str, str] = Field(default_factory=dict, description="Entry points")
-    test_commands: list[str] = Field(default_factory=list, description="How to run tests")
-    build_commands: list[str] = Field(default_factory=list, description="How to build/deploy")
 
     # Issues & security
     security_notes: list[SecurityNote] = Field(default_factory=list, description="Security considerations")
-    known_issues: list[str] = Field(default_factory=list, description="Known bugs or limitations")
-
-    # Quick reference
-    key_concepts: dict[str, str] = Field(default_factory=dict, description="Domain concepts")
 
     # LLM-optimized knowledge (new)
     conventions: list[Convention] = Field(default_factory=list, description="Coding style rules and conventions")
@@ -542,12 +533,8 @@ class ProjectContext(SanitizedModel):
 
         # Catalogue summary
         cat = self.catalogue
-        if cat.languages:
-            lines.append(f"\n**Stack**: {', '.join(cat.languages)}")
         if cat.frameworks:
-            lines.append(f"**Frameworks**: {', '.join(f.name for f in cat.frameworks)}")
-        if cat.patterns_used:
-            lines.append(f"**Patterns**: {', '.join(cat.patterns_used)}")
+            lines.append(f"\n**Frameworks**: {', '.join(f.name for f in cat.frameworks)}")
 
         # Key architecture notes (gotchas)
         gotchas = [n for n in cat.architecture_notes if n.category == "gotcha"]
@@ -587,12 +574,6 @@ class ProjectContext(SanitizedModel):
             lines.append("\n### 🐛 Known Error Patterns:")
             for err in cat.error_patterns[:3]:
                 lines.append(f"  • `{err.error_signature[:50]}` → {err.solution[:60]}...")
-
-        # Entry points
-        if cat.entry_points:
-            lines.append("\n### Entry Points:")
-            for name, path in list(cat.entry_points.items())[:5]:
-                lines.append(f"  • {name}: `{path}`")
 
         # Active todos, shown with their real index into self.todos —
         # update_project_todo takes an index into the FULL list (completed

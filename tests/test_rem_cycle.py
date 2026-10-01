@@ -1,7 +1,5 @@
 """Tests for REM cycle engine."""
 
-import os
-import tempfile
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -10,13 +8,6 @@ from mgcp.models import Lesson, ProjectContext, ProjectTodo
 from mgcp.persistence import LessonStore
 from mgcp.rem_config import OperationSchedule
 from mgcp.rem_cycle import RemEngine, RemFinding
-
-
-@pytest.fixture
-def temp_db():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "test.db")
-        yield db_path
 
 
 @pytest.fixture
@@ -212,7 +203,13 @@ class TestDuplicateDetection:
 
     @pytest.mark.asyncio
     async def test_renders_real_ids_from_nested_pairs(self, engine, monkeypatch):
-        async def fake_find_duplicates(threshold=0.85):
+        captured = {}
+
+        async def fake_find_duplicates(threshold=0.85, store=None, vector_store=None):
+            # The engine must hand its own live instances down: local Qdrant
+            # permits one client per path, so constructing a second one inside
+            # the server raised and the failure was swallowed as "healthy".
+            captured["store"] = store
             return [{
                 "lesson_1": {"id": "lesson-one", "trigger": "trigger one"},
                 "lesson_2": {"id": "lesson-two", "trigger": "trigger two"},
@@ -231,6 +228,24 @@ class TestDuplicateDetection:
         # session-detail.html reads these metadata keys; they are load-bearing
         assert f.metadata["lesson_a"] == "lesson-one"
         assert f.metadata["lesson_b"] == "lesson-two"
+        assert captured["store"] is engine.store, (
+            "engine must pass its own store rather than letting find_duplicates "
+            "open a second Qdrant client on the same path"
+        )
+
+    @pytest.mark.asyncio
+    async def test_scan_failure_is_reported_not_swallowed(self, engine, monkeypatch):
+        """A scan that cannot run must not read as a clean corpus."""
+        async def boom(threshold=0.85, store=None, vector_store=None):
+            raise RuntimeError("already accessed by another instance of Qdrant client")
+
+        import mgcp.data_ops
+        monkeypatch.setattr(mgcp.data_ops, "find_duplicates", boom)
+
+        findings = await engine._duplicate_detection()
+        assert len(findings) == 1, "failure must surface as a finding, not []"
+        assert "could not run" in findings[0].title
+        assert "Qdrant" in findings[0].metadata["error"]
 
 
 class TestRemFinding:

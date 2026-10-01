@@ -15,7 +15,22 @@ import aiosqlite
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TELEMETRY_PATH = "~/.mgcp/telemetry.db"
+def get_default_telemetry_path() -> str:
+    """Telemetry path, respecting MGCP_DATA_DIR like every other store.
+
+    This was a hardcoded `~/.mgcp/telemetry.db`, so a process pointed at a
+    sandbox data dir still read AND WROTE the operator's live telemetry. It is
+    how a dashboard seeded with synthetic data rendered 1,094 real queries, and
+    it would have put real query text into screenshots captured from a store
+    that was supposed to contain nothing real.
+    """
+    data_dir = os.environ.get("MGCP_DATA_DIR")
+    if data_dir:
+        return str(Path(data_dir) / "telemetry.db")
+    return os.path.expanduser("~/.mgcp/telemetry.db")
+
+
+DEFAULT_TELEMETRY_PATH = get_default_telemetry_path()
 
 
 class EventType(StrEnum):
@@ -25,7 +40,6 @@ class EventType(StrEnum):
     ADD = "add"
     REFINE = "refine"
     DELETE = "delete"
-    BOOTSTRAP = "bootstrap"
     SESSION_START = "session_start"
 
 
@@ -273,17 +287,25 @@ class TelemetryLogger:
         try:
             now = datetime.now(UTC).isoformat()
             for lesson_id, score in zip(lesson_ids, scores):
+                # query_lessons pads the score list with 0.0 for lessons it
+                # surfaced through the community bridge — those were reached by
+                # graph adjacency and never measured against the query. They are
+                # real retrievals, so total_retrievals counts them, but averaging
+                # them in as a 0.0 similarity dragged avg_score toward zero and
+                # made a bridge-only lesson read identical to one never scored.
+                # total_score/retrieval_count therefore covers scored hits only.
+                scored = 1 if score > 0 else 0
                 await conn.execute(
                     """
                     INSERT INTO lesson_stats (lesson_id, total_retrievals, last_retrieved, total_score, retrieval_count)
-                    VALUES (?, 1, ?, ?, 1)
+                    VALUES (?, 1, ?, ?, ?)
                     ON CONFLICT(lesson_id) DO UPDATE SET
                         total_retrievals = total_retrievals + 1,
                         last_retrieved = ?,
                         total_score = total_score + ?,
-                        retrieval_count = retrieval_count + 1
+                        retrieval_count = retrieval_count + ?
                     """,
-                    (lesson_id, now, score, now, score),
+                    (lesson_id, now, score, scored, now, score, scored),
                 )
             await conn.commit()
         finally:

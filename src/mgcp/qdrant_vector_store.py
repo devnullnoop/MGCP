@@ -54,11 +54,7 @@ DEFAULT_QDRANT_PATH = get_default_qdrant_path()
 
 
 class QdrantVectorStore:
-    """Semantic search over lessons using Qdrant.
-
-    Provides the same interface as the ChromaDB-based VectorStore for
-    drop-in replacement.
-    """
+    """Semantic search over lessons using Qdrant."""
 
     def __init__(
         self,
@@ -70,15 +66,9 @@ class QdrantVectorStore:
         self.persist_path.mkdir(parents=True, exist_ok=True)
         self.collection_name = collection_name
 
-        # Use provided client or create new one
         # IMPORTANT: Qdrant local mode only allows ONE client per path.
         # Share clients between stores to avoid lock conflicts.
-        if client is not None:
-            self.client = client
-            self._owns_client = False
-        else:
-            self.client = QdrantClient(path=str(self.persist_path))
-            self._owns_client = True
+        self.client = client or QdrantClient(path=str(self.persist_path))
 
         # Ensure collection exists
         self._ensure_collection()
@@ -129,11 +119,13 @@ class QdrantVectorStore:
             ],
         )
 
-    def remove_vector_lesson(self, lesson_id: str) -> bool:
+    def remove_vector_lesson(self, lesson_id: str) -> None:
         """Remove a lesson from the vector store.
 
-        Returns:
-            True if removal succeeded, False if not found or error occurred.
+        Deleting an absent point is a no-op in Qdrant, so there is no
+        not-found case to report. The warning below covers the one real
+        failure: Qdrant erroring after the SQLite delete already committed,
+        which leaves an orphaned vector.
         """
         try:
             point_id = string_to_uuid(lesson_id)
@@ -141,10 +133,8 @@ class QdrantVectorStore:
                 collection_name=self.collection_name,
                 points_selector=[point_id],
             )
-            return True
         except Exception as e:
             logger.warning(f"Failed to remove lesson '{lesson_id}' from vector store: {e}")
-            return False
 
     # Calibrated, not chosen. BGE cosine on normalised English prose almost never
     # falls below ~0.45 for any two texts, so the old 0.3 floor admitted
@@ -238,27 +228,14 @@ class QdrantVectorStore:
         """
         query_vector = embed_query(query)
 
-        # Build filter conditions
-        must_conditions = []
-        should_conditions = []
-        must_not_conditions = []
-
-        # Tag filter
+        # Tags are an OR: one matching tag qualifies a lesson. MatchValue is
+        # exact equality per element and the payload is a list (see add_lesson).
+        query_filter = None
         if tags:
-            tag_conditions = [
+            query_filter = Filter(should=[
                 FieldCondition(key="tags", match=MatchValue(value=tag))
                 for tag in tags
-            ]
-            should_conditions.extend(tag_conditions)
-
-        # Build the combined filter
-        query_filter = None
-        if must_conditions or should_conditions or must_not_conditions:
-            query_filter = Filter(
-                must=must_conditions or None,
-                should=should_conditions or None,
-                must_not=must_not_conditions or None,
-            )
+            ])
 
         results = self.client.query_points(
             collection_name=self.collection_name,

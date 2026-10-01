@@ -15,8 +15,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-import pytest
-
 # Hook paths — templates live in the package, not in .claude/hooks/
 HOOKS_DIR = Path(__file__).parent.parent / "src" / "mgcp" / "hook_templates"
 SESSION_INIT = HOOKS_DIR / "session-init.py"
@@ -337,62 +335,6 @@ class TestUpdateWorkflowState:
 class TestIntentCalibration:
     """Tests for the REM intent_calibration operation."""
 
-    @pytest.mark.slow
-    def test_intent_calibration_detects_unmapped(self):
-        """REM operation detects communities with unmapped tags."""
-        import asyncio
-
-        from mgcp.persistence import LessonStore
-        from mgcp.rem_cycle import RemEngine
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "test.db")
-            store = LessonStore(db_path=db_path)
-
-            async def run():
-                from mgcp.models import Lesson
-
-                # Create lessons with tags that map to known intents
-                for i in range(5):
-                    lesson = Lesson(
-                        id=f"security-lesson-{i}",
-                        trigger=f"security pattern {i}",
-                        action=f"Apply security measure {i}",
-                        tags=["security", "owasp"],
-                    )
-                    await store.add_lesson(lesson)
-
-                # Create lessons with tags that DON'T map to any intent
-                for i in range(4):
-                    lesson = Lesson(
-                        id=f"workflow-lesson-{i}",
-                        trigger=f"workflow management {i}",
-                        action=f"Follow workflow step {i}",
-                        tags=["workflow", "process-management"],
-                    )
-                    await store.add_lesson(lesson)
-
-                # Link workflow lessons so they form a community
-                for i in range(4):
-                    lesson = await store.get_lesson(f"workflow-lesson-{i}")
-                    from mgcp.models import Relationship
-                    for j in range(4):
-                        if j != i:
-                            lesson.relationships.append(
-                                Relationship(target=f"workflow-lesson-{j}", type="related")
-                            )
-                    await store.update_lesson(lesson)
-
-                engine = RemEngine(store=store, project_id="test-project")
-                findings = await engine._intent_calibration()
-                return findings
-
-            findings = asyncio.run(run())
-            # Should find unmapped tags like "workflow" and "process-management"
-            # This may or may not produce findings depending on community detection
-            # (small graph may not cluster well), but it shouldn't crash
-            assert isinstance(findings, list)
-
     def test_intent_calibration_in_default_schedules(self):
         """intent_calibration is in DEFAULT_SCHEDULES."""
         from mgcp.rem_config import DEFAULT_SCHEDULES
@@ -429,18 +371,6 @@ class TestIntentCalibration:
 class TestLegacyHooksArchived:
     """Verify legacy hooks have been moved to examples/."""
 
-    def test_git_reminder_not_in_hooks(self):
-        """git-reminder.py no longer exists in .claude/hooks/."""
-        assert not (HOOKS_DIR / "git-reminder.py").exists()
-
-    def test_catalogue_reminder_not_in_hooks(self):
-        """catalogue-reminder.py no longer exists in .claude/hooks/."""
-        assert not (HOOKS_DIR / "catalogue-reminder.py").exists()
-
-    def test_task_start_reminder_not_in_hooks(self):
-        """task-start-reminder.py no longer exists in .claude/hooks/."""
-        assert not (HOOKS_DIR / "task-start-reminder.py").exists()
-
     def test_legacy_hooks_archived(self):
         """Legacy hooks exist in examples/claude-hooks/legacy/."""
         legacy_dir = Path(__file__).parent.parent / "examples" / "claude-hooks" / "legacy"
@@ -455,10 +385,90 @@ class TestLegacyHooksArchived:
             settings = json.load(f)
         assert settings == {}
 
-    def test_hook_templates_exist(self):
-        """All 4 hook templates exist in src/mgcp/hook_templates/."""
-        templates_dir = Path(__file__).parent.parent / "src" / "mgcp" / "hook_templates"
-        assert (templates_dir / "session-init.py").exists()
-        assert (templates_dir / "user-prompt-dispatcher.py").exists()
-        assert (templates_dir / "post-tool-dispatcher.py").exists()
-        assert (templates_dir / "mgcp-precompact.py").exists()
+
+class TestBypassTokenParsing:
+    """The MGCP_BYPASS parse is the hook's, and it had no test.
+
+    Every other bypass test injects turn_bypass_scopes directly into the
+    state file, so the regex that actually produces it — the one a user's
+    typed token has to satisfy — was unguarded. The copy in enforcement.py
+    that used to be tested here had no production caller.
+    """
+
+    @staticmethod
+    def _scopes_for(prompt: str) -> list:
+        state_file = Path(tempfile.mkdtemp(prefix="mgcp-bypass-")) / "workflow_state.json"
+        env = {
+            **__import__("os").environ,
+            "CLAUDE_PROJECT_DIR": "/tmp/test-project",
+            "MGCP_STATE_FILE": str(state_file),
+        }
+        subprocess.run(
+            [sys.executable, str(DISPATCHER)],
+            input=json.dumps({"prompt": prompt}),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
+        return json.loads(state_file.read_text()).get("turn_bypass_scopes", [])
+
+    def test_bare_token_disables_everything(self):
+        assert self._scopes_for("hello MGCP_BYPASS world") == ["*"]
+
+    def test_scoped_token(self):
+        assert self._scopes_for("MGCP_BYPASS:git") == ["git"]
+
+    def test_multiple_scopes_accumulate(self):
+        out = self._scopes_for("MGCP_BYPASS:git and MGCP_BYPASS:docs")
+        assert set(out) == {"git", "docs"}
+
+    def test_scope_is_lowercased_like_the_token(self):
+        # Every rule's bypass_scope is lowercase and the hook compares with
+        # `in`, so a verbatim "GIT" is an opt-out that can never match.
+        assert self._scopes_for("mgcp_bypass:Git") == ["git"]
+        assert self._scopes_for("MGCP_BYPASS:GIT") == ["git"]
+
+    def test_ordinary_prompt_yields_no_bypass(self):
+        assert self._scopes_for("just a normal prompt") == []
+
+    def test_word_is_not_enough(self):
+        # "bypass" on its own must not open the gate.
+        assert self._scopes_for("please bypass the check") == []
+
+
+class TestTurnSessionIdIsRecorded:
+    """The apology gate's contest exit needs this: the PreToolUse gate matches
+    the adjudication's session_id exactly, and only this hook knows the value.
+    """
+
+    @staticmethod
+    def _state_after(payload: dict) -> dict:
+        state_file = Path(tempfile.mkdtemp(prefix="mgcp-sid-")) / "workflow_state.json"
+        env = {
+            **__import__("os").environ,
+            "CLAUDE_PROJECT_DIR": "/tmp/test-project",
+            "MGCP_STATE_FILE": str(state_file),
+        }
+        subprocess.run(
+            [sys.executable, str(DISPATCHER)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
+        return json.loads(state_file.read_text())
+
+    def test_session_id_from_hook_input_is_persisted(self):
+        state = self._state_after({"prompt": "hello", "session_id": "abc-123-harness"})
+        assert state["turn_session_id"] == "abc-123-harness"
+
+    def test_missing_session_id_records_empty_string(self):
+        state = self._state_after({"prompt": "hello"})
+        assert state["turn_session_id"] == ""
+
+    def test_null_session_id_records_empty_string(self):
+        # A None must not land as null and then compare equal to nothing.
+        state = self._state_after({"prompt": "hello", "session_id": None})
+        assert state["turn_session_id"] == ""

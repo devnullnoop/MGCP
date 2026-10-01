@@ -7,49 +7,42 @@ Adding a new enforcement rule means calling an MCP tool or editing the
 JSON — never editing hook code. This module is the Pydantic schema +
 load/save + evaluator that the MCP tools and tests use.
 
+Scope of this module: the rule *schema* and its persistence, nothing more.
+
+The evaluator lives in the hook and only in the hook. It must be
+stdlib-only (the hook cannot import ``mgcp``), so a second copy here
+would be a copy with no caller — which is what it was until it was
+deleted. Read ``hook_templates/pre-tool-dispatcher.py`` for evaluation
+semantics and ``tests/test_pre_tool_dispatcher.py`` for its contract;
+``tests/test_enforcement.py`` covers this schema and its round-trip.
+
 Design invariants:
 
 - Rules are data. The hook template has no hard-coded rules.
-- The hook is a stdlib-only Python script (no mgcp import) so it loads
-  the JSON directly and runs its own evaluator copy. This module and
-  the hook evaluator implement the same semantics; see
-  ``tests/test_enforcement.py`` for the shared behavioral contract.
-- Fails open. Any parse error in a rule, preconditon, or trigger skips
-  the rule rather than blocking the tool call. Enforcement is a safety
-  net, not a tripwire.
-- Bypass is per-scope. Each rule names a ``bypass_scope`` (short string
-  like ``"git"`` or ``"docs"``). The user's prompt may contain
-  ``MGCP_BYPASS:<scope>`` to disable one scope, or bare ``MGCP_BYPASS``
-  to disable all. UserPromptSubmit parses tokens and writes
-  ``turn_bypass_scopes`` to workflow_state.json.
+- The hook fails open: any parse error in a rule, precondition, or
+  trigger skips that rule rather than blocking the tool call.
+  Enforcement is a safety net, not a tripwire.
+- These tools fail loud instead. A rules file that exists but does not
+  parse raises here, because the alternative is overwriting rules the
+  hook is still enforcing.
+- Bypass is per-scope. Each rule names a ``bypass_scope`` (short
+  lowercase string like ``"git"`` or ``"docs"``). The user's prompt may
+  contain ``MGCP_BYPASS:<scope>`` to disable one scope, or bare
+  ``MGCP_BYPASS`` to disable all. UserPromptSubmit parses those tokens,
+  lowercases the scope and writes ``turn_bypass_scopes`` to
+  workflow_state.json; the hook compares it to ``bypass_scope`` verbatim,
+  so an upper-case scope here can never be bypassed.
 """
 from __future__ import annotations
 
-import fnmatch
 import json
 import os
-import re
-import shlex
-import subprocess
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 ENFORCEMENT_CONFIG_FILENAME = "enforcement_rules.json"
-BYPASS_ALL = "*"
-
-SHELL_SEPARATORS = {"&&", "||", "&", ";", ";;", "|", "(", ")", "{", "}"}
-# `git` at a command boundary. Applied to raw text only when tokenizing fails.
-_GIT_AT_BOUNDARY_RE = re.compile(r"(?:^|[\s;&|(){}])git(?=\s)")
-# Global flags that consume the NEXT token as their value, so the subcommand
-# sits one slot further along: `git -C /path commit` is still a commit.
-_GIT_VALUE_FLAGS = {
-    "-C", "-c", "--git-dir", "--work-tree", "--namespace",
-    "--exec-path", "--config-env", "--super-prefix",
-}
-# How far past `git` to look for the subcommand in the raw-text fallback.
-_GIT_RAW_LOOKAHEAD = 6
 
 
 # ============================================================================
@@ -258,15 +251,19 @@ def _config_path() -> Path:
 
 
 def load_config(path: Path | None = None) -> EnforcementConfig:
-    """Load enforcement rules. Returns a default config on any failure."""
+    """Load enforcement rules.
+
+    A missing file means a fresh install, so the defaults are the truth.
+    A file that exists but does not parse is NOT: substituting the defaults
+    there is how a write tool silently overwrites rules the hook is still
+    enforcing from the very file it could not read. Let it raise; each MCP
+    tool already turns the exception into a message the caller sees.
+    """
     p = path or _config_path()
     if not p.exists():
         return default_config()
-    try:
-        data = json.loads(p.read_text())
-        return EnforcementConfig.model_validate(data)
-    except (json.JSONDecodeError, OSError, ValueError):
-        return default_config()
+    data = json.loads(p.read_text())
+    return EnforcementConfig.model_validate(data)
 
 
 def save_config(config: EnforcementConfig, path: Path | None = None) -> None:
@@ -275,299 +272,3 @@ def save_config(config: EnforcementConfig, path: Path | None = None) -> None:
     p.write_text(json.dumps(config.model_dump(), indent=2))
 
 
-# ============================================================================
-# Evaluator
-# ============================================================================
-
-
-def tokenize_command(command: str) -> list[str]:
-    """Tokenize a shell command, keeping quoted strings intact and
-    splitting shell operators into their own tokens. Raises ValueError
-    on unterminated quotes."""
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    return list(lexer)
-
-
-def _scan_git_subcommand_raw(line: str, subcommands: list[str]) -> str | None:
-    """Last-resort scan of raw text for ``git <sub>`` at a command boundary.
-
-    Used only when the line cannot be tokenized. Detection must not depend on
-    the command being well-formed: an unterminated quote is author-controlled
-    text, so treating it as "not a git command" turns any apostrophe in a
-    commit message into a way through the gate.
-    """
-    for match in _GIT_AT_BOUNDARY_RE.finditer(line):
-        for tok in line[match.end():].split()[:_GIT_RAW_LOOKAHEAD]:
-            if tok in subcommands:
-                return tok
-    return None
-
-
-def _subcommand_after_git(tokens: list[str], i: int) -> str | None:
-    """The subcommand token following ``git`` at index ``i``, skipping global
-    flags. Without this, ``git -C /path commit`` read as subcommand ``-C`` and
-    matched nothing, so prefixing any gated command with ``-C .`` skipped it."""
-    j = i + 1
-    while j < len(tokens) and tokens[j].startswith("-"):
-        flag = tokens[j]
-        j += 1
-        if flag in _GIT_VALUE_FLAGS and j < len(tokens):
-            j += 1
-    return tokens[j] if j < len(tokens) else None
-
-
-def detect_git_subcommand(command: str, subcommands: list[str]) -> str | None:
-    """Return the matched subcommand if ``command`` invokes
-    ``git <sub>`` at a command boundary for any sub in ``subcommands``.
-
-    Scanned line by line. A newline is a command separator in shell, but
-    ``shlex`` with ``whitespace_split`` consumes it as ordinary whitespace, so
-    a single token stream cannot tell ``cd /x`` NEWLINE ``git commit`` from
-    ``cd /x git commit`` -- and in the token stream ``git`` no longer sits at a
-    command boundary, so the trigger silently stopped matching. Splitting first
-    keeps every line's first word a real command start.
-
-    Lines that fail to tokenize fall back to a raw scan rather than being
-    skipped: both paths fail closed, because a command this function cannot
-    read is not evidence that the command is safe.
-    """
-    for line in command.splitlines():
-        if not line.strip():
-            continue
-        try:
-            tokens = tokenize_command(line)
-        except ValueError:
-            found = _scan_git_subcommand_raw(line, subcommands)
-            if found:
-                return found
-            continue
-
-        at_command_start = True
-        for i, tok in enumerate(tokens):
-            if tok in SHELL_SEPARATORS:
-                at_command_start = True
-                continue
-            if at_command_start and tok == "git":
-                sub = _subcommand_after_git(tokens, i)
-                if sub in subcommands:
-                    return sub
-            at_command_start = False
-    return None
-
-
-def trigger_matches(trigger: Trigger, tool_name: str, tool_input: dict) -> bool:
-    """True iff the trigger matches the incoming tool call."""
-    if trigger.tool_name != "*" and trigger.tool_name != tool_name:
-        return False
-
-    cm = trigger.command_match
-    if cm is None:
-        return True
-
-    # command_match only applies to Bash
-    if tool_name != "Bash":
-        return False
-
-    command = str(tool_input.get("command", ""))
-    if cm.type == "git_subcommand":
-        return detect_git_subcommand(command, cm.subcommands) is not None
-    if cm.type == "regex":
-        try:
-            return re.search(cm.pattern, command) is not None
-        except re.error:
-            return False
-    if cm.type == "contains":
-        return cm.pattern in command
-    return False
-
-
-def get_staged_files(cwd: str) -> list[str]:
-    """Run ``git diff --cached --name-only`` and return the list. Empty
-    list on any git / subprocess failure."""
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode != 0:
-            return []
-        return [line for line in result.stdout.splitlines() if line.strip()]
-    except (OSError, subprocess.SubprocessError):
-        return []
-
-
-def check_coupling(
-    staged: list[str], when_staged: list[str], require_one_of: list[str]
-) -> tuple[bool, list[str]]:
-    """Return (satisfied, triggering_staged_files).
-
-    A coupling is satisfied iff either (a) no staged file matches
-    ``when_staged``, or (b) at least one staged file matches
-    ``require_one_of``.
-    """
-    triggering = [p for p in staged if any(fnmatch.fnmatch(p, w) for w in when_staged)]
-    if not triggering:
-        return True, []
-    for p in staged:
-        if any(fnmatch.fnmatch(p, r) for r in require_one_of):
-            return True, triggering
-    return False, triggering
-
-
-def evaluate_precondition(
-    pre: Precondition,
-    state: dict,
-    staged_files: list[str],
-    tool_input: dict | None = None,
-) -> tuple[bool, str]:
-    """Evaluate one precondition. Returns (satisfied, failure_detail).
-
-    ``tool_input`` is the dict of arguments the LLM passed to the tool
-    being gated. Required for ``tool_input_glob``; ignored by other
-    types. Defaults to ``{}`` so existing callers without a tool_input
-    keep working (the older types do not need it).
-    """
-    tool_input = tool_input or {}
-    called = state.get("turn_tools_called") or []
-
-    if pre.type == "tool_called_this_turn":
-        if pre.tool_name in called:
-            return True, ""
-        return False, f"Required tool not called this turn: {pre.tool_name}"
-
-    if pre.type == "tool_not_called_this_turn":
-        if pre.tool_name not in called:
-            return True, ""
-        return False, f"Forbidden tool called this turn: {pre.tool_name}"
-
-    if pre.type == "staged_files_coupling":
-        unsatisfied: list[str] = []
-        for c in pre.couplings:
-            when = c.get("when_staged") or []
-            req = c.get("require_one_of") or []
-            if not when or not req:
-                continue
-            ok, triggering = check_coupling(staged_files, when, req)
-            if not ok:
-                unsatisfied.append(
-                    f"  - staged: {', '.join(triggering)} → require one of: {', '.join(req)}"
-                )
-        if not unsatisfied:
-            return True, ""
-        return False, "Doc-coupling violations:\n" + "\n".join(unsatisfied)
-
-    if pre.type == "tool_input_glob":
-        # Malformed precondition (no field or no globs) → fail open.
-        if not pre.field or not pre.deny_globs:
-            return True, ""
-        value = tool_input.get(pre.field)
-        # Field missing or wrong type → fail open. Enforcement is a net,
-        # not a tripwire; misshapen tool inputs should not produce false
-        # positives.
-        if not isinstance(value, str):
-            return True, ""
-        for pattern in pre.deny_globs:
-            try:
-                if fnmatch.fnmatch(value, pattern):
-                    return (
-                        False,
-                        f"tool_input.{pre.field} = {value!r} matches deny pattern {pattern!r}",
-                    )
-            except Exception:
-                continue  # malformed glob → skip this pattern
-        return True, ""
-
-    # Unknown type — fail open (skip, don't block)
-    return True, ""
-
-
-class Violation(BaseModel):
-    rule_name: str
-    bypass_scope: str
-    deny_reason: str
-    precondition_details: list[str]
-
-
-def evaluate_rules(
-    config: EnforcementConfig,
-    tool_name: str,
-    tool_input: dict,
-    state: dict,
-    project_dir: str,
-    bypass_scopes: set[str] | None = None,
-) -> list[Violation]:
-    """Apply every enabled, triggered, non-bypassed rule. Return
-    violations (rules whose preconditions were not satisfied)."""
-    bypass_scopes = bypass_scopes or set()
-    if BYPASS_ALL in bypass_scopes:
-        return []
-
-    violations: list[Violation] = []
-    staged_files: list[str] | None = None  # lazy fetch
-
-    for rule in config.rules:
-        if not rule.enabled:
-            continue
-        if rule.bypass_scope in bypass_scopes:
-            continue
-        try:
-            if not trigger_matches(rule.trigger, tool_name, tool_input):
-                continue
-        except Exception:
-            continue  # fail open on malformed trigger
-
-        # Fetch staged files lazily (only if any precondition needs them)
-        needs_staged = any(
-            p.type == "staged_files_coupling" for p in rule.preconditions
-        )
-        if needs_staged and staged_files is None:
-            staged_files = get_staged_files(project_dir)
-
-        unsatisfied: list[str] = []
-        for pre in rule.preconditions:
-            try:
-                ok, detail = evaluate_precondition(
-                    pre, state, staged_files or [], tool_input
-                )
-            except Exception:
-                ok, detail = True, ""  # fail open on malformed precondition
-            if not ok:
-                unsatisfied.append(detail)
-
-        if unsatisfied:
-            violations.append(
-                Violation(
-                    rule_name=rule.name,
-                    bypass_scope=rule.bypass_scope,
-                    deny_reason=rule.deny_reason,
-                    precondition_details=unsatisfied,
-                )
-            )
-
-    return violations
-
-
-# ============================================================================
-# Bypass token parser (used by UserPromptSubmit hook)
-# ============================================================================
-
-
-BYPASS_TOKEN_RE = re.compile(r"MGCP_BYPASS(?::([A-Za-z0-9_-]+))?", re.IGNORECASE)
-
-
-def parse_bypass_scopes(prompt: str) -> list[str]:
-    """Extract bypass scopes from a user prompt.
-
-    - Bare ``MGCP_BYPASS`` → ``"*"`` (all)
-    - ``MGCP_BYPASS:git`` → ``"git"``
-    - Multiple tokens allowed.
-    """
-    scopes: list[str] = []
-    for match in BYPASS_TOKEN_RE.finditer(prompt):
-        scope = match.group(1)
-        scopes.append(scope if scope else BYPASS_ALL)
-    return scopes

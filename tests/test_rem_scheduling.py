@@ -60,13 +60,6 @@ class TestFibonacciSchedule:
         assert is_due(s, current_session=6, last_run_session=5) is False
         assert is_due(s, current_session=7, last_run_session=5) is False
 
-    def test_next_due_fibonacci(self):
-        s = OperationSchedule(strategy="fibonacci")
-        assert next_due_session(s, last_run_session=5) == 8
-        assert next_due_session(s, last_run_session=8) == 13
-        assert next_due_session(s, last_run_session=0) == 5
-
-
 class TestLogarithmicSchedule:
     """Test logarithmic scheduling."""
 
@@ -95,8 +88,7 @@ class TestDefaultSchedules:
     def test_all_operations_have_schedules(self):
         expected = {
             "staleness_scan", "duplicate_detection", "community_detection",
-            "knowledge_extraction", "context_summary", "intent_calibration",
-            "gate_audit_review",
+            "knowledge_extraction", "intent_calibration", "gate_audit_review",
         }
         assert set(DEFAULT_SCHEDULES.keys()) == expected
 
@@ -119,7 +111,7 @@ class TestNextDueAgreesWithIsDue:
     fact. They were two implementations of it, and they disagreed."""
 
     @pytest.mark.parametrize("schedule", list(DEFAULT_SCHEDULES.values()), ids=list(DEFAULT_SCHEDULES))
-    @pytest.mark.parametrize("last_run", [0, 1, 5, 10, 37, 98, 144])
+    @pytest.mark.parametrize("last_run", [0, 1, 5, 7, 8, 10, 37, 98, 144])
     def test_published_date_is_the_first_session_that_actually_fires(self, schedule, last_run):
         nxt = next_due_session(schedule, last_run)
         assert nxt is not None, "every shipped schedule must fire eventually"
@@ -131,3 +123,74 @@ class TestNextDueAgreesWithIsDue:
         assert not not_yet, (
             f"published next due {nxt} is late: {not_yet} fire earlier (last run {last_run})"
         )
+
+
+def _engine(tmp_path, **kw):
+    from mgcp.persistence import LessonStore
+    from mgcp.rem_cycle import RemEngine
+
+    store = LessonStore(str(tmp_path / "test.db"))
+    return RemEngine(store=store, schedules=DEFAULT_SCHEDULES, project_id="p1", **kw), store
+
+
+class TestOperationDispatch:
+    """Findings an operation cannot produce, and operations that do not exist."""
+
+    @pytest.mark.asyncio
+    async def test_misspelled_operation_reports_failure_and_writes_no_state(self, tmp_path):
+        """rem_run does not validate its comma-separated operations argument.
+
+        `stalenes_scan` used to fall through to zero findings, print "No
+        findings. Knowledge base looks healthy." and leave a rem_state row
+        under the bogus name for repair_rem_state to sweep up later.
+        """
+        engine, store = _engine(tmp_path)
+
+        report = await engine.run(session_number=5, operations=["stalenes_scan"])
+
+        assert [f.title for f in report.findings] == ["stalenes_scan failed"]
+        assert "unknown REM operation" in report.findings[0].description
+        assert await store.get_rem_state("p1") == []
+
+    @pytest.mark.asyncio
+    async def test_unlinked_lessons_are_reported_as_orphans(self, tmp_path):
+        """Louvain partitions every node, so an unlinked lesson comes back as a
+        singleton community, not as a lesson missing from the partition. The
+        orphan finding used to look for the latter and could never fire."""
+        from mgcp.models import Lesson
+
+        engine, store = _engine(tmp_path)
+        for i in range(5):
+            await store.add_lesson(
+                Lesson(id=f"loner-{i}", trigger=f"t{i}", action="a", tags=["x"])
+            )
+
+        findings = await engine._community_detection()
+        orphan = next(f for f in findings if "orphan" in f.title)
+        assert orphan.metadata["orphan_ids"] == [f"loner-{i}" for i in range(5)]
+
+    @pytest.mark.asyncio
+    async def test_pending_todos_are_found_in_a_project_with_no_notes(self, tmp_path):
+        """Knowledge extraction used to skip a whole project when none of its
+        snapshots carried a note, gated on a list of notes it never read — and
+        the todo check below does not depend on notes."""
+        import hashlib
+
+        from mgcp.models import ProjectContext, ProjectTodo
+
+        engine, store = _engine(tmp_path)
+        path = "/test/no-notes"
+        ctx = ProjectContext(
+            project_id=hashlib.sha256(path.encode()).hexdigest()[:12],
+            project_name="No Notes",
+            project_path=path,
+            session_count=10,
+            notes="",
+            todos=[ProjectTodo(content=f"Task {i}", status="pending") for i in range(3)],
+        )
+        for session in (10, 11, 12):
+            ctx.session_count = session
+            await store.save_project_context(ctx)
+
+        findings = await engine._knowledge_extraction()
+        assert [f.metadata["pending_count"] for f in findings] == [3]

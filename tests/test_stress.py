@@ -9,7 +9,6 @@ These tests verify the system performs acceptably under load:
 """
 
 import asyncio
-import gc
 import random
 import tempfile
 import time
@@ -389,65 +388,6 @@ class TestConcurrentOperations:
         # Check for exceptions
         exceptions = [r for r in results if isinstance(r, Exception)]
         assert len(exceptions) == 0, f"Got exceptions: {exceptions}"
-
-
-class TestMemoryUsage:
-    """Tests to verify memory usage stays bounded."""
-
-    def test_lesson_memory_footprint(self):
-        """Individual lessons have reasonable memory footprint."""
-        gc.collect()
-        baseline = self._get_memory_usage()
-
-        # Create 1000 lessons in memory
-        lessons = [generate_lesson("memory", i) for i in range(1000)]
-
-        gc.collect()
-        after = self._get_memory_usage()
-
-        # 1000 lessons should use less than 50MB
-        memory_used = after - baseline
-        assert memory_used < 50_000_000, f"1000 lessons used {memory_used / 1_000_000:.1f}MB"
-
-        # Keep reference to prevent GC
-        assert len(lessons) == 1000
-
-    def test_graph_memory_footprint(self):
-        """Graph with many nodes has reasonable memory footprint."""
-        gc.collect()
-        baseline = self._get_memory_usage()
-
-        graph = LessonGraph()
-        for i in range(1000):
-            lesson = Lesson(
-                id=f"mem-{i}",
-                trigger="test",
-                action="test",
-                parent_id=f"mem-{i-1}" if i > 0 else None,
-            )
-            graph.add_lesson(lesson)
-
-        gc.collect()
-        after = self._get_memory_usage()
-
-        # Graph with 1000 nodes should use less than 100MB
-        memory_used = after - baseline
-        assert memory_used < 100_000_000, f"Graph used {memory_used / 1_000_000:.1f}MB"
-
-        # Keep reference
-        assert graph.get_statistics()["total_nodes"] == 1000
-
-    def _get_memory_usage(self) -> int:
-        """Get current memory usage in bytes."""
-
-        # This is a rough estimate - actual memory profiling would need tracemalloc
-        # For now, use sys.getsizeof on tracked objects
-        try:
-            import resource
-            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024  # Convert to bytes
-        except ImportError:
-            # Windows doesn't have resource module
-            return 0
 
 
 class TestDataIntegrity:

@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""SessionStart hook for MGCP v2.7.
+"""SessionStart hook for MGCP.
 
 Injects only session-start bootstrap instructions:
 - Read soliloquy / get project context / query lessons
 - Workflow execution discipline
 - Stale hook reference detection (tells user to run mgcp-init --force)
 - REM operations overdue detection (tells me to call rem_run)
+- Apology-gate contest-rate spike warning (tells the human to read the audit)
+
+This list is the SessionStart token budget, so anything appended to
+``warning_blocks`` belongs in it. No version number in the header: three of
+these hooks claimed v2.4 while ``hook_templates/VERSION`` said 2.13, and an
+annotation nobody bumps is worse than none.
 
 Intent classification + action mapping is deliberately NOT injected here.
 The UserPromptSubmit dispatcher re-injects the (classifier + inline

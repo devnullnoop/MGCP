@@ -1,6 +1,7 @@
 """Tests for data operations - export, import, duplicates."""
 
 import json
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,7 +13,7 @@ from mgcp.data_ops import (
     export_projects,
     find_duplicates,
     import_lessons,
-    suggest_tags,
+    main_export,
 )
 from mgcp.models import Example, Lesson, ProjectContext, ProjectTodo, Relationship
 
@@ -504,6 +505,47 @@ class TestImportLessons:
         assert len(result["errors"]) >= 1 or result["imported"] == 2
 
     @pytest.mark.asyncio
+    async def test_import_reports_non_dict_entries(self, temp_dir):
+        """A lessons list of strings parses as JSON; the report must survive it."""
+        import_file = temp_dir / "import.json"
+        import_file.write_text(json.dumps({"lessons": ["just a string", None]}))
+
+        with (
+            patch("mgcp.data_ops.LessonStore") as MockStore,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
+        ):
+            mock_store = MagicMock()
+            mock_store.get_all_lessons = AsyncMock(return_value=[])
+            MockStore.return_value = mock_store
+            MockVector.return_value = MagicMock()
+
+            result = await import_lessons(import_file)
+
+        assert result["imported"] == 0
+        assert len(result["errors"]) == 2
+        assert all("unknown" in e for e in result["errors"])
+
+    @pytest.mark.asyncio
+    async def test_import_of_a_projects_export_is_an_error_not_a_no_op(self, temp_dir):
+        """mgcp-export projects has no import counterpart; say so instead of exit 0."""
+        import_file = temp_dir / "proj.json"
+        import_file.write_text(json.dumps({"projects": [{"project_id": "abc"}]}))
+
+        with (
+            patch("mgcp.data_ops.LessonStore") as MockStore,
+            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
+        ):
+            mock_store = MagicMock()
+            mock_store.get_all_lessons = AsyncMock(return_value=[])
+            MockStore.return_value = mock_store
+            MockVector.return_value = MagicMock()
+
+            result = await import_lessons(import_file)
+
+        assert result["total"] == 0
+        assert "mgcp-backup --restore" in result["errors"][0]
+
+    @pytest.mark.asyncio
     async def test_import_detects_trigger_duplicates(self, temp_dir, sample_lessons):
         """Test that duplicates are detected by trigger, not just ID."""
         import_file = temp_dir / "import.json"
@@ -632,100 +674,6 @@ class TestFindDuplicates:
 
         if len(duplicates) >= 2:
             assert duplicates[0]["similarity"] >= duplicates[1]["similarity"]
-
-
-# =============================================================================
-# Tag Suggestion Tests
-# =============================================================================
-
-
-class TestSuggestTags:
-    """Tests for tag suggestion functionality."""
-
-    @pytest.mark.asyncio
-    async def test_suggest_tags_from_similar_lessons(self, sample_lessons):
-        """Test that tags are suggested from similar lessons."""
-        with (
-            patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
-        ):
-            mock_store = MagicMock()
-            mock_store.get_lesson = AsyncMock(
-                side_effect=lambda id: next(
-                    (l for l in sample_lessons if l.id == id), None
-                )
-            )
-            MockStore.return_value = mock_store
-
-            mock_vector = MagicMock()
-            mock_vector.search = MagicMock(
-                return_value=[("lesson-2", 0.90), ("lesson-3", 0.85)]
-            )
-            MockVector.return_value = mock_vector
-
-            suggestions = await suggest_tags("lesson-1", max_tags=5)
-
-        assert isinstance(suggestions, list)
-
-    @pytest.mark.asyncio
-    async def test_suggest_tags_excludes_existing(self, sample_lessons):
-        """Test that existing tags are not suggested."""
-        with (
-            patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
-        ):
-            mock_store = MagicMock()
-            mock_store.get_lesson = AsyncMock(
-                side_effect=lambda id: next(
-                    (l for l in sample_lessons if l.id == id), None
-                )
-            )
-            MockStore.return_value = mock_store
-
-            mock_vector = MagicMock()
-            mock_vector.search = MagicMock(return_value=[("lesson-2", 0.90)])
-            MockVector.return_value = mock_vector
-
-            suggestions = await suggest_tags("lesson-1")
-
-        # lesson-1 already has "python", so it shouldn't be suggested
-        assert "python" not in suggestions
-
-    @pytest.mark.asyncio
-    async def test_suggest_tags_respects_limit(self, sample_lessons):
-        """Test that max_tags limit is respected."""
-        with (
-            patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
-        ):
-            mock_store = MagicMock()
-            mock_store.get_lesson = AsyncMock(return_value=sample_lessons[0])
-            MockStore.return_value = mock_store
-
-            mock_vector = MagicMock()
-            mock_vector.search = MagicMock(
-                return_value=[("lesson-2", 0.90), ("lesson-3", 0.85)]
-            )
-            MockVector.return_value = mock_vector
-
-            suggestions = await suggest_tags("lesson-1", max_tags=2)
-
-        assert len(suggestions) <= 2
-
-    @pytest.mark.asyncio
-    async def test_suggest_tags_nonexistent_lesson(self):
-        """Test handling of non-existent lesson."""
-        with (
-            patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.QdrantVectorStore"),
-        ):
-            mock_store = MagicMock()
-            mock_store.get_lesson = AsyncMock(return_value=None)
-            MockStore.return_value = mock_store
-
-            suggestions = await suggest_tags("nonexistent")
-
-        assert suggestions == []
 
 
 # =============================================================================
@@ -886,3 +834,17 @@ class TestDataOpsRegressions:
             duplicates = await find_duplicates()
 
         assert isinstance(duplicates, list)
+
+
+class TestExportCLI:
+    """Tests for the mgcp-export argument handling."""
+
+    def test_export_all_without_output_is_rejected(self, monkeypatch, capsys):
+        """Both halves would print to stdout, producing unparseable JSON."""
+        monkeypatch.setattr(sys, "argv", ["mgcp-export", "all"])
+
+        with pytest.raises(SystemExit) as exc:
+            main_export()
+
+        assert exc.value.code == 2
+        assert "--output is required" in capsys.readouterr().err

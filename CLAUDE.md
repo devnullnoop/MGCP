@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **MGCP** (Memory Graph Core Primitives) is a Python MCP server providing persistent, graph-based memory for LLM interactions. The system stores lessons learned during LLM sessions in a graph structure, allowing semantic querying without loading full context histories.
 
-**Status**: Alpha/Research project — package version 2.1.0 (`pyproject.toml`, `mgcp.__version__`); the hook/feature line is versioned separately and sits at v2.11 (`src/mgcp/hook_templates/VERSION`), with all v2.2+ work under CHANGELOG `[Unreleased]`. Phases 1-7 complete, actively dogfooding. Phase 8's *strategy* — graduating lessons out of `query_lessons` into compiled skill prompts — was dropped for degrading reliability. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
+**Status**: Alpha/Research project — package version 2.1.0 (`pyproject.toml`, `mgcp.__version__`); the hook/feature line is versioned separately and sits at v2.13 (`src/mgcp/hook_templates/VERSION` — that file is authoritative; this line has twice been written stale in the same commit that bumped it), with all v2.2+ work under CHANGELOG `[Unreleased]`. Phases 1-7 complete, actively dogfooding. Phase 8's *strategy* — graduating lessons out of `query_lessons` into compiled skill prompts — was dropped for degrading reliability. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
 
 ## Documentation Preferences
 
@@ -71,7 +71,7 @@ mgcp-duplicates -t 0.90              # Higher threshold for stricter matching
 mgcp-bootstrap                       # Seed all (core + dev)
 mgcp-bootstrap --update-triggers     # Update trigger fields on existing lessons
 
-# Migrate from ChromaDB to Qdrant (for existing installations)
+# Rebuild the Qdrant index from SQLite (lessons.db is the source of truth)
 mgcp-migrate                         # Migrate data to Qdrant
 mgcp-migrate --dry-run               # Preview what would be migrated
 mgcp-migrate --force                 # Overwrite existing Qdrant data
@@ -93,11 +93,10 @@ All source files are in `src/mgcp/`:
 - `qdrant_catalogue_store.py` - Qdrant integration for project catalogue search
 - `persistence.py` - SQLite/JSON storage for lessons, project contexts, and community summaries
 - `telemetry.py` - Usage tracking and analytics
-- `web_server.py` - FastAPI web UI for browsing lessons/projects
+- `web_server.py` - FastAPI API + the instrument panel (8 analytics endpoints, one served app)
 - `launcher.py` - Unified CLI launcher
 - `bootstrap.py` - Initial lesson seeding
-- `migration.py` - ChromaDB to Qdrant migration tool
-- `migrations.py` - Database migrations
+- `migration.py` - Rebuilds the Qdrant index from SQLite
 - `init_project.py` - Multi-client MCP configuration (8 LLM clients supported)
 - `data_ops.py` - Export, import, and duplicate detection
 - `rem_cycle.py` - REM (Recalibrate Everything in Memory) cycle engine
@@ -111,6 +110,8 @@ All source files are in `src/mgcp/`:
 - `skill_compiler.py` - Compiles intent + workflow + lessons into SKILL.md (v2.3)
 
 ### Data Model
+
+**Every agent-facing write is envelope-guarded.** `reject_tool_call_envelope` (`models.py`) runs on all six: `add_lesson`, `update_lesson`, `save_project_context`, `save_workflow`, `save_community_summary` and `write_soliloquy`. It refuses text that is a serialised tool-call envelope rather than prose — the corruption that had already reached 7 of 24 stored project contexts before the guard existed, and which `get_project_context` still has to tolerate on read so those projects can resume.
 
 **Lessons** have hierarchical relationships (parent/child) and typed cross-links. Key fields:
 - `trigger`: When the lesson applies (keywords/patterns)
@@ -176,7 +177,7 @@ All source files are in `src/mgcp/`:
 
 **REM Cycle (3):** All three take an optional `project_path` (empty = `CLAUDE_PROJECT_DIR`, else cwd) and report an error rather than a guess when that project has no saved context.
 - `rem_run` - Run consolidation operations (staleness, duplicates, communities)
-- `rem_report` - View last cycle's findings for this project
+- `rem_report` - Per-operation last run, next due and finding count for this project. Findings themselves are not persisted — only `{"finding_count": N}` reaches `rem_state`
 - `rem_status` - Show schedule state and what's due for this project
 
 **The REM cadence is per project; the corpus is global.** A cycle triggered from
@@ -251,6 +252,33 @@ cwd. Entries written before tagging existed carry no project tag and read as
 - `remove_enforcement_rule` - Delete a rule by name
 - `toggle_enforcement_rule` - Enable/disable without deleting
 
+## Web UI
+
+`python -m mgcp.web_server` serves an instrument panel at `/` — one document, eight views, routed
+client-side on the hash. It replaced eight separate pages in v2.13; those pages answered "what is
+stored" and covered none of enforcement, REM, the gate audit or the journal.
+
+| View | Question it answers |
+|------|---------------------|
+| Signal | Is the memory working? Match quality over time, and the matched-vs-bridged split |
+| Retrieval | Which queries failed to surface anything good — the miss log, with an adjustable threshold |
+| Effectiveness | Which lessons earn their place: matched count against mean score when matched |
+| Enforcement | What the gates did: denials, capture rate, per-rule fires, every contested fire |
+| Graph | Lessons, categories, workflows and steps, and which lessons carry no edges |
+| REM | What maintenance is due, per project, on that project's own clock |
+| Journal | The soliloquy record — the only surface that shows it |
+| Curate | Edit and delete lessons, compile intents to skills |
+
+Backed by eight read-only analytics endpoints in `web_server.py` (`/api/signal`,
+`/api/retrieval/*`, `/api/effectiveness`, `/api/gate-audit`, `/api/enforcement/rules`,
+`/api/rem/state`, `/api/soliloquies`). Two rules the views follow, both load-bearing rather than
+decorative: a slot logged with score `0.0` was **appended by the community bridge, not matched**,
+and averaging the two together is what made a good lesson read as 2% relevant; and status is shown
+as a glyph plus a word, never hue alone, because `good` and `critical` measure a CVD ΔE of 4.1.
+
+Buildless: Tailwind-free CSS, d3 from a CDN, no npm and no build step. Assets live in
+`src/mgcp/static/app/`.
+
 ## Claude Code Integration
 
 Add to Claude Code MCP config (`~/.claude.json`):
@@ -260,8 +288,7 @@ Add to Claude Code MCP config (`~/.claude.json`):
   "mcpServers": {
     "mgcp": {
       "command": "python",
-      "args": ["-m", "mgcp.server"],
-      "cwd": "/path/to/MGCP"
+      "args": ["-m", "mgcp.server"]
     }
   }
 }
@@ -275,13 +302,13 @@ MGCP v2.2 makes the routing prompt **data, not code**. The intent classification
 
 | Hook | Event | Type | Purpose |
 |------|-------|------|---------|
-| `session-init.py` | SessionStart | advisory | Inject the session-start bootstrap checklist (read_soliloquy / get_project_context / query_lessons) and workflow execution discipline. (v2.5: no longer duplicates the dispatcher's routing/actions block. v2.6: detects stale `.py` hook references in settings.json. v2.7: detects overdue REM operations from `rem_state` and recommends `rem_run`.) |
-| `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Hard keyword gates (loaded from `intent_config.json` — both git AND session_end fire from one loop), terse routing re-injection, scheduled reminders, workflow state, per-turn enforcement state reset, `MGCP_BYPASS` token detection |
-| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | Generic data-driven evaluator. Reads `~/.mgcp/enforcement_rules.json` on every tool call and applies every enabled, triggered, non-bypassed rule. Plus one built-in gate that lives outside the JSON because its trigger is assistant text, not a tool argument: an apology in the current turn (the seven v2.9 word-boundary regexes) denies every tool except `add_lesson`, `adjudicate_apology_gate`, and tool-discovery calls -- gating discovery would gate the exits themselves. Every gate and data-rule decision appends to `~/.mgcp/gate_audit.jsonl` until the lesson is written or a `not_apology` adjudication is recorded (v2.11 attest-or-comply; bypass `MGCP_BYPASS:apology`, human-only). Every denial — gate or data rule — appends to the `~/.mgcp/gate_audit.jsonl` audit log. Denies when preconditions unsatisfied. Bash commands are tokenized per line with `shlex(punctuation_chars=True)` — per line because a newline is a command separator that `shlex` otherwise eats — and git's global flags are skipped so `git -C /path commit` is still a commit. A line that cannot be tokenized (an apostrophe in a commit message) falls back to a raw boundary scan and **fails closed for git**, since a command the detector cannot read is not evidence the command is safe. Scoped bypass: `MGCP_BYPASS:<scope>` disables one scope, bare `MGCP_BYPASS` disables all. |
-| `post-tool-dispatcher.py` | PostToolUse | advisory | Routes by tool: Edit/Write triggers knowledge-capture checkpoint; Bash triggers error detection with cooldown; every tool call is appended to `turn_tools_called` on workflow_state.json, consumed by PreToolUse `tool_called_this_turn` preconditions. |
+| `session-init.py` | SessionStart | advisory | Injects the bootstrap checklist (`read_soliloquy` / `get_project_context` / `query_lessons`) and workflow execution discipline. Detects three things and reports them: stale `.py` hook references in settings.json, REM operations past their `next_due_session`, and a high apology-gate contest rate counted from `gate_audit.jsonl`. |
+| `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Applies hard keyword gates loaded from `intent_config.json` (git and session_end fire from one loop), re-injects the terse routing block, and delivers scheduled reminders. Resets per-turn state: clears `turn_tools_called` and any prior adjudication, records `turn_session_id`, and parses `MGCP_BYPASS[:scope]` into `turn_bypass_scopes`. |
+| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | The only hook that can refuse a tool call. Two mechanisms: a generic evaluator over `~/.mgcp/enforcement_rules.json`, and a built-in apology gate whose trigger is assistant text rather than a tool argument. While the gate is armed only `add_lesson`, `adjudicate_apology_gate` and the three discovery tools are permitted — gating discovery would gate the exits themselves. Fails open on any parse error. Bash commands are tokenised per line with `shlex(punctuation_chars=True)`, git's global flags are skipped so `git -C /path commit` is still a commit, and an untokenisable line falls back to a raw boundary scan that **fails closed for git only**. Scoped bypass: `MGCP_BYPASS:<scope>` disables one scope, bare `MGCP_BYPASS` disables all. See `docs/mgcp-interception-flow.html` for the decision diagram. |
+| `post-tool-dispatcher.py` | PostToolUse | advisory | Appends every tool name to `turn_tools_called`, which PreToolUse preconditions read. Edit/Write triggers a knowledge-capture checkpoint; Bash output is scanned for error patterns with a cooldown, over the whole serialised `tool_response` so stderr is included. |
 | `mgcp-precompact.py` | PreCompact | advisory | Critical reminder to save context (and write_soliloquy) before context compression |
 
-The dispatcher falls back to a minimal hard-coded intent set if the JSON file is missing or corrupt, so a fresh install never crashes. The PreToolUse hook fails open (allows the tool call) on any parse error — enforcement is a net, not a tripwire. Note the deliberate asymmetry on a missing/corrupt `enforcement_rules.json`: the hook fails open to *no rules*, while the MCP tools (`list_enforcement_rules` etc.) fall back to the built-in defaults — so in that state the tools report rules the hook is not enforcing until the file is recreated (any `add_enforcement_rule`/`update_enforcement_rule` call rewrites it). Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
+The dispatcher falls back to a minimal hard-coded intent set if the JSON file is missing or corrupt, so a fresh install never crashes. The PreToolUse hook fails open (allows the tool call) on any parse error — enforcement is a net, not a tripwire. The MCP tools deliberately do **not** match that: a *missing* `enforcement_rules.json` yields the built-in defaults (a fresh install has no other truth), but a file that exists and does not parse now raises, and the calling tool reports the parse error. Falling back to defaults there was worse than useless — the tool would load defaults, apply the caller's edit and save, silently overwriting whatever the user had written in the file the hook is still enforcing from. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
 
 **Advisory vs. enforcing.** The first four hooks inject text into `<system-reminder>` tags that the LLM may skim or ignore. `pre-tool-dispatcher.py` is different: it returns `permissionDecision: "deny"` with a `reason` string and the Claude Code harness refuses to run the tool. This addresses the repeated failure mode where `query-before-git-operations` was violated (v1→v4) despite correct hook fires. See `docs/mgcp-interception-flow.html` for the full interception map and remaining enforcement gaps.
 
@@ -289,7 +316,7 @@ The dispatcher falls back to a minimal hard-coded intent set if the JSON file is
 
 **Intent → Skill compilation (v2.3):** An intent + its linked workflow + the workflow's per-step lessons can be compiled into an Anthropic-format SKILL.md file at `~/.claude/skills/{intent_name}/SKILL.md` (user scope) or `<project>/.claude/skills/{intent_name}/SKILL.md` (project scope). The compiler walks intent → workflow → ordered steps → lessons-per-step and inlines all four layers into a single self-contained document. Compiled skills give intents two new firing channels — slash commands (`/git_operation`) and Claude's auto-discovery via description matching — on top of MGCP's hook-level keyword gates and LLM intent classification.
 
-**Critical anti-Phase-8 invariant:** compiling a skill is purely additive. It does NOT remove the source intent from `intent_config.json`, it does NOT remove backing lessons from the active query pool, and it does NOT change any MGCP behavior. The intent stays the source of truth and the skill is a downstream artifact you can recompile any time. This is the inverse of Phase 8's failure mode, where graduated lessons were hidden from `query_lessons` (degrading reliability). The web UI badges compiled skills as "fresh" or "stale" by comparing the skill file mtime against the intent_config.json mtime and the backing lessons' `last_refined` timestamps, so users know when to recompile.
+**Critical anti-Phase-8 invariant:** compiling a skill is purely additive. It does NOT remove the source intent from `intent_config.json`, it does NOT remove backing lessons from the active query pool, and it does NOT change any MGCP behavior. The intent stays the source of truth and the skill is a downstream artifact you can recompile any time. This is the inverse of Phase 8's failure mode, where graduated lessons were hidden from `query_lessons` (degrading reliability). Compilation is reachable from the instrument panel's Curate view, which posts to `/api/intent-config/intents/{name}/compile` — the same function the MCP tool calls.
 
 **Enforcement-as-data (v2.4):** The PreToolUse hook is a generic evaluator. Rules live in `~/.mgcp/enforcement_rules.json` with this shape:
 
@@ -316,7 +343,7 @@ The dispatcher falls back to a minimal hard-coded intent set if the JSON file is
 
 Trigger `command_match.type` ∈ {`git_subcommand`, `regex`, `contains`}. Precondition `type` ∈ {`tool_called_this_turn`, `tool_not_called_this_turn`, `staged_files_coupling`, `tool_input_glob`}. The staged-file coupling type takes `couplings: [{"when_staged": [glob,...], "require_one_of": [glob,...]}]` — if any staged file matches `when_staged`, at least one must match `require_one_of` or the tool call is denied. Use it to enforce doc-coupling, test-coupling, or changelog discipline on commits. The `tool_input_glob` type takes `field` (which `tool_input` key to read) and `deny_globs`, and denies when any glob matches that field — use it to gate Edit/Write against sensitive paths (settings.json, secrets) or to gate URL targets on web fetches. It fails open on a missing field or a non-string value.
 
-Per-turn state flows through `workflow_state.json`: UserPromptSubmit resets `turn_tools_called=[]` and parses `MGCP_BYPASS[:scope]` tokens into `turn_bypass_scopes`. PostToolUse appends every tool name to `turn_tools_called`. PreToolUse reads both. Schema + evaluator + defaults live in `src/mgcp/enforcement.py`; the hook re-implements the same semantics stdlib-only (no `mgcp` import). Both sides are tested against the same behavioral contract.
+Per-turn state flows through `workflow_state.json`: UserPromptSubmit resets `turn_tools_called=[]` and parses `MGCP_BYPASS[:scope]` tokens into `turn_bypass_scopes`. PostToolUse appends every tool name to `turn_tools_called`. PreToolUse reads both. Schema + defaults live in `src/mgcp/enforcement.py`; **the evaluator lives in the hook and only in the hook**, because the hook must be stdlib-only (no `mgcp` import) and a second copy in the package had no production caller — `server.py` imports the models and `load_config`/`save_config`, never the evaluator. That copy, and the ~300 lines of tests that were its only consumer, were deleted; the evaluator's contract is tested where the code runs, in `tests/test_pre_tool_dispatcher.py`. `tests/test_enforcement.py` covers the schema and its round-trip.
 
 ## Implementation Roadmap
 

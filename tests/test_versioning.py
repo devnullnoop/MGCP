@@ -2,8 +2,6 @@
 
 import hashlib
 import json
-import os
-import tempfile
 
 import pytest
 
@@ -15,14 +13,6 @@ from mgcp.models import (
     ProjectTodo,
 )
 from mgcp.persistence import LessonStore, _compute_catalogue_delta
-
-
-@pytest.fixture
-def temp_db():
-    """Create a temporary database for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "test.db")
-        yield db_path
 
 
 @pytest.fixture
@@ -378,3 +368,66 @@ class TestRemStatePerProjectMigration:
         # Writes still work against the rebuilt table.
         await second.update_rem_state("newcomer-id", "staleness_scan", session_number=12)
         assert len(await second.get_rem_state("newcomer-id")) == 1
+
+
+class TestContextHistoryIsOnePerSession:
+    """History rows are per SESSION, not per write.
+
+    Appending on every save produced ~9 rows per session, which made the
+    database mostly this table and made REM's `len(history) >= 10` gate and its
+    "pending for N sessions" reasoning fire after one or two real sessions.
+    """
+
+    @pytest.mark.asyncio
+    async def test_repeated_saves_in_one_session_keep_one_row(self, temp_db, sample_project):
+        store = LessonStore(temp_db)
+        for i in range(5):
+            sample_project.notes = f"save {i}"
+            await store.save_project_context(sample_project)
+
+        history = await store.get_context_history(sample_project.project_id)
+        assert len(history) == 1, f"expected 1 row for one session, got {len(history)}"
+        assert history[0]["notes"] == "save 4", "last write of the session must win"
+
+    @pytest.mark.asyncio
+    async def test_new_session_adds_a_row(self, temp_db, sample_project):
+        store = LessonStore(temp_db)
+        await store.save_project_context(sample_project)
+        sample_project.session_count = 2
+        sample_project.notes = "next session"
+        await store.save_project_context(sample_project)
+        sample_project.session_count = 2
+        sample_project.notes = "same session again"
+        await store.save_project_context(sample_project)
+
+        history = await store.get_context_history(sample_project.project_id)
+        assert [h["session_number"] for h in history] == [2, 1]
+        assert history[0]["notes"] == "same session again"
+
+    @pytest.mark.asyncio
+    async def test_migration_collapses_preexisting_duplicates(self, temp_db, sample_project):
+        """An old database full of per-write rows must open and be collapsed."""
+        store = LessonStore(temp_db)
+        await store.save_project_context(sample_project)
+
+        # Simulate the pre-fix shape: drop the guard, then append duplicates.
+        async with store._connection(commit=True) as conn:
+            await conn.execute("DROP INDEX IF EXISTS idx_context_history_session")
+            for i in range(6):
+                await conn.execute(
+                    """
+                    INSERT INTO context_history (
+                        project_id, session_number, timestamp, notes,
+                        active_files, todos, recent_decisions, catalogue_hash
+                    ) VALUES (?, 1, ?, ?, '[]', '[]', '[]', 'h')
+                    """,
+                    (sample_project.project_id, f"2026-01-0{i + 1}T00:00:00+00:00", f"dup {i}"),
+                )
+
+        assert len(await store.get_context_history(sample_project.project_id)) == 7
+
+        # Reopening runs the migration: collapse, then re-establish the index.
+        fresh = LessonStore(temp_db)
+        history = await fresh.get_context_history(sample_project.project_id)
+        assert len(history) == 1, f"migration did not collapse duplicates: {len(history)}"
+        assert history[0]["notes"] == "dup 5", "newest row per session must survive"

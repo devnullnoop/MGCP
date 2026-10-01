@@ -1,6 +1,5 @@
 """Tests for MGCP catalogue vector store."""
 
-import tempfile
 
 import pytest
 
@@ -18,13 +17,6 @@ from mgcp.qdrant_catalogue_store import QdrantCatalogueStore
 
 # Mark all tests in this module as slow - embedding operations are expensive in CI
 pytestmark = pytest.mark.slow
-
-
-@pytest.fixture
-def temp_qdrant():
-    """Create a temporary Qdrant store for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield tmpdir
 
 
 @pytest.fixture

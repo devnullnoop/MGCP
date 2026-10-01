@@ -1,4 +1,7 @@
-"""SQLite persistence layer for MGCP lessons and telemetry."""
+"""SQLite persistence layer for MGCP lessons, projects and workflows.
+
+Telemetry is not here: it has its own database and schema (``telemetry.py``).
+"""
 
 import asyncio
 import hashlib
@@ -63,27 +66,6 @@ CREATE TABLE IF NOT EXISTS lessons (
 CREATE INDEX IF NOT EXISTS idx_lessons_parent ON lessons(parent_id);
 CREATE INDEX IF NOT EXISTS idx_lessons_usage ON lessons(usage_count DESC);
 
-CREATE TABLE IF NOT EXISTS telemetry_events (
-    id TEXT PRIMARY KEY,
-    timestamp TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    event_type TEXT NOT NULL,
-    payload JSON NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_telemetry_session ON telemetry_events(session_id);
-CREATE INDEX IF NOT EXISTS idx_telemetry_type ON telemetry_events(event_type);
-CREATE INDEX IF NOT EXISTS idx_telemetry_time ON telemetry_events(timestamp);
-
-CREATE TABLE IF NOT EXISTS lesson_usage (
-    lesson_id TEXT PRIMARY KEY,
-    total_retrievals INTEGER DEFAULT 0,
-    last_retrieved TEXT,
-    avg_score REAL DEFAULT 0.0,
-    sessions_count INTEGER DEFAULT 0,
-    FOREIGN KEY (lesson_id) REFERENCES lessons(id)
-);
-
 CREATE TABLE IF NOT EXISTS project_contexts (
     project_id TEXT PRIMARY KEY,
     project_name TEXT NOT NULL,
@@ -110,8 +92,6 @@ CREATE TABLE IF NOT EXISTS workflows (
     created_at TEXT NOT NULL,
     version INTEGER NOT NULL DEFAULT 1
 );
-
-CREATE INDEX IF NOT EXISTS idx_workflow_tags ON workflows(tags);
 
 CREATE TABLE IF NOT EXISTS community_summaries (
     community_id TEXT PRIMARY KEY,
@@ -156,6 +136,10 @@ CREATE TABLE IF NOT EXISTS context_history (
 
 CREATE INDEX IF NOT EXISTS idx_context_history_project ON context_history(project_id);
 CREATE INDEX IF NOT EXISTS idx_context_history_time ON context_history(timestamp);
+-- idx_context_history_session (UNIQUE on project_id, session_number) is created
+-- in _run_migrations, NOT here: this script runs before migrations, so creating
+-- it here would raise IntegrityError on any existing database that still holds
+-- the pre-upsert duplicate rows and would refuse to open the store at all.
 
 -- The REM cadence is per project, so the cursor it is compared against must be
 -- too. Keyed on operation alone, one project's run recorded a last_run_session
@@ -202,7 +186,7 @@ def _compute_catalogue_delta(prev_json: str, new_json: str) -> dict:
     return delta
 
 
-async def repair_rem_state(conn: aiosqlite.Connection) -> int:
+async def repair_rem_state(conn: aiosqlite.Connection) -> None:
     """Recompute stored due dates, and drop rows for operations that are gone.
 
     Runs on every store open, because the numbers this repairs were written
@@ -222,25 +206,14 @@ async def repair_rem_state(conn: aiosqlite.Connection) -> int:
       rem_state and never checks it against the operations that ship, so a
       leftover row is not inert — it gets reported overdue by name.
 
-    Returns the number of rows changed.
+    Called last in ``_run_migrations``, so the table exists (SCHEMA ran first)
+    and is already on the (project_id, operation) key.
     """
-    cursor = await conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='rem_state'"
-    )
-    if not await cursor.fetchone():
-        return 0
-
-    cursor = await conn.execute("PRAGMA table_info(rem_state)")
-    columns = {row[1] for row in await cursor.fetchall()}
-    if "project_id" not in columns:
-        return 0  # pre-per-project layout; the re-key migration above handles it
-
     cursor = await conn.execute(
         "SELECT project_id, operation, last_run_session, next_due_session FROM rem_state"
     )
     rows = await cursor.fetchall()
 
-    changed = 0
     for project_id, operation, last_run, stored_due in rows:
         schedule = DEFAULT_SCHEDULES.get(operation)
         if schedule is None:
@@ -249,7 +222,6 @@ async def repair_rem_state(conn: aiosqlite.Connection) -> int:
                 (project_id, operation),
             )
             logger.info("Dropped rem_state row for unknown operation: %s", operation)
-            changed += 1
             continue
 
         correct = next_due_session(schedule, last_run or 0)
@@ -262,9 +234,6 @@ async def repair_rem_state(conn: aiosqlite.Connection) -> int:
             logger.info(
                 "Repaired next_due for %s: %s -> %s", operation, stored_due, correct
             )
-            changed += 1
-
-    return changed
 
 
 # Stores whose pooled connections must be stopped at interpreter exit.
@@ -277,6 +246,16 @@ async def repair_rem_state(conn: aiosqlite.Connection) -> int:
 # fires before that join.
 _live_stores: weakref.WeakSet = weakref.WeakSet()
 
+# Every connection this process has opened, tracked independently of the store
+# that opened it. Walking stores alone was not enough: it reaches only
+# connections sitting in `_pool`, so a connection CHECKED OUT at exit, or one
+# whose store has already been dropped from the WeakSet, kept its non-daemon
+# worker thread running and `threading._shutdown` blocked on the join forever.
+# Measured: `pytest tests/test_failure_recovery.py` reported "28 passed in
+# 3.2s" and then never exited, with two live aiosqlite worker threads in the
+# shutdown dump.
+_live_connections: weakref.WeakSet = weakref.WeakSet()
+
 
 def _stop_pooled_connections() -> None:
     for store in list(_live_stores):
@@ -286,6 +265,12 @@ def _stop_pooled_connections() -> None:
             except Exception:
                 pass
         store._pool.clear()
+    # Then anything still running that no pool is holding.
+    for conn in list(_live_connections):
+        try:
+            conn.stop()
+        except Exception:
+            pass
 
 
 threading._register_atexit(_stop_pooled_connections)
@@ -340,16 +325,31 @@ class LessonStore:
         # Create new connection
         conn = await aiosqlite.connect(self.db_path)
         conn.row_factory = aiosqlite.Row
+        # aiosqlite's worker thread is non-daemon, so it must be stoppable at
+        # exit whether or not it is in a pool when we get there.
+        _live_connections.add(conn)
 
-        # Initialize schema if needed (thread-safe)
-        async with self._init_lock:
-            if not self._initialized:
-                logger.info(f"Initializing database at {self.db_path}")
-                await conn.executescript(SCHEMA)
-                await self._run_migrations(conn)
-                await conn.commit()
-                self._initialized = True
-                logger.info("Database initialized successfully")
+        # Initialize schema if needed (thread-safe).
+        #
+        # Closed on failure, and this is the origin of the exit hang rather
+        # than a nicety: on a corrupt or unreadable database `executescript`
+        # raises, and the connection here was then neither pooled nor closed.
+        # aiosqlite's worker thread is non-daemon, so that one orphan blocked
+        # `threading._shutdown` forever — the process printed its result and
+        # never exited. Reproduced with a 2 KB file of garbage named *.db.
+        try:
+            async with self._init_lock:
+                if not self._initialized:
+                    logger.info(f"Initializing database at {self.db_path}")
+                    await conn.executescript(SCHEMA)
+                    await self._run_migrations(conn)
+                    await conn.commit()
+                    self._initialized = True
+                    logger.info("Database initialized successfully")
+        except BaseException:
+            await conn.close()
+            _live_connections.discard(conn)
+            raise
 
         return conn
 
@@ -384,25 +384,60 @@ class LessonStore:
                 "ALTER TABLE lessons ADD COLUMN relationships JSON NOT NULL DEFAULT '[]'"
             )
 
+        # Migration: collapse context_history to one snapshot per session, then
+        # enforce it. The table was appended to on every save_project_context
+        # call rather than once per session, so it grew ~9 rows per session and
+        # became the bulk of the database, while REM read row COUNT as a session
+        # count. Keep the newest row per (project_id, session_number) — that is
+        # the snapshot the readers want — and drop the rest. Idempotent: after
+        # the first run there is nothing to delete and the index already exists.
+        collapsed = await conn.execute(
+            """
+            DELETE FROM context_history
+            WHERE id NOT IN (
+                SELECT MAX(id) FROM context_history
+                GROUP BY project_id, session_number
+            )
+            """
+        )
+        if collapsed.rowcount and collapsed.rowcount > 0:
+            # Deliberately not VACUUMing here: it cannot run inside this
+            # transaction, and it rewrites the whole file, which is not
+            # something to do unannounced while opening a store. Say what it
+            # would buy and let the operator choose the moment.
+            logger.warning(
+                "context_history: collapsed %d duplicate rows to one snapshot per "
+                "session. The freed pages are still in the file; run "
+                "'sqlite3 %s VACUUM' to reclaim them (typically a large fraction "
+                "of the database).",
+                collapsed.rowcount,
+                self.db_path,
+            )
+        await conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_context_history_session
+                ON context_history(project_id, session_number)
+            """
+        )
+
         # `graduated_to` is deliberately NOT created. It was Phase 8's marker
         # for lessons graduated out of the query pool — the strategy that
         # degraded reliability and was dropped. Nothing has ever read or
         # written it (0 of 241 live rows are populated), so stores that
         # already have the column simply carry an unused one.
 
-        # Migration: Add catalogue column to project_contexts
         # Migration: Tag soliloquies with the project they were written in.
         # Storage stays global (one continuous inner voice); the tag only lets
         # the read prefer this project's own train of thought. Existing rows
         # keep project_id NULL and read as "untagged earlier session".
         cursor = await conn.execute("PRAGMA table_info(soliloquies)")
         soliloquy_columns = [row[1] for row in await cursor.fetchall()]
-        if soliloquy_columns and "project_id" not in soliloquy_columns:
+        if "project_id" not in soliloquy_columns:
             await conn.execute("ALTER TABLE soliloquies ADD COLUMN project_id TEXT")
 
         cursor = await conn.execute("PRAGMA table_info(project_contexts)")
         project_columns = [row[1] for row in await cursor.fetchall()]
-        if project_columns and "catalogue" not in project_columns:
+        if "catalogue" not in project_columns:
             await conn.execute(
                 "ALTER TABLE project_contexts ADD COLUMN catalogue JSON NOT NULL DEFAULT '{}'"
             )
@@ -421,7 +456,7 @@ class LessonStore:
         # the truth: REM has never been scheduled on its own clock.
         cursor = await conn.execute("PRAGMA table_info(rem_state)")
         rem_columns = [row[1] for row in await cursor.fetchall()]
-        if rem_columns and "project_id" not in rem_columns:
+        if "project_id" not in rem_columns:
             cursor = await conn.execute(
                 "SELECT project_id, project_name, session_count FROM project_contexts "
                 "ORDER BY session_count DESC, last_accessed DESC LIMIT 1"
@@ -431,17 +466,13 @@ class LessonStore:
 
             await conn.execute("DROP TABLE IF EXISTS rem_state_pre_project")
             await conn.execute("ALTER TABLE rem_state RENAME TO rem_state_pre_project")
-            await conn.execute("""
-                CREATE TABLE rem_state (
-                    project_id TEXT NOT NULL,
-                    operation TEXT NOT NULL,
-                    last_run_session INTEGER NOT NULL DEFAULT 0,
-                    last_run_timestamp TEXT NOT NULL,
-                    last_run_result JSON,
-                    next_due_session INTEGER,
-                    PRIMARY KEY (project_id, operation)
-                )
-            """)
+            # The rename leaves no rem_state, so replaying SCHEMA recreates it
+            # from the one definition there is. Spelling the CREATE out again
+            # here would mean a column added to SCHEMA gives a migrated store a
+            # different rem_state from a fresh one — and only on a machine that
+            # had the pre-per-project layout, which is where it would never be
+            # noticed. Every other statement in SCHEMA is IF NOT EXISTS.
+            await conn.executescript(SCHEMA)
             await conn.execute(
                 """
                 INSERT INTO rem_state
@@ -655,14 +686,13 @@ class LessonStore:
         examples_data = json.loads(row["examples"])
         examples = [Example(**ex) for ex in examples_data]
 
-        # Parse relationships (handle missing column for backwards compatibility)
-        relationships = []
-        try:
-            relationships_data = json.loads(row["relationships"]) if row["relationships"] else []
-            relationships = [Relationship(**rel) for rel in relationships_data]
-        except (KeyError, TypeError):
-            # Column doesn't exist yet (pre-migration)
-            pass
+        # Parsed without a guard on purpose. The column is created by SCHEMA and
+        # ALTERed into older stores by _run_migrations before any row is read, so
+        # there is no pre-migration row to be tolerant of — and the handler that
+        # used to sit here swallowed malformed JSON into an empty list, quietly
+        # returning a lesson stripped of its links instead of saying so.
+        relationships_data = json.loads(row["relationships"]) if row["relationships"] else []
+        relationships = [Relationship(**rel) for rel in relationships_data]
 
         return Lesson(
             id=row["id"],
@@ -761,7 +791,9 @@ class LessonStore:
                 ),
             )
 
-            # Append to context_history
+            # Upsert this session's snapshot. Last write of a session wins,
+            # which is the snapshot every reader wants; appending produced
+            # ~9 rows per session and made "history length" meaningless.
             new_hash = hashlib.sha256(catalogue_json.encode()).hexdigest()
             catalogue_delta = None
             if prev_hash and prev_hash != new_hash and prev_catalogue_json:
@@ -776,6 +808,16 @@ class LessonStore:
                     active_files, todos, recent_decisions,
                     catalogue_hash, catalogue_delta
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(project_id, session_number) DO UPDATE SET
+                    timestamp = excluded.timestamp,
+                    notes = excluded.notes,
+                    active_files = excluded.active_files,
+                    todos = excluded.todos,
+                    recent_decisions = excluded.recent_decisions,
+                    catalogue_hash = excluded.catalogue_hash,
+                    catalogue_delta = COALESCE(
+                        excluded.catalogue_delta, context_history.catalogue_delta
+                    )
                 """,
                 (
                     context.project_id,
@@ -806,14 +848,11 @@ class LessonStore:
         todos_data = json.loads(row["todos"]) if row["todos"] else []
         todos = [ProjectTodo(**t) for t in todos_data]
 
-        # Parse catalogue (handle missing column for backwards compatibility)
-        catalogue = ProjectCatalogue()
-        try:
-            catalogue_data = json.loads(row["catalogue"]) if row["catalogue"] else {}
-            if catalogue_data:
-                catalogue = ProjectCatalogue(**catalogue_data)
-        except (KeyError, TypeError):
-            pass  # Column doesn't exist yet
+        # No guard here either: the column is migrated in before any read, and a
+        # malformed value must raise rather than hand back an empty catalogue
+        # that a later save_project_context would write over the real one.
+        catalogue_data = json.loads(row["catalogue"]) if row["catalogue"] else {}
+        catalogue = ProjectCatalogue(**catalogue_data) if catalogue_data else ProjectCatalogue()
 
         return ProjectContext(
             project_id=row["project_id"],
@@ -925,6 +964,11 @@ class LessonStore:
 
     async def save_workflow(self, workflow: Workflow) -> str:
         """Save or update a workflow."""
+        # create_workflow, update_workflow, add_workflow_step and
+        # link_lesson_to_workflow_step all land here with free text an agent
+        # typed — description, guidance, checklist, outputs — so this write
+        # needs the same envelope guard as add_lesson.
+        reject_tool_call_envelope(workflow)
         async with self._connection(commit=True) as conn:
             await conn.execute(
                 """
@@ -993,6 +1037,9 @@ class LessonStore:
 
     async def save_community_summary(self, summary: CommunitySummary) -> str:
         """Save or update a community summary (upsert)."""
+        # The title and summary are written by the agent via
+        # save_community_summary, so the same guard applies.
+        reject_tool_call_envelope(summary)
         async with self._connection(commit=True) as conn:
             await conn.execute(
                 """

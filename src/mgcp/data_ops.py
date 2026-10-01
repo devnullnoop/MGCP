@@ -7,6 +7,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from . import __version__
 from .models import Lesson
 from .persistence import LessonStore
 from .qdrant_vector_store import QdrantVectorStore
@@ -29,7 +30,7 @@ async def export_lessons(output_path: Path | None = None, include_usage: bool = 
     lessons = await store.get_all_lessons()
 
     export_data = {
-        "mgcp_version": "1.1.0",
+        "mgcp_version": __version__,
         "export_date": datetime.now(UTC).isoformat(),
         "lesson_count": len(lessons),
         "lessons": []
@@ -97,6 +98,17 @@ async def import_lessons(
             "dry_run": dry_run
         }
 
+    if "lessons" not in data and "projects" in data:
+        return {
+            "total": 0, "imported": 0, "skipped": 0, "overwritten": 0, "renamed": 0,
+            "errors": [
+                "This is a project-context export, and mgcp-import only imports "
+                "lessons. Restore project contexts and catalogues with "
+                "mgcp-backup --restore."
+            ],
+            "dry_run": dry_run,
+        }
+
     lessons_data = data.get("lessons", [])
 
     # Get existing lesson IDs
@@ -115,8 +127,12 @@ async def import_lessons(
     }
 
     for lesson_data in lessons_data:
+        # Bound before the try because the handler below reports on it. A file
+        # whose "lessons" is a list of strings (or [null]) parses as JSON, so
+        # the first .get inside the try raised and the handler then died on an
+        # unbound name — or, worse, blamed the previous lesson's id.
+        lesson_id = lesson_data.get("id", "unknown") if isinstance(lesson_data, dict) else "unknown"
         try:
-            lesson_id = lesson_data.get("id", "unknown")
             trigger = lesson_data.get("trigger", "")
 
             # Validate required fields
@@ -215,7 +231,7 @@ async def export_projects(output_path: Path | None = None) -> dict:
     contexts = await store.get_all_project_contexts()
 
     export_data = {
-        "mgcp_version": "1.1.0",
+        "mgcp_version": __version__,
         "export_date": datetime.now(UTC).isoformat(),
         "project_count": len(contexts),
         "projects": []
@@ -241,18 +257,30 @@ async def export_projects(output_path: Path | None = None) -> dict:
         return {"status": "success", "count": len(contexts)}
 
 
-async def find_duplicates(threshold: float = 0.85) -> list[dict]:
+async def find_duplicates(
+    threshold: float = 0.85,
+    store: LessonStore | None = None,
+    vector_store: QdrantVectorStore | None = None,
+) -> list[dict]:
     """
     Find potentially duplicate lessons using semantic similarity.
 
     Args:
         threshold: Similarity threshold (0-1) for considering duplicates
+        store: Existing LessonStore to reuse. Required from any caller that
+            already holds one (the MCP server, REM).
+        vector_store: Existing QdrantVectorStore to reuse. Required from any
+            in-process caller — local Qdrant permits one client per path.
 
     Returns:
         List of duplicate pairs with similarity scores
     """
-    store = LessonStore()
-    vector_store = QdrantVectorStore()
+    # Callers already inside a process that holds the Qdrant lock MUST pass
+    # their live instances: local-mode Qdrant allows one client per path, so
+    # constructing our own here raises for every in-process caller. Defaults
+    # keep the `mgcp-duplicates` CLI a one-liner.
+    store = store or LessonStore()
+    vector_store = vector_store or QdrantVectorStore()
 
     lessons = await store.get_all_lessons()
     lessons_by_id = {l.id: l for l in lessons}
@@ -297,51 +325,6 @@ async def find_duplicates(threshold: float = 0.85) -> list[dict]:
     return duplicates
 
 
-async def suggest_tags(lesson_id: str, max_tags: int = 5) -> list[str]:
-    """
-    Suggest tags for a lesson based on content and similar lessons.
-
-    Args:
-        lesson_id: The lesson to suggest tags for
-        max_tags: Maximum number of tags to suggest
-
-    Returns:
-        List of suggested tags
-    """
-    store = LessonStore()
-    vector_store = QdrantVectorStore()
-
-    lesson = await store.get_lesson(lesson_id)
-    if not lesson:
-        return []
-
-    # Find similar lessons (returns list of (id, score) tuples)
-    similar = vector_store.search(
-        f"{lesson.trigger} {lesson.action}",
-        limit=10
-    )
-
-    # Collect tags from similar lessons
-    tag_counts = {}
-    for match_id, score in similar:
-        if match_id == lesson_id:
-            continue
-        similar_lesson = await store.get_lesson(match_id)
-        if similar_lesson:
-            for tag in similar_lesson.tags:
-                # Weight by similarity
-                tag_counts[tag] = tag_counts.get(tag, 0) + score
-
-    # Filter out tags the lesson already has
-    existing_tags = set(lesson.tags)
-    suggestions = [
-        tag for tag, _ in sorted(tag_counts.items(), key=lambda x: -x[1])
-        if tag not in existing_tags
-    ]
-
-    return suggestions[:max_tags]
-
-
 def main_export():
     """CLI entry point for mgcp-export."""
     import argparse
@@ -364,6 +347,10 @@ def main_export():
     )
 
     args = parser.parse_args()
+    if args.type == "all" and not args.output:
+        # Both halves would print to stdout back to back, and two concatenated
+        # JSON documents are not loadable by the importer that reads them.
+        parser.error("--output is required when exporting 'all'")
 
     async def run():
         if args.type in ["lessons", "all"]:

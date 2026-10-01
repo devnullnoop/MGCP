@@ -1,0 +1,306 @@
+/* MGCP instrument panel.
+ *
+ * Colour roles come from the validated data-viz palette. The categorical slots
+ * were run through the palette validator against THIS surface (#171b22):
+ * 4 adjacent slots pass every gate (worst adjacent CVD ΔE 8.4), and the first
+ * three pass all-pairs (worst ΔE 9.4) which is what the scatter uses.
+ *
+ * Status colours are a separate, fixed set and are NEVER used as series. They
+ * cannot carry meaning alone: critical↔good measures CVD ΔE 4.1 — the classic
+ * red/green confusion — so every status indicator ships a glyph AND a word.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --plane:        #0d0f13;
+  --surface:      #171b22;
+  --surface-2:    #1d2230;
+  --border:       rgba(255, 255, 255, 0.10);
+  --border-firm:  #2a3140;
+
+  --ink:          #ffffff;
+  --ink-2:        #c3c2b7;
+  --ink-muted:    #898781;
+  --grid:         #242a36;
+  --axis:         #38404f;
+
+  /* categorical — fixed order, never cycled, never reassigned by rank */
+  --series-1:     #3987e5;  /* blue    — matched / primary */
+  --series-2:     #d95926;  /* orange  — bridged */
+  --series-3:     #199e70;  /* aqua    — third class */
+  --series-4:     #c98500;  /* yellow  — fourth, direct-labelled */
+
+  /* sequential (one hue, light→dark) for magnitude */
+  --seq-100:      #cde2fb;
+  --seq-250:      #86b6ef;
+  --seq-400:      #3987e5;
+  --seq-550:      #1c5cab;
+  --seq-700:      #0d366b;
+
+  /* status — fixed, with icon + label, never a series */
+  --good:         #0ca30c;
+  --warning:      #fab219;
+  --critical:     #d03b3b;
+
+  --radius: 10px;
+  --gap: 2px;              /* the surface gap between adjacent fills */
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --plane: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-2: #f0efec;
+  --border: rgba(11, 11, 11, 0.10);
+  --border-firm: #e1e0d9;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --ink-muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--ink);
+  font-family: var(--font);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------- topbar -- */
+
+.topbar {
+  position: sticky; top: 0; z-index: 30;
+  display: flex; align-items: center; gap: 1.5rem;
+  padding: 0 1.5rem; height: 56px;
+  background: color-mix(in srgb, var(--plane) 88%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: baseline; gap: 0.5rem; flex: 0 0 auto; }
+.brand .mark {
+  width: 10px; height: 10px; border-radius: 3px;
+  background: var(--series-1); align-self: center;
+}
+.brand .name { font-weight: 650; letter-spacing: 0.02em; }
+.brand .sub { color: var(--ink-muted); font-size: 0.8rem; }
+
+/* min-width:0 is load-bearing: a flex item will not shrink below its
+ * min-content width without it, so overflow-x:auto never engages and the
+ * whole page scrolls sideways instead of the nav strip. */
+#nav { display: flex; gap: 0.15rem; flex: 1 1 auto; min-width: 0; overflow-x: auto;
+       scrollbar-width: none; }
+#nav::-webkit-scrollbar { display: none; }
+#nav button {
+  background: none; border: 0; color: var(--ink-2);
+  font: inherit; font-size: 0.88rem; padding: 0.4rem 0.7rem;
+  border-radius: 7px; cursor: pointer; white-space: nowrap;
+}
+#nav button:hover { background: var(--surface-2); color: var(--ink); }
+#nav button[aria-current="page"] { background: var(--surface-2); color: var(--ink); font-weight: 600; }
+#nav button:focus-visible, .ghost:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+
+.topbar-right { display: flex; align-items: center; gap: 0.75rem; flex: 0 0 auto; }
+.freshness { color: var(--ink-muted); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.ghost {
+  background: none; border: 1px solid var(--border); color: var(--ink-2);
+  border-radius: 7px; cursor: pointer; padding: 0.25rem 0.5rem; font: inherit;
+}
+
+/* ------------------------------------------------------------------ main -- */
+
+main { padding: 1.5rem; max-width: 1560px; margin: 0 auto; }
+main:focus { outline: none; }
+.loading { color: var(--ink-muted); padding: 4rem 0; text-align: center; }
+
+.view-head { margin: 0 0 1.25rem; }
+.view-head h1 { font-size: 1.35rem; margin: 0 0 0.25rem; font-weight: 650; }
+.view-head p { margin: 0; color: var(--ink-2); max-width: 78ch; font-size: 0.92rem; }
+
+/* one filter row, above everything it scopes — never inside a card */
+.filters {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  padding: 0.65rem 0.9rem; margin: 0 0 1.25rem;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.filters label { font-size: 0.82rem; color: var(--ink-2); display: flex; align-items: center; gap: 0.45rem; }
+.filters input[type="range"] { accent-color: var(--series-1); }
+.filters label { max-width: 100%; min-width: 0; }
+.filters input[type="search"], .filters select {
+  background: var(--surface-2); color: var(--ink); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.3rem 0.5rem; font: inherit; font-size: 0.85rem;
+  max-width: 100%; min-width: 0;   /* a bare select grows to its widest option */
+}
+.filters .spacer { flex: 1 1 auto; }
+
+/* ----------------------------------------------------------------- cards -- */
+
+.grid { display: grid; gap: 1rem; }
+/* min() so the track floor never exceeds the viewport: a bare minmax(420px)
+ * forces a 420px card into a 390px phone and scrolls the whole page sideways. */
+.cols-2 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+.cols-3 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+.cols-4 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1rem 1.1rem;
+  /* height grows with content so the x-axis band is never clipped */
+}
+.card > h2 {
+  font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--ink-muted); margin: 0 0 0.15rem; font-weight: 600;
+}
+.card > .note { color: var(--ink-2); font-size: 0.82rem; margin: 0 0 0.75rem; }
+.card.span-2 { grid-column: span 2; }
+@media (max-width: 900px) { .card.span-2 { grid-column: auto; } }
+
+/* stat tiles: the number IS the chart. Proportional figures, not tabular. */
+.tile .value { font-size: 2rem; font-weight: 650; line-height: 1.1; }
+.tile .label { color: var(--ink-muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.tile .sub { color: var(--ink-2); font-size: 0.8rem; margin-top: 0.2rem; }
+.hero .value { font-size: 3rem; }
+
+.meter { height: 6px; background: var(--surface-2); border-radius: 99px; overflow: hidden; margin-top: 0.6rem; }
+.meter > span { display: block; height: 100%; background: var(--series-1); border-radius: 99px; }
+
+/* ---------------------------------------------------------------- tables -- */
+
+table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 0.85rem; }
+th, td { padding: 0.45rem 0.6rem; text-align: left; border-bottom: 1px solid var(--border); }
+th {
+  color: var(--ink-muted); font-weight: 600; font-size: 0.75rem;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  position: sticky; top: 0; background: var(--surface); cursor: pointer; user-select: none;
+}
+th[aria-sort] { color: var(--ink); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:hover { background: var(--surface-2); }
+.scroll { max-height: 460px; overflow: auto; border-radius: 8px; }
+.card { min-width: 0; }  /* grid items default to min-content width; without this a wide table stretches the track */
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+.id { font-family: var(--mono); font-size: 0.82rem; }
+
+/* status: glyph + word, because hue alone fails CVD here */
+.status { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; white-space: nowrap; }
+.status .glyph { font-size: 0.9em; }
+.status.good { color: var(--good); }
+.status.warn { color: var(--warning); }
+.status.bad  { color: var(--critical); }
+
+.pill {
+  display: inline-block; padding: 0.05rem 0.45rem; border-radius: 99px;
+  border: 1px solid var(--border); color: var(--ink-2); font-size: 0.72rem;
+}
+.bar-inline { height: 8px; border-radius: 2px; background: var(--series-1); display: block; }
+
+/* ---------------------------------------------------------------- charts -- */
+
+/* hidden, not visible: an SVG that paints outside its box still counts
+ * toward the page's scrollWidth, which showed as 139px of phantom
+ * sideways scroll on phones. Each chart reserves its own right margin
+ * for the endpoint label, so nothing that matters is clipped. */
+.chart { width: 100%; height: auto; display: block; overflow: hidden; }
+.chart .grid-line { stroke: var(--grid); stroke-width: 1; shape-rendering: crispEdges; }
+.chart .axis-line { stroke: var(--axis); stroke-width: 1; shape-rendering: crispEdges; }
+.chart text { fill: var(--ink-muted); font-size: 11px; font-family: var(--font); }
+.chart .tick text { font-variant-numeric: tabular-nums; }
+.chart .series-label { fill: var(--ink-2); font-size: 11px; font-weight: 600; }
+.chart .line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.chart .dot { stroke: var(--surface); stroke-width: 2; }        /* 2px surface ring */
+.chart .hit { fill: transparent; cursor: pointer; }
+.chart .crosshair { stroke: var(--axis); stroke-width: 1; stroke-dasharray: none; }
+.chart .quad-line { stroke: var(--axis); stroke-width: 1; }
+.chart .quad-label { fill: var(--ink-muted); font-size: 10px; letter-spacing: 0.04em; }
+.chart .muted-dot { fill: var(--ink-muted); opacity: 0.45; }
+
+.legend { display: flex; gap: 1rem; flex-wrap: wrap; margin: 0.15rem 0 0.6rem; }
+.legend span { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--ink-2); }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+#tooltip {
+  /* Parked off-screen while hidden: an opacity-0 box keeps its last
+   * coordinates and still counts toward document scrollWidth, which showed up
+   * as 150px of phantom horizontal scroll on the widest view. */
+  position: fixed; z-index: 60; pointer-events: none; opacity: 0;
+  left: -9999px; top: -9999px;
+  transition: opacity 90ms linear;
+  background: var(--surface-2); color: var(--ink);
+  border: 1px solid var(--border-firm); border-radius: 8px;
+  padding: 0.5rem 0.65rem; font-size: 0.8rem; max-width: 320px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+#tooltip[aria-hidden="false"] { opacity: 1; }
+#tooltip .tt-title { font-weight: 650; margin-bottom: 0.2rem; }
+#tooltip .tt-row { display: flex; justify-content: space-between; gap: 1rem; color: var(--ink-2); }
+#tooltip .tt-row b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* every chart has a table twin; this toggles it */
+textarea, .card input[type="text"] {
+  width: 100%; background: var(--surface-2); color: var(--ink);
+  border: 1px solid var(--border); border-radius: 6px; padding: 0.45rem 0.6rem;
+  font: inherit; font-size: 0.85rem; margin: 0.15rem 0 0.6rem; resize: vertical;
+}
+label.note { display: block; color: var(--ink-muted); font-size: 0.75rem;
+  text-transform: uppercase; letter-spacing: 0.05em; }
+
+.twin { margin-top: 0.6rem; }
+.twin > summary {
+  cursor: pointer; color: var(--ink-muted); font-size: 0.78rem;
+  list-style: none; display: inline-flex; gap: 0.3rem; align-items: center;
+}
+.twin > summary::before { content: "▸"; }
+.twin[open] > summary::before { content: "▾"; }
+
+/* ------------------------------------------------------------ misc bits -- */
+
+.empty { color: var(--ink-muted); padding: 2rem 0; text-align: center; font-size: 0.9rem; }
+.callout {
+  border-left: 3px solid var(--series-2); padding: 0.6rem 0.9rem; margin: 0 0 1rem;
+  background: var(--surface); border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 0.88rem; color: var(--ink-2);
+}
+.callout b { color: var(--ink); }
+.entry { border-bottom: 1px solid var(--border); padding: 0.9rem 0; }
+.entry:last-child { border-bottom: 0; }
+.entry .meta { color: var(--ink-muted); font-size: 0.78rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
+/* overflow-wrap is required, not cosmetic: these bodies quote real shell
+ * commands and absolute paths, and pre-wrap alone will not break an
+ * unbroken 80-character path — it pushed the page sideways on phones. */
+.entry .body {
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+  margin-top: 0.4rem; font-size: 0.88rem; color: var(--ink-2);
+}
+.pagefoot { color: var(--ink-muted); font-size: 0.76rem; padding: 2rem 1.5rem 3rem; max-width: 1560px; margin: 0 auto; }
+
+/* Phone: the bar cannot hold brand + seven views + controls on one line.
+ * The nav gets its own row and scrolls; the brand keeps only its mark and name.
+ * Squeezing nav to 48px instead left the topbar's own content overflowing. */
+@media (max-width: 720px) {
+  .topbar {
+    height: auto; flex-wrap: wrap; row-gap: 0.25rem;
+    padding: 0.5rem 1rem 0.35rem; align-items: center;
+  }
+  .brand { order: 1; }
+  .topbar-right { order: 2; margin-left: auto; }
+  #nav { order: 3; flex: 1 0 100%; padding-bottom: 0.15rem; }
+  .brand .sub { display: none; }
+  main { padding: 1rem; }
+  .pagefoot { padding: 1.5rem 1rem 2.5rem; }
+  .card { padding: 0.85rem 0.9rem; }
+  .tile .value { font-size: 1.6rem; }
+  .hero .value { font-size: 2.2rem; }
+}
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

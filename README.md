@@ -13,9 +13,9 @@ Earlier releases are in [CHANGELOG.md](CHANGELOG.md); this README describes the 
 
 ## The Problem
 
-LLMs are stateless. Every session starts from zero. The AI that helped you debug authentication yesterday has no memory of it today. Lessons learned, project context, architectural decisions - all gone the moment the session ends.
+LLMs are stateless. Every session starts from zero. The AI that helped you debug authentication yesterday has no memory of it today. Lessons learned, project context, architectural decisions are all gone the moment the session ends.
 
-You've seen it: explaining the same codebase structure over and over, watching the AI repeat a mistake you corrected last week, losing important context when a session ends.
+You've seen it and lived it... explaining the same codebase structure over and over, watching the AI repeat a mistake you corrected last week, and then losing important context when a session ends.
 
 ## What MGCP Does
 
@@ -30,7 +30,7 @@ Session 2: LLM has no memory of Session 1
          -> Bug avoided
 ```
 
-**The primary audience is the LLM, not you.** You configure the system; the LLM reads from and writes to it. The knowledge persists even though the LLM doesn't.
+**The primary audience is the LLM, not you.** You configure the system and the LLM reads from, and writes to, it. The knowledge persists even though the LLM doesn't.
 
 ### What makes this useful:
 

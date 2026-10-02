@@ -2,8 +2,8 @@
 
 Embedded Qdrant permits one client per directory, so more than one session needs
 a server. Before this, the only route to one was a Docker container the user
-installed themselves and `mgcp-init` never mentioned — which is why v3 shipped
-"multi-session" that nobody could reach.
+installed themselves and `mgcp-init` never mentioned. That is why version 3
+shipped support for more than one session that nobody could reach.
 
 The platform mapping is tested for every published target including Windows,
 because the machine this was written on is macOS/arm64 and a mapping that is only
@@ -301,9 +301,9 @@ class TestPaths:
         """`answering` probes 127.0.0.1:6333, which is machine-global state.
 
         Asserting it directly made this test pass only on a machine with nothing
-        on that port — it broke the moment a real server was running, which is
-        the configuration the feature exists for. The probe is stubbed so the
-        test is about what `status` reports, not about what happens to be up.
+        on that port. It broke as soon as a real server was running, which is
+        the setup the feature exists for. The check is stubbed, so this test
+        covers what `status` reports and not what happens to be running.
         """
         monkeypatch.setattr(qdrant_server, "is_answering", lambda *a, **k: False)
         status = qdrant_server.status()

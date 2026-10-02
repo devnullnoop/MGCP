@@ -63,8 +63,8 @@ _initialized = False
 _init_lock = asyncio.Lock()
 # Vectors initialize separately from SQLite, under their own lock, because
 # embedded Qdrant can be locked by another process while SQLite is perfectly
-# readable. One lock for both would make the 26 SQLite-only tools wait on — and
-# fail with — a store they never touch.
+# readable. One lock for both would make the 26 SQLite-only tools wait on, and
+# fail with, a store they never touch.
 _vectors_initialized = False
 _vector_init_lock = asyncio.Lock()
 
@@ -133,8 +133,8 @@ def _describe_lock_holder() -> str:
             timeout=3,
         ).stdout.split()
         # Never report ourselves. A failed open leaves this process holding the
-        # lock file briefly, so lsof lists it — and a message naming the caller
-        # as the culprit points at the wrong process to kill.
+        # lock file briefly, so lsof lists it. A message naming the caller as
+        # the culprit points at the wrong process to kill.
         own = str(os.getpid())
         pids = [pid for pid in pids if pid != own]
         if not pids:
@@ -163,8 +163,8 @@ async def _ensure_initialized() -> tuple[LessonStore, LessonGraph, TelemetryLogg
 
     Split from the vector stores deliberately. Embedded Qdrant permits one
     client per path, so when another MGCP process holds the lock this used to
-    raise from a single all-or-nothing try block and take down all 50 tools —
-    including `read_soliloquy`, `get_project_context`, `save_project_context`
+    raise from a single all-or-nothing try block and take down all 50 tools.
+    That included `read_soliloquy`, `get_project_context`, `save_project_context`
     and `write_soliloquy`, none of which need a vector at all. A session that
     started while a previous session's server was still alive could therefore
     neither load its memory nor save it. 26 of the 36 tools need SQLite only;
@@ -304,10 +304,10 @@ async def _ensure_vector_stores() -> tuple[QdrantVectorStore, QdrantCatalogueSto
                 f"{_describe_lock_holder()} Embedded Qdrant allows one client per "
                 "path, so another MGCP process (an older session's server, or the "
                 "dashboard) can hold it. Run `mgcp-qdrant setup` once to install a "
-                "local Qdrant server and share one store across every session — no "
-                "container, nothing to fetch by hand. Everything backed by SQLite — "
-                "project context, the soliloquy journal, lesson reads by id, "
-                "workflows, REM — works regardless."
+                "local Qdrant server and share one store across every session. "
+                "No container, nothing to fetch by hand. Everything backed by "
+                "SQLite still works: project context, the soliloquy journal, "
+                "lesson reads by id, workflows, and REM."
             ) from e
 
         return _vector_store, _catalogue_vector
@@ -320,8 +320,8 @@ class _UnindexedWrites:
     reachable when Qdrant opened. Dropping the call is safe precisely because
     `_ensure_vector_stores` reconciles from SQLite the next time it opens: the
     row written now is indexed then. The caller is told so in its return value,
-    so this degrades loudly rather than silently — a dropped write nobody is
-    told about is the failure mode, not the dropping.
+    so this degrades loudly rather than silently. A dropped write nobody is
+    told about is the real failure, not the dropping itself.
     """
 
     def __getattr__(self, _name):
@@ -2352,11 +2352,11 @@ async def rem_run(
     if not report.operations_run:
         # A skipped run is not a passing run. This branch used to print "No
         # findings. Knowledge base looks healthy." whenever `findings` was
-        # empty, which is also what a cycle where NOTHING RAN produces — so the
-        # reassurance was emitted by the same code path whether the corpus had
-        # been scanned or not. Nothing was measured here, so nothing is claimed.
+        # empty, which is also what a cycle where NOTHING RAN produces. The
+        # reassurance came from the same code path whether the corpus had been
+        # scanned or not. Nothing was measured here, so nothing is claimed.
         lines.append(
-            "**Nothing ran — this is not a clean bill of health.** Every operation "
+            "**Nothing ran. This is not a clean bill of health.** Every operation "
             "was skipped as not yet due on this project's session clock, so the "
             "corpus is unverified, not verified healthy."
         )

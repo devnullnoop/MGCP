@@ -8,8 +8,8 @@
 
 > **Alpha Software** - Actively dogfooding as we build. Working, but APIs may change.
 
-**Current release: 3.0 — [more than one session at a time](#what-30-adds-more-than-one-session-at-a-time).**
-Earlier releases are in [CHANGELOG.md](CHANGELOG.md); this README describes the system as it is now.
+**Current release: 3.0, [more than one session at a time](#version-30-more-than-one-session-at-a-time).**
+This README describes how the system works now. Earlier releases are in [CHANGELOG.md](CHANGELOG.md).
 
 ## The Problem
 
@@ -36,7 +36,7 @@ Session 2: LLM has no memory of Session 1
 
 - **Semantic search** finds relevant lessons without exact keyword matches
 - **Graph relationships** surface connected knowledge together
-- **Workflows** sequence multi-step processes and surface the right lessons at each step — guidance, not a gate
+- **Workflows** put multi-step jobs in order and show the right notes at each step. They guide; they do not block.
 - **Hooks** make it proactive - reminders fire automatically at key moments
 - **Project isolation** keeps context separate per codebase
 
@@ -60,7 +60,13 @@ In active use, MGCP has:
 
 The system isn't intelligent. But an LLM with accumulated context *behaves* more intelligently than one starting fresh every time.
 
-**On workflows specifically:** earlier versions of this list credited workflows with *enforcing* quality gates and *ensuring* steps are not shortcut. They do neither. `update_workflow_state` records progress and nothing reads a checklist to block on it — a checklist the LLM can skip is advice. Every gate in MGCP that actually holds is an enforcement rule, and crediting workflows for that hid the one genuinely novel thing in the system. Rows E06 and E07 in [docs/CAPABILITIES.md](docs/CAPABILITIES.md) record the retraction.
+**A correction about workflows.** Earlier versions of this list said that
+workflows enforce quality checks and stop steps being skipped. They do neither.
+`update_workflow_state` records progress, and nothing reads that record to block
+a tool call. A checklist the model can skip is advice. Every rule in MGCP that
+holds is a tool refusal. Crediting workflows for that hid the one new idea in the
+system. Rows E06 and E07 in [docs/CAPABILITIES.md](docs/CAPABILITIES.md) record
+the correction.
 
 ## How It Works
 
@@ -127,39 +133,41 @@ The LLM reminds itself to not skip steps.
 
 ## Screenshots
 
-The dashboard is one instrument panel: a single document, eight views, routed client-side on the
-hash. It replaced eight separate pages that each answered "what is stored" and covered none of
-enforcement, REM scheduling, the gate audit or the journal.
+The dashboard is a single page with eight views. It replaced eight separate
+pages. Each of those answered only "what is stored", and none of them showed the
+rules, the maintenance schedule, the gate record, or the journal.
 
 > Every image below is rendered from a **synthetic seed store**, never from a real one. A live
 > MGCP store holds query text, absolute paths from unrelated repositories, gate-audit transcripts
 > and the soliloquy journal, so a screenshot of it is a publication of someone's work.
 
-### Signal — is the memory working?
-Match quality over time, and the split between results matched by relevance and results appended
-by the community bridge. A slot logged with score `0.0` was appended, not matched; keeping the two
-apart is the difference between a meaningful mean and a meaningless one.
+### Signal: is the memory working?
+Search quality over time, and how many results came from the search itself rather
+than from the link graph. A result recorded with a score of `0.0` came from the
+link graph. Counting those as search results makes the average meaningless.
 ![Signal](docs/screenshots/instrument-signal.png)
 
-### Effectiveness — which lessons earn their place?
-Every lesson placed by how often relevance matched it against how well it scored when it did.
-Dot size is total appearances. Lessons never matched have no score, so they are counted and listed
-rather than plotted at a false origin.
+### Effectiveness: which notes are worth keeping?
+Every note, plotted by how often search found it against how well it scored when
+it did. Dot size is the total number of appearances. Notes that search has never
+found have no score, so they are listed and counted instead of drawn at zero.
 ![Effectiveness](docs/screenshots/instrument-effectiveness.png)
 
-### Enforcement — is the gate real or theatre?
-Denials against lessons actually written, which rules fire, which have never fired, and every
-contested fire with the sentence that triggered it beside the reasoning given.
+### Enforcement: do the rules do anything?
+Refusals against notes actually written, which rules fire, which have never
+fired, and every disputed refusal with its triggering sentence and the reasoning
+given.
 ![Enforcement](docs/screenshots/instrument-enforcement.png)
 
-### REM — what maintenance is actually due?
-Per project, per operation, on that project's own session clock. Overdue and never-run states are
-named, not just coloured.
+### REM: what maintenance is due?
+Per project and per job, counted in that project's own sessions. Overdue jobs and
+jobs that have never run are labelled in words, not only by colour.
 ![REM](docs/screenshots/instrument-rem.png)
 
-### Graph — what shape is the knowledge?
-Lessons, the categories they hang under, workflows and their steps. Only nodes carrying an edge
-appear, which is itself diagnostic.
+### Graph: what shape is the knowledge?
+Notes, the categories they sit under, workflows, and their steps. Only notes with
+at least one link appear. The ones missing from the picture tell you something
+too.
 ![Graph](docs/screenshots/instrument-graph.png)
 
 ## Quick Start
@@ -185,7 +193,7 @@ mgcp-init
 This will:
 - Auto-detect installed LLM clients and configure the MCP server
 - Deploy global hooks (Claude Code) for proactive reminders
-- **Download the embedding model (~415MB) on first run** — this powers semantic search and only needs to happen once. Subsequent runs are instant.
+- **Download the embedding model on first run, about 415 MB.** Search needs it. This happens once, and later runs start immediately.
 
 Supports: Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Continue, Cline, Sourcegraph Cody
 
@@ -260,7 +268,10 @@ mgcp-dashboard
 
 Knowledge stores rot. Lessons go stale, duplicates accumulate, and topic clusters shift as a project evolves. REM (Recalibrate Everything in Memory) runs periodic consolidation to keep the knowledge base healthy without manual curation.
 
-Each operation runs on its own schedule — staleness scans every 5 sessions, duplicate detection every 10, community detection on fibonacci intervals (5, 8, 13, 21...), knowledge extraction on a logarithmic curve that starts frequent and slows down as the project matures. The schedules are configurable but the defaults work well in practice.
+Each job runs on its own schedule. Stale-note scans run every 5 sessions and
+duplicate detection every 10. Cluster detection runs on widening gaps of 5, 8,
+13, and 21 sessions. Knowledge extraction starts often and slows down as the
+project settles. You can change the schedules, and the defaults work well.
 
 | Tool | Purpose |
 |------|---------|
@@ -305,70 +316,77 @@ The routing prompt is data. These tools edit `~/.mgcp/intent_config.json` from c
 | `add_intent` | Add a new intent |
 | `update_intent` | Change fields on an existing intent |
 | `remove_intent` | Delete an intent |
-| `compile_intent_to_skill` | Emit an intent + its workflow + per-step lessons as a SKILL.md **file**. Purely additive — writes nothing back to the knowledge store. |
+| `compile_intent_to_skill` | Write an intent, its workflow, and the notes for each step to a SKILL.md **file**. It only adds. It writes nothing back to the store. |
 
 ### Soliloquy (2)
-The agent's message to its future self. Stored **globally** — one continuous inner voice, not one journal per codebase — but **read project-aware**: `read_soliloquy` returns this project's most recent entry, and only falls back to the newest entry from anywhere when this project has none, labelled with where it came from.
+The agent's message to its future self. Entries are stored in one place, as a
+single running journal rather than one per project. Reading is project-aware.
+`read_soliloquy` returns the most recent entry for this project. If this project
+has none, it returns the newest entry from anywhere and says where that came
+from.
 | Tool | Purpose |
 |------|---------|
 | `write_soliloquy` | Write a reflection for next-you (session close / compaction) |
 | `read_soliloquy` | Read your most recent message(s) to yourself (session start) |
 
-## Claude Code Hooks
+## Claude Code hooks
 
-Five hooks ship with MGCP. Four are **advisory**: they inject text into
-`<system-reminder>` tags the LLM can read, skim, or ignore. One is **enforcing** —
-`pre-tool-dispatcher.py` returns `permissionDecision: "deny"` and the harness refuses to
-run the tool.
+MGCP ships five hooks. Four of them are advisory. They add text to the
+conversation that the model can read, skim, or ignore. One of them enforces.
+`pre-tool-dispatcher.py` returns `permissionDecision: "deny"`, and Claude Code
+then refuses to run the tool.
 
-That distinction is the hardest-won result in the project. The `query-before-git-operations`
-lesson was violated across four successive revisions while the advisory hook fired correctly
-every single time. Interception was never compliance. Every gate in MGCP that actually holds
-is a PreToolUse denial; everything else is advice.
+That difference is the most useful thing this project has learned. One note,
+`query-before-git-operations`, was ignored across four revisions while the
+advisory hook fired correctly every single time. Firing is not obeying. Every
+rule in MGCP that holds is a tool refusal. The rest is advice.
 
-| Hook | Event | Type | Purpose |
-|------|-------|------|---------|
-| `session-init.py` | SessionStart | advisory | Injects the bootstrap checklist (`read_soliloquy` / `get_project_context` / `query_lessons`) and workflow execution discipline. Detects and reports three things: stale `.py` hook references in `settings.json`, REM operations past their due session, and a high apology-gate contest rate. |
-| `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Hard keyword gates loaded from `intent_config.json`, terse routing re-injection every message, scheduled reminders, and the per-turn state reset (`turn_tools_called`, `turn_session_id`, `MGCP_BYPASS[:scope]`). |
-| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | The only hook that can refuse a tool call: a generic evaluator over `~/.mgcp/enforcement_rules.json` plus the built-in apology gate. Fails open on any parse error — enforcement is a net, not a tripwire. |
-| `post-tool-dispatcher.py` | PostToolUse | advisory | Appends every tool name to `turn_tools_called`, which PreToolUse preconditions read. Edit/Write triggers a knowledge-capture checkpoint; Bash output is scanned for error patterns. |
-| `mgcp-precompact.py` | PreCompact | advisory | Save context and write a soliloquy before context compression. |
+| Hook | Event | Type | What it does |
+|------|-------|------|--------------|
+| `session-init.py` | SessionStart | advisory | Adds the start-of-session checklist (`read_soliloquy`, `get_project_context`, `query_lessons`) and the rules for running a workflow. Reports three problems if it finds them: hook files named in `settings.json` that no longer exist, maintenance jobs past their due session, and a high rate of contested apology-gate blocks. |
+| `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Applies the keyword rules from `intent_config.json`, repeats the short routing block every message, delivers scheduled reminders, and resets the per-message state that the enforcing hook reads. |
+| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | The only hook that can refuse a tool call. It reads the rules in `~/.mgcp/enforcement_rules.json` and also carries the apology gate. Any error in reading a rule allows the call, because this is a net and not a tripwire. |
+| `post-tool-dispatcher.py` | PostToolUse | advisory | Records every tool name for the enforcing hook to read. Edit and Write start a knowledge-capture prompt. Bash output is checked for known error patterns. |
+| `mgcp-precompact.py` | PreCompact | advisory | Reminds the model to save context and write a journal entry before the conversation is compressed. |
 
-[docs/mgcp-interception-flow.html](docs/mgcp-interception-flow.html) is the decision diagram
-for all five.
+[docs/mgcp-interception-flow.html](docs/mgcp-interception-flow.html) is the
+diagram for all five.
 
-### Routing is the LLM's job, not a regex
+### The model decides what a message means, not a regular expression
 
-MGCP's first hooks matched user text with regex: `git-reminder.py` on "commit" and "push",
-`catalogue-reminder.py` on library names, `task-start-reminder.py` on "fix" and "implement".
-Three scripts, hundreds of patterns, and they missed nearly half of real messages — because
-nobody says "let's commit this", they say "ship it", "push it up", or "ready to merge".
+MGCP's first hooks matched the user's words with patterns. `git-reminder.py`
+looked for "commit" and "push". `catalogue-reminder.py` looked for library names.
+`task-start-reminder.py` looked for "fix" and "implement". Three scripts,
+hundreds of patterns, and they missed almost half of real messages. Nobody writes
+"let's commit this". They write "ship it", or "push it up", or "ready to merge".
 
-Classification is now the LLM's, against an intent map injected each turn. Benchmarked
-against a ground-truth corpus (direct phrasing, indirect phrasing, false positives,
-multi-intent, no intent, edge cases), self-routing beat regex by ~50% accuracy on half the
-hook code. Graph-community classification — embed the message, search community summaries —
-was measured too and lost badly: communities describe topics, not actions. It stays useful
-for retrieval, just not for deciding what to do. The legacy regex hooks are archived in
-`examples/claude-hooks/legacy/`.
+The model now does the sorting, against a list of intents added to each message.
+We tested this against a set of messages labelled by hand, covering direct
+wording, indirect wording, false matches, several intents in one message, no
+intent, and edge cases. The model was about 50 percent more accurate than the
+patterns, using half as much hook code. We also tested a third method that
+compared the message to summaries of note clusters. It did much worse, because
+those summaries describe subjects and not actions. The old pattern-matching hooks
+are kept in `examples/claude-hooks/legacy/`.
 
-### Routing is data
+### The intent list is data
 
-The eight intent definitions live in `~/.mgcp/intent_config.json`. Both hooks render their
-prompt sections from that file, and REM's `intent_calibration` reads the same one. Adding an
-intent is an `add_intent` call from chat and the next session picks it up — no code change,
-no release. If the file is missing or corrupt the dispatcher falls back to a minimal built-in
-set, so a fresh install never crashes a hook.
+The eight intents live in `~/.mgcp/intent_config.json`. Both advisory hooks build
+their text from that file, and REM's `intent_calibration` job reads the same one.
+Adding an intent is an `add_intent` call from the chat, and the next session uses
+it. No code change and no release. If the file is missing or unreadable, the hook
+falls back to a small built-in list, so a new install never breaks.
 
-That closes a growth loop. REM runs community detection over the lesson graph and surfaces a
-finding when a community has unmapped tags, or spans several intents with no dominant one
-(< 60% share). Findings carry structured `proposed_patch` metadata, so: lesson community →
-REM finding → `intent_config.json` update → next session's hook injection.
+That closes a loop. REM groups the notes into clusters and reports a problem when
+a cluster has tags that no intent covers, or when a cluster spans several intents
+with no clear majority, below 60 percent. Each report includes the suggested
+change, so the path runs from note cluster, to REM report, to an updated
+`intent_config.json`, to the next session's injected text.
 
-### Enforcement is data
+### The rules are data
 
-The PreToolUse hook is a generic evaluator. Rules live in `~/.mgcp/enforcement_rules.json`
-and take effect on the next tool call:
+The enforcing hook is a general-purpose rule reader. Rules live in
+`~/.mgcp/enforcement_rules.json` and apply to the next tool call:
 
 ```jsonc
 {
@@ -384,196 +402,224 @@ and take effect on the next tool call:
 }
 ```
 
-A **trigger** matches a tool name plus an optional Bash-command matcher (`git_subcommand`,
-`regex`, `contains`). **Preconditions** are `tool_called_this_turn`,
-`tool_not_called_this_turn`, `staged_files_coupling` (if you staged `src/**.py` you must also
-stage `CHANGELOG.md`) and `tool_input_glob` (deny Edit/Write against `settings.json` or a
-secrets path). A **bypass_scope** is a short token the user can name in `MGCP_BYPASS:<scope>`
-to disable that one rule for a turn; bare `MGCP_BYPASS` disables all of them. Six MCP tools
-CRUD rules from chat, so a new interrupt costs a sentence rather than a release.
+A trigger matches a tool name, and for Bash it can also match the command. The
+three command matchers are `git_subcommand`, `regex`, and `contains`. A
+precondition is one of four checks: a tool was called in this message, a tool was
+not called, the staged files require a matching file (for example, a change under
+`src/` requires a change to `CHANGELOG.md`), or a tool input matches a path you
+want to protect. A bypass scope is a short word the user can name in
+`MGCP_BYPASS:<scope>` to switch off that one rule for one message. Plain
+`MGCP_BYPASS` switches off all of them. Six MCP tools add, change, and remove
+rules from the chat, so a new rule costs a sentence instead of a release.
 
-Git detection is the part that had to be hardened repeatedly, and the shapes that beat it
-were all ordinary: a newline instead of `&&`, an apostrophe in an unrelated sentence, a
-global flag (`git -C /path commit`), an absolute path, `sudo`, a `VAR=value` prefix. Commands
-are now tokenised per line with `shlex(punctuation_chars=True)`, global flags are skipped,
-and a line that cannot be tokenised **fails closed for git only** — an unparseable command is
-not evidence that it is safe, but blocking everything unparseable would stop unrelated work.
+Detecting a git command took several attempts to get right, and every shape that
+defeated it was ordinary: a newline instead of `&&`, an apostrophe in an
+unrelated sentence, a global flag as in `git -C /path commit`, a full path,
+`sudo`, and a `VAR=value` prefix. Commands are now split one line at a time with
+`shlex`, global flags are skipped, and a line that cannot be split blocks git
+commands only. A command we cannot read is not proof that the command is safe.
+Blocking every unreadable line would stop unrelated work.
 
 ### The apology gate
 
-"An apology must immediately trigger a knowledge write" was a passive note the LLM read at
-session start and drifted away from by mid-session. It is now hard enforcement, and it is the
-one gate that is not a data rule: its trigger is the assistant's own text rather than a tool
-argument, so the hook carries it as a built-in.
+"An apology must trigger a knowledge write" started as a note the model read at
+session start and forgot by the middle of the session. It is now a rule, and it
+is the only rule that is not in `enforcement_rules.json`. It triggers on the
+model's own words rather than on a tool argument, so the hook carries it
+directly.
 
-Seven word-boundary regexes (`sorry`, `my bad`, `you're right`, `you are right`,
-`my mistake`, `my apology/apologies`, `apologize/apologise`) run against the current turn's
-assistant text. On a match, every tool call is denied except the two exits and the three
-discovery tools — gating discovery would gate the exits themselves, and an escape hatch
-behind the gate is a trap, not an escape hatch. A human can open it with
-`MGCP_BYPASS:apology`, which is logged like everything else.
+Seven word patterns run against the model's text in the current message:
+`sorry`, `my bad`, `you're right`, `you are right`, `my mistake`,
+`my apology/apologies`, and `apologize/apologise`. On a match, every tool call is
+refused except the two exits and the three tool-discovery calls. Blocking
+discovery would block the exits as well. A person can open the gate with
+`MGCP_BYPASS:apology`, which is recorded like everything else.
 
-1. **Comply.** Write the lesson with `add_lesson`.
-2. **Contest, on the record.** `adjudicate_apology_gate` records the flagged sentence, a
-   verdict and ≥20 characters of reasoning. `not_apology` opens the gate for the rest of that
-   turn in that session only; `apology` keeps it shut until the lesson is written — attesting
-   "genuine" is never a route around capture.
+The two exits are:
 
-Every denial, compliance, adjudication and human bypass appends to `~/.mgcp/gate_audit.jsonl`,
-so claims about enforcement can be graded from evidence instead of asserted. REM summarises
-it; SessionStart warns on a contest-rate spike.
+1. **Comply.** Write the note with `add_lesson`.
+2. **Disagree, on the record.** `adjudicate_apology_gate` records the sentence
+   that triggered the gate, a verdict, and at least 20 characters of reasoning. A
+   verdict of `not_apology` opens the gate for the rest of that message, in that
+   session only. A verdict of `apology` keeps it closed until the note is
+   written, so claiming the apology was genuine is not a way around writing it
+   down.
 
-This is the closest thing MGCP has to a self-improving loop, stated carefully: the system
-detects a learning moment in its own output and refuses to proceed until the failure is
-captured. Automatic trigger, enforced capture, LLM-authored content. It is a ratchet, not
-learning — nothing gates the *quality* of the lesson. Known risks, accepted deliberately:
-keyword detection is dodgeable by paraphrase, and a gate on apologies could train
-apology-suppression rather than learning. A semantic detection tier was built and **measured
-out** — BGE similarity classifies topic, not speech act, and lost to the regexes in both
-directions on a pre-registered labelled set ([docs/scope-semantic-apology-gate.md](docs/scope-semantic-apology-gate.md)).
-So were a widened acknowledgment tier, a quote stripper, a per-turn denial counter and an
-advisory-degrade valve: five mechanisms built and deleted after red-teaming, six confirmed
-defects between them. The build log is in
+Every refusal, compliance, verdict, and human bypass is appended to
+`~/.mgcp/gate_audit.jsonl`. Claims about enforcement can then be checked against
+a record instead of trusted. REM summarises the file, and the session-start hook
+warns when the rate of disagreement rises.
+
+This is the closest MGCP comes to improving itself, stated carefully. The system
+notices a learning moment in its own output and refuses to continue until the
+failure is written down. The trigger is automatic and the capture is enforced.
+The model still writes the content, and nothing checks whether the note is any
+good. Two risks are accepted on purpose. Word matching can be avoided by
+rewording, and a rule about apologies could teach the model to stop apologising
+rather than to learn. We built and then removed a version that judged meaning
+instead of words. It scored worse than the word patterns in both directions on a
+labelled set agreed in advance, because the model it used compares subjects and
+not speech acts. The numbers are in
+[docs/scope-semantic-apology-gate.md](docs/scope-semantic-apology-gate.md). Four
+other additions were built and removed the same way, after they produced six
+confirmed faults between them. The record is in
 [docs/apology-gate-what-worked.md](docs/apology-gate-what-worked.md).
 
-The control principle, transferable beyond MGCP: you don't need a perfect classifier if you
-can force the agent to commit to an auditable attestation. Detection stays cheap and
-imperfect, judgment is accountable, and override stays physically human-only.
+The principle transfers beyond MGCP. You do not need a perfect classifier if you
+can require the agent to state a verdict that someone can audit later. Detection
+stays cheap and imperfect, the judgment is recorded, and only a person can
+override it.
 
 ### Intents compile to portable skills
 
-Any intent, plus its linked workflow and that workflow's per-step lessons, compiles into a
-single Anthropic-format `SKILL.md` at `~/.claude/skills/{intent}/SKILL.md` or
-`<project>/.claude/skills/{intent}/SKILL.md`. A compiled skill is invocable as a slash command
-and auto-discoverable by description, which gives an intent two firing channels on top of
-MGCP's keyword gates — including in Claude surfaces where MGCP isn't installed.
+Any intent, with its linked workflow and the notes attached to each step,
+compiles into a single `SKILL.md` file. It goes in
+`~/.claude/skills/{intent}/SKILL.md` for your account, or
+`<project>/.claude/skills/{intent}/SKILL.md` for one project. A compiled skill
+runs as a slash command and Claude can also find it by its description. That
+gives an intent two more ways to fire, and it works in Claude products where MGCP
+is not installed.
 
-Compilation is **purely additive**. The intent stays in `intent_config.json` and keeps driving
-the hooks; the backing lessons stay in the active query pool; nothing is hidden, removed or
-graduated. That is the inverse of an earlier strategy, since dropped, which hid graduated lessons from
-`query_lessons` and measurably degraded reliability. The compiler was never the problem, so it
-stayed: the intent is the source of truth and the SKILL.md is a downstream artifact you can
-recompile any time.
+Compiling only adds. The intent stays in `intent_config.json` and keeps driving
+the hooks. The notes behind it stay searchable. Nothing is hidden, removed, or
+promoted out of the store. An earlier plan did the opposite. It hid notes that
+had been compiled, and measurably made retrieval worse. The compiler was never
+the problem, so it stayed. The intent is the source of truth and the `SKILL.md`
+file is a copy you can rebuild at any time.
 
-## What 3.0 adds: more than one session at a time
+## Version 3.0: more than one session at a time
 
-Until 3.0, MGCP assumed one session. Embedded Qdrant allows a single writer per directory, so
-a second session blocked on the lock — and so did the dashboard. Every process loaded its own
-~448 MiB copy of the embedding model. Two sessions editing one lesson produced a lost update
-that nothing anywhere recorded.
+Before 3.0, MGCP assumed one session at a time. The built-in search index allows
+one program to write to a directory, so a second session had to wait for the
+first. The dashboard had to wait too. Every program loaded its own 448 MiB copy
+of the embedding model. If two sessions edited the same note, the second write
+replaced the first and nothing recorded that it had happened.
 
-3.0 closes all three, in three independently droppable workstreams. Write-safety landed before
-concurrency on purpose: shipping concurrency first would have turned a rare silent data loss
-into a common one. **Embedded, single-session, no-daemon remains the default** — nothing below
-is required, and MGCP still needs no server, no daemon and no container to run.
+Version 3.0 fixes all three. **A single session still needs no server, no
+background program, and no container.** Everything below is optional.
 
-| | 2.x | 3.0 |
+| | Before 3.0 | 3.0 |
 |---|---|---|
-| Concurrent sessions | one writer; a second blocks on the Qdrant lock | `mgcp-qdrant setup`, once |
-| Memory, 3 sessions | 1,344.6 MiB (each loads BGE) | **565.4 MiB** — one shared model |
-| Cost per extra session | ~448 MiB, ~2,100 ms cold start | **39 MiB, ~65 ms** |
-| Two sessions edit one lesson | last writer silently wins | `StaleWriteError` naming both versions |
+| Two sessions at once | the second waits for the first | run `mgcp-qdrant setup` once |
+| Memory for 3 sessions | 1,344.6 MiB, one model each | **565.4 MiB**, one shared model |
+| Cost of each extra session | 448 MiB, 2,100 ms to start | **39 MiB, 65 ms** |
+| Two sessions edit one note | the second write wins, silently | an error naming both versions |
 
-### Two sessions, one store
+### Sharing one store between sessions
 
-Embedded Qdrant allows one client per directory, so sharing a store across sessions needs a
-Qdrant server. MGCP installs and runs one for you — there is nothing to fetch by hand, no
-container, no package manager, no Rust toolchain:
+The built-in search index allows one program per directory, so sharing a store
+needs a Qdrant server. MGCP installs and runs one for you. There is nothing to
+download by hand, no container, and no package manager:
 
 ```bash
-mgcp-qdrant setup       # download, verify, start, configure. Once per machine.
-mgcp-migrate --force    # rebuild the index into it from lessons.db
+mgcp-qdrant setup       # download, check, start, and configure. Once per computer.
+mgcp-migrate --force    # rebuild the search index from lessons.db
 ```
 
-That downloads the official Qdrant binary for your platform (macOS arm64 and x86_64, Windows
-x86_64, Linux x86_64 and aarch64), checks it against a recorded sha256, puts it in `~/.mgcp/bin`,
-starts it on `127.0.0.1:6333` with telemetry off, and writes `qdrant_url` into
-`~/.mgcp/config.json`. Every session on the machine then shares one store.
+`setup` downloads the official Qdrant program for your computer. It supports
+macOS on Apple silicon and Intel, Windows on x86_64, and Linux on x86_64 and
+ARM64. It checks the download against a recorded checksum, installs it in
+`~/.mgcp/bin`, starts it on `127.0.0.1:6333` with telemetry switched off, and
+writes `qdrant_url` into `~/.mgcp/config.json`. Every session on the computer
+then shares one store.
 
 ```bash
-mgcp-qdrant status      # installed version, pid, whether it answers, which mode is live
-mgcp-qdrant stop        # stop it; sessions degrade to SQLite-only until it is back
-mgcp-qdrant teardown    # stop it and go back to embedded single-session
+mgcp-qdrant status      # version, process id, whether it answers, which store is in use
+mgcp-qdrant stop        # stop it. Sessions keep working without search until it returns.
+mgcp-qdrant teardown    # stop it and return to the built-in index
 ```
 
-**The URL lives in a file, not an environment variable**, and that is the part that makes this
-usable. An MCP server is spawned by your LLM client, so its environment is whatever that client
-passes it — `export MGCP_QDRANT_URL=...` in a shell never reaches it, and multi-session means
-several such processes. `MGCP_QDRANT_URL` still wins when set, for pointing at a server you run
-yourself. A session that finds its configured local server down starts it; set
-`MGCP_QDRANT_AUTOSTART=0` to forbid that.
+**The address lives in a file, not in an environment variable.** This is what
+makes the feature reachable. Your LLM client starts the MCP server, so the server
+inherits that client's environment. Typing `export MGCP_QDRANT_URL=...` in a
+shell never reaches it, and sharing a store means several such programs.
+`MGCP_QDRANT_URL` still takes priority when you set it, which is how you point at
+a server you run yourself. If a session finds the configured server stopped, it
+starts it. Set `MGCP_QDRANT_AUTOSTART=0` to prevent that.
 
-`--force` on the migrate is what an existing install needs, because the embedded directory is
-still sitting there — and it removes that directory on the way through. SQLite is the source of
-truth, so `mgcp-qdrant teardown` followed by `mgcp-migrate` rebuilds the embedded index from
-scratch. The server keeps its data in `~/.mgcp/qdrant-server`, deliberately not the embedded
-directory: two processes owning the same files with different assumptions is its own bug.
+Use `--force` on `mgcp-migrate` if you already have a built-in index, because the
+command refuses to overwrite one without it. It also deletes that directory as it
+runs. SQLite holds the real data, so `mgcp-qdrant teardown` followed by
+`mgcp-migrate` rebuilds the built-in index from scratch. The server keeps its own
+data in `~/.mgcp/qdrant-server`, which is a separate directory on purpose. Two
+programs owning the same files with different assumptions is its own problem.
 
-Without any of this the embedded default no longer locks you out. SQLite and Qdrant open
-separately, so project context, the soliloquy journal, lesson reads, workflows and six of REM's
-seven operations work while another process holds the vector store. The ten tools that need
-vectors say which PID holds it. Writes land in SQLite and are indexed when the store next opens
-— `add_lesson` keeps working in particular, because it is the apology gate's only exit.
+Without any of this, the built-in index no longer locks you out. SQLite and the
+search index open separately. Project context, the journal, reading notes by
+name, workflows, and six of REM's seven jobs all work while another program holds
+the index. The ten tools that need search report which process is holding it.
+Writes go to SQLite and are added to the index the next time it opens.
+`add_lesson` keeps working in particular, because it is the only way to clear the
+apology gate.
 
-One resolver feeds all three Qdrant construction sites, so the two modes cannot disagree about
-which store a process is talking to — a second session silently writing to the *other* store is
-the failure that centralising this prevents. `/api/health` reports which mode is live, because
-once two exist, that is not otherwise visible.
+One function decides which store a program talks to, and all three places that
+create a client call it. Without that, a second session could write to the other
+store and nothing would show it. `/api/health` reports which store is in use.
 
-Verified against Qdrant 1.19.1 — two concurrent MGCP processes each wrote three lessons and each
-read all six, with a third confirming the union. The verification found a showstopper first:
-collection creation was check-then-act, which is safe embedded and a `409 Conflict` in server
-mode, killing the second session — the entire audience for the feature. Another writer winning
-that race is success, not failure, and both stores now tolerate it.
+Tested against Qdrant 1.19.1. Two MGCP programs each wrote three notes at the
+same time, each then read all six, and a third program confirmed the total. The
+test found a real fault first. Creating a collection checked whether it existed
+and then created it, which is safe with one program and returns `409 Conflict`
+with two. That killed the second session, which is the only reason the feature
+exists. Losing that race means another program already created what you wanted,
+so both stores now accept it.
 
-Honest cost: the Qdrant daemon is **474.9 MiB resident** for 656K of stored data, where the
-design doc had estimated "tens of MB". Server mode buys correctness for roughly one extra
-process's worth of memory. SQLite stays the source of truth and `mgcp-migrate` rebuilds the
-index either way, so the move is reversible.
+The cost: the Qdrant server holds 474.9 MiB of memory for 656 KB of stored data,
+where the design note had guessed tens of megabytes. Sharing a store costs about
+one extra program's worth of memory. SQLite holds the real data either way, so
+the change is reversible.
 
-### Concurrent writes fail loudly
+### Two sessions editing one note
 
-`update_lesson` takes an `expected_version` and the UPDATE carries `AND version = ?`; a zero
-rowcount raises `StaleWriteError` rather than discarding the other session's edit.
-`refine_lesson` tells the agent to re-read and re-apply, and the web editor returns 409.
+`update_lesson` takes the version number you read, and the update only applies if
+the stored version still matches. If it does not match, the write fails with
+`StaleWriteError` instead of discarding the other session's edit. `refine_lesson`
+tells the agent to read the note again and reapply its change. The web editor
+returns a 409 response.
 
-The real clobber was never concurrency, though — it was granularity. `save_project_context`
-replaced todos, notes, active files and decisions wholesale from whatever the caller had read,
-so a session that only meant to change the notes discarded another session's todo. Narrow
-single-column writers (`upsert_todo`, `append_decision`, `set_project_notes`,
-`set_active_files`) remove that race rather than detecting it: SQLite serialises the writers,
-so no token and no retry. Two sessions touching different fields of one project no longer
-manufacture a conflict at all.
+The larger problem was not timing. It was writing too much at once.
+`save_project_context` replaced the todo list, notes, active files, and decisions
+with whatever the caller had read earlier. A session that meant to change only
+the notes could drop another session's todo. Four narrow functions now write one
+column each: `upsert_todo`, `append_decision`, `set_project_notes`, and
+`set_active_files`. SQLite runs them one after another, so there is nothing to
+detect and nothing to retry. Two sessions changing different fields of the same
+project no longer conflict.
 
-### One embedding model per machine
+### One embedding model per computer
 
 ```bash
-mgcp-embed            # run it explicitly, or let the first client start it
+mgcp-embed            # run it yourself, or let the first client start it
 mgcp-embed --status   # which path is in use, and why
 ```
 
-The daemon answers over a unix socket in `~/.mgcp/` — not TCP, so it is unreachable off-box and
-needs no auth. Vectors are **bit-identical** to the in-process path, not merely close: the wire
-carries raw little-endian float32, which is the dtype `encode` already produces, and the daemon
-calls the same functions a local caller would. A test asserts exact equality so the two paths
-cannot drift, which keeps the nine-month retrieval baseline comparable.
+The shared model answers over a unix socket in `~/.mgcp/`. A socket is not a
+network port, so nothing outside the computer can reach it and it needs no
+password. The numbers it returns are identical to the ones a program computes for
+itself, bit for bit, because the socket carries the raw floating-point values and
+the shared model calls the same functions a local caller would. A test checks for
+exact equality, so the two paths cannot drift apart and nine months of search
+measurements stay comparable.
 
-Measured round trip: **0.009 ms** persistent, 0.060 ms per connection, 0.014 ms for a `ping`
-through the assembled daemon. End-to-end `embed` is 7.6-8.5 ms through the daemon against
-7.8-9.5 ms in process — indistinguishable, and sometimes faster, because a client that never
-imports torch is not holding its thread pool. The design doc had estimated 1-3 ms; measuring
-corrected it by two orders of magnitude.
+Measured round trip: **0.009 ms** on an open connection, 0.060 ms including
+connection setup, and 0.014 ms for a `ping` through the finished program. A full
+`embed` call takes 7.6 to 8.5 ms through the shared model against 7.8 to 9.5 ms
+in the program itself. The two are the same speed, and the shared model is
+sometimes faster, because a client that never loads PyTorch does not hold its
+thread pool. The design note had estimated 1 to 3 ms, and measuring corrected
+that by a factor of a hundred.
 
-If no daemon answers, if it idles out mid-session, or if it returns an error, the caller falls
-back in-process and never sees an exception. A dead daemon costs speed, never correctness.
+If no shared model answers, or it shuts down mid-session, or it returns an error,
+the caller computes the numbers itself and nothing fails. A stopped shared model
+costs speed, never correctness.
 
 ```bash
-MGCP_EMBED_DAEMON=0     # never use or start a daemon
+MGCP_EMBED_DAEMON=0     # never use or start the shared model
 MGCP_EMBED_AUTOSTART=0  # use one that is running, never start one
-MGCP_EMBED_SOCKET=...   # socket path override
+MGCP_EMBED_SOCKET=...   # use a different socket path
 ```
 
-Every release before 3.0 — v1.0 through v2.13 — is in [CHANGELOG.md](CHANGELOG.md).
+Every release before 3.0, from 1.0 to 2.13, is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Commands
 
@@ -589,7 +635,7 @@ Every release before 3.0 — v1.0 through v2.13 — is in [CHANGELOG.md](CHANGEL
 | `mgcp-backup` | Backup/restore all MGCP data |
 | `mgcp-migrate` | Rebuild the Qdrant index from `lessons.db` |
 | `mgcp-qdrant` | Local Qdrant server for multi-session: `setup`, `status`, `start`, `stop`, `teardown` |
-| `mgcp-embed` | Shared embedding daemon — load BGE once per machine instead of once per process (`--status`, `--stop`) |
+| `mgcp-embed` | Load the embedding model once per computer instead of once per program (`--status`, `--stop`) |
 
 ## API & Dashboard
 
@@ -629,7 +675,12 @@ Any agent operating across invocations faces statelessness. The components here 
 | `workflows` | Multi-step processes with enforcement |
 | Hooks (event triggers) | Inject context at decision points |
 
-This wouldn't be machine learning - it would be **systematic accumulation** through explicit capture. A human adds lessons manually. An agent is not a person: for the agent, one capture path is already automatic and enforced — the apology gate blocks all tool use at acknowledged-failure moments until the lesson is written. What remains non-automatic is authorship and quality: the system forces *that* a lesson is captured, never *what* it says.
+This would not be machine learning. It would be **steady collection** through
+explicit capture. A person adds notes by hand. An agent is not a person, and for
+an agent one capture path is already automatic: the apology gate refuses every
+tool call once the agent admits a mistake, until the note is written. What stays
+manual is the writing and the quality. The system forces a note to exist. It
+never checks what the note says.
 
 A hypothetical multi-agent pattern:
 
@@ -657,8 +708,8 @@ If someone tries this, we'd be interested to hear how it goes.
 | Quality of Life | Complete |
 | Proactive Intelligence | Complete |
 | Feedback Loops (REM) | Complete |
-| Skill Compilation | Complete — emits a SKILL.md file; never writes to the knowledge store. The *strategy* of graduating lessons out of `query_lessons` was dropped for degrading reliability. |
-| Multi-session access | Complete (3.0) — Qdrant server mode, compare-and-swap writes, shared embedding daemon. Embedded single-session stays the default. |
+| Skill compilation | Complete. It writes a SKILL.md file and never writes to the store. The earlier plan to remove compiled notes from search was dropped, because it made retrieval worse. |
+| More than one session at a time | Complete in 3.0. Qdrant server support, version-checked writes, and a shared embedding model. A single session with the built-in index stays the default. |
 
 ## Contributing
 

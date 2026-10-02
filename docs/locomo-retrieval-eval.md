@@ -1,171 +1,213 @@
-# MGCP retrieval on LoCoMo
+# MGCP search quality, measured against LoCoMo
 
-**MGCP's retrieval is statistically indistinguishable from the retriever behind
-LoCoMo's published RAG results, and beats a lexical baseline by ~15 points.**
-Measured 2026-10-02 on all ten LoCoMo conversations, 1,536 paired questions.
+MGCP finds the right memory about as often as the search engine used in the
+LoCoMo research paper. Both find it far more often than a keyword search does.
 
-Everything below was measured by `tests/locomo_benchmark.py` on one machine, in
-one run per cell. Nothing is quoted from the LoCoMo paper, for a reason given
-under [Why we ran their retriever ourselves](#why-we-ran-their-retriever-ourselves).
+Measured on 2026-10-02, on all ten LoCoMo conversations and 1,536 questions.
 
----
+## What this document is for
 
-## The question this answers
+MGCP stores notes and finds them again later. The only test of that search was a
+set of 34 questions written by one person, about notes written by the same
+person. That test cannot tell you whether the search works on material from
+somewhere else.
 
-MGCP's own labelled set (`tests/benchmark_data/retrieval_queries.yaml`) is 34
-queries over a corpus of imperative lessons written by one person. It is a
-narrow instrument: it cannot say whether retrieval generalises to a corpus
-somebody else built, in another register, at another scale. LoCoMo — ten
-synthetic long-term conversations, 19-32 sessions each, 5,882 turns, 1,986
-annotated questions — is an external published benchmark of the thing MGCP
-claims to do, so it is the available check.
+LoCoMo is a public test set from a research paper. It contains ten long
+conversations between two people. Each conversation runs for 19 to 32 sessions,
+and 5,882 messages in total. The authors wrote 1,986 questions about those
+conversations. For each question they recorded which messages contain the answer.
 
-## Headline
+That recorded answer location is what makes the test useful. You can ask MGCP a
+question, look at what it returns, and check whether the right message is in the
+results.
 
-hit@5, the regime that matters: an agent is injected five memories, not fifty.
+## Words used in this document
 
-| database | retriever | recall@5 | paired diff vs MGCP | McNemar p | verdict |
+**Search engine.** The software that turns text into numbers and compares them.
+MGCP uses a model called BGE. The LoCoMo authors used one called DRAGON. Both
+work the same way. They score every stored item against the question and return
+the highest scores.
+
+**recall@5.** The share of questions where the correct message appears in the top
+five results. A score of 0.68 means 68 questions in every 100 worked.
+
+**BM25.** Keyword search. It counts shared words and gives more weight to rare
+words. It uses no model and no training. It is the baseline that any search
+engine should beat.
+
+**p-value.** The chance of seeing a difference this large if the two systems are
+equally good. A p-value of 0.18 is high, so that difference means nothing. A
+p-value below 0.05 is the usual line for calling a difference real.
+
+**Confidence interval.** The range the true difference probably sits in. If the
+range includes zero, the two systems might be equal.
+
+## Results
+
+Each row answers one question. How often does the correct message appear in the
+top five results?
+
+| Stored as | Search engine | recall@5 | Difference from MGCP | p-value | Conclusion |
 |---|---|---|---|---|---|
-| **observation** (2,541 facts) | **MGCP** (BGE + query prefix) | **0.680** | — | — | — |
-| | dragon (theirs) | 0.669 | +0.010 [-0.004, +0.025] | 0.18 | indistinguishable |
-| | BM25 | 0.524 | +0.156 [+0.134, +0.178] | 5.5e-44 | **MGCP better** |
-| **dialog** (5,882 turns) | MGCP | 0.628 | — | — | — |
-| | dragon (theirs) | **0.632** | -0.005 [-0.026, +0.014] | 0.65 | indistinguishable |
-| | BM25 | 0.479 | +0.147 [+0.119, +0.174] | 5.2e-25 | **MGCP better** |
+| 2,541 extracted facts | **MGCP (BGE)** | **0.680** | | | |
+| | DRAGON (the paper's) | 0.669 | +0.010 [-0.004, +0.025] | 0.18 | Too small to call |
+| | BM25 (keywords) | 0.524 | +0.156 [+0.134, +0.178] | 0.0000 | MGCP is better |
+| 5,882 raw messages | MGCP (BGE) | 0.628 | | | |
+| | DRAGON (the paper's) | 0.632 | -0.005 [-0.026, +0.014] | 0.65 | Too small to call |
+| | BM25 (keywords) | 0.479 | +0.147 [+0.119, +0.174] | 0.0000 | MGCP is better |
 
-The recall column is the committed run in `docs/locomo-results/`. The diff, CI
-and p columns come from the paired run that exported per-question outcomes,
-where the rates were observation 0.681 / 0.670 / 0.525 and dialog 0.626 / 0.631
-/ 0.479 — up to three questions different, for the reason under
-[What this is not](#what-this-is-not). The differences are computed within that
-run, so they are paired; taking them across the two tables would not be.
+MGCP and DRAGON are level. The gap between them is one question in a hundred,
+and the test says a gap that small is noise. Both beat keyword search by about
+15 questions in a hundred.
 
-Brackets are 95% bootstrap CIs on the paired difference (10,000 resamples,
-seed 7). Both retrievers answer the same questions, so the sample is paired and
-the test is McNemar's exact test on discordant pairs — a one-point difference in
-a rate cannot be called a difference without one.
+The recall column comes from the run saved in `docs/locomo-results/`. The
+difference, interval, and p-value columns come from a second run. That run saved
+the outcome of each question one at a time, which is what the statistical test
+needs. In that run the scores were 0.681, 0.670, and 0.525 for the facts, and
+0.626, 0.631, and 0.479 for the raw messages. The two runs differ by up to three
+questions. The section on limits explains why.
 
-## Full metrics
+## More detail on MGCP
 
-MGCP, observation database, LoCoMo record format:
+The LoCoMo authors sorted their questions into four kinds. MGCP handles them at
+different rates.
 
-| set | n | R@5 | R@10 | R@25 | R@50 | MRR@10 |
-|---|---|---|---|---|---|---|
-| **all answerable** | 1,536 | 0.680 | 0.729 | 0.777 | 0.803 | 0.566 |
-| 1 multi-hop | 282 | 0.723 | 0.798 | 0.883 | 0.908 | 0.537 |
-| 2 temporal | 321 | 0.757 | 0.791 | 0.829 | 0.847 | 0.680 |
-| 3 open-domain | 92 | 0.500 | 0.576 | 0.641 | 0.717 | 0.355 |
-| 4 single-hop | 841 | 0.656 | 0.698 | 0.736 | 0.760 | 0.555 |
+| Question kind | Count | Top 5 | Top 10 | Top 25 | Top 50 |
+|---|---|---|---|---|---|
+| **All** | 1,536 | 0.680 | 0.729 | 0.777 | 0.803 |
+| Needs two or more messages | 282 | 0.723 | 0.798 | 0.883 | 0.908 |
+| Asks about a date or time | 321 | 0.757 | 0.791 | 0.829 | 0.847 |
+| Needs outside knowledge | 92 | 0.500 | 0.576 | 0.641 | 0.717 |
+| Answered by one message | 841 | 0.656 | 0.698 | 0.736 | 0.760 |
 
-**Recall has a ceiling below 1.0.** In the observation database a fact carries
-only the `dia_id`s its extractor recorded, so 2.5% of gold evidence is
-unreachable however good retrieval is: any-evidence ceiling **0.975**, 750
-distinct `dia_id`s reachable. R@50 of 0.803 is **0.823 of attainable**. The
-dialog database has a 0.997 ceiling because each record is exactly one turn.
+Two numbers need care.
 
-**Complete evidence is much harder than any evidence.** all-evidence@5 is 0.537
-against recall@5 of 0.681 — that gap is the honest multi-hop result, since
-multi-hop questions cite several turns and "found one of them" flatters them.
+A perfect score is not 1.000. The facts in this test were extracted by the
+LoCoMo authors, and each fact records which messages it came from. Some messages
+are named by no fact at all. Those answers cannot be found, however good the
+search is. The highest score available is **0.975**. MGCP's top-50 score of
+0.803 is 82 percent of what the test allows.
 
-## Three findings
+Finding one correct message is easier than finding all of them. Some questions
+need two or more messages to answer. MGCP returns every needed message for 53.7
+percent of questions in the top five, against 68.0 percent for at least one.
 
-**The similarity floor is inert.** MGCP ships `min_score=0.30`. On this corpus
-`returned-nothing` is 0.000 at 0.30 and recall is flat to 0.50 in every
-condition; the floor only bites at 0.55-0.60. Taken with the separate finding
-that hard negatives are no longer rejected at 0.30 on MGCP's own grown corpus
-(238 → 304 lessons since that floor was calibrated), **the floor is currently
-below the operating range of both corpora and filtering nothing anywhere.**
-That is the most actionable result here and it is about MGCP, not LoCoMo.
+## What we learned about MGCP
 
-**Score scales are not transferable.** dragon's cosine scores are compressed:
-median top-1 0.573 against MGCP's 0.689. A floor of 0.60 costs MGCP 10% of its
-answers and costs dragon 99.6% of them. Any tuned threshold belongs to the model
-it was tuned on; moving one between retrievers is meaningless.
+### The score filter does not filter anything
 
-**MGCP's imperative schema is not a handicap, which is the opposite of what was
-predicted.** A LoCoMo fact is declarative and has no "action", so wrapping it in
-MGCP's storage template (`Trigger: …\nAction: …`) was expected to dilute the
-embedding. On facts it is a wash (0.647 vs 0.652 bare, pre-timestamp run). On raw
-turns the template is **better by 6.3 points** (0.577 vs 0.514) — short
-utterances like "Hey Mel! Good to see you!" embed poorly alone and the framing
-helps. The template does suppress absolute scores, which is why it interacts
-with the floor.
+MGCP throws away search results that score below 0.30. On this test set that
+limit removes nothing. No question returned an empty result at 0.30, and the
+scores do not change until the limit reaches 0.50.
 
-Separately: **timestamps are worth ~3 points.** Adopting LoCoMo's own record
-format, `(1:56 pm on 8 May, 2023) Caroline said, "…"`, moved MGCP's observation
-R@5 from 0.652 to 0.680. MGCP's ingestion records no per-record timestamp today.
+The same limit has also stopped working on MGCP's own notes. When the limit was
+chosen, the store held 238 notes. It now holds 304. Questions that should return
+nothing now return something. The limit is too low for both sets of material,
+and it should be measured again.
 
-## Why we ran their retriever ourselves
+### A score limit cannot move between search engines
 
-LoCoMo publishes **QA F1**, not retrieval recall. Comparing our recall@k to
-their F1 would compare two different measurements and call it a result. Their
-`scripts/evaluate_rag_gpts.sh` names the retriever behind their RAG rows —
-`dragon`, at top-k ∈ {5, 10, 25, 50} over `--rag-mode` dialog/observation/summary
-— so the honest comparison was to run that retriever here: same records, same
-questions, same gold labels, same scorer, one machine.
+DRAGON's scores sit lower than MGCP's. The middle score for the top result is
+0.573 for DRAGON and 0.689 for MGCP. A limit of 0.60 removes 10 percent of
+MGCP's answers and 99.6 percent of DRAGON's. A limit belongs to the model it was
+measured on.
 
-`dragon` is replicated from `task_eval/rag_utils.py::get_context_embeddings`:
-`facebook/dragon-plus-context-encoder` and `-query-encoder`, CLS pooling on
-`last_hidden_state[:, 0, :]`, L2-normalised, cosine. Their other encode helper
-leaves the normalisation commented out; the one that builds the context database
-for the published rows normalises, so that is what is replicated.
+### MGCP's note format helps, which we did not expect
 
-Every retriever sees byte-identical record text. The MGCP-template condition is
-reported separately because it is MGCP-specific storage, not a corpus difference.
+MGCP stores a note as a trigger and an action, which is "when this applies" and
+"what to do". A LoCoMo fact is a statement, so it has no action. We expected that
+mismatch to lower the score.
 
-## What this is not
+It does not. On extracted facts the format makes no difference, 0.647 against
+0.652. On raw messages the format is better by 6.3 points, 0.577 against 0.514.
+Short messages such as "Hey Mel! Good to see you!" carry little meaning on their
+own, and the added framing helps.
 
-- **Not a QA result.** No answers are generated and no F1 is computed. This
-  measures whether the right memory is retrievable, not whether a model then
-  uses it correctly. That is Phase 2 and it needs a generator.
-- **Not all of MGCP.** The community bridge never fires: it appends graph
-  neighbours and needs a curated relationship graph, which ingesting LoCoMo does
-  not produce. In the live store it is 31% of retrieved slots, so a real MGCP
-  session's behaviour differs from this measurement in a way this cannot size.
-- **Not a verdict on adversarial questions.** All 446 category-5 items are
-  excluded from recall. They carry `adversarial_answer` instead of `answer` and
-  their evidence points at the turn that makes a wrong answer look plausible;
-  the correct QA behaviour is abstention, so retrieving that turn is neither
-  right nor wrong at this layer. Their numbers are reported separately in the
-  raw JSON.
-- **Image content reaches no pipeline.** 1,226 turns carry a `blip_caption`, but
-  their retrieval code keys on `img_file`, which this data release does not
-  contain. Image-grounded questions are unanswerable for every retriever here,
-  equally, including theirs.
-- **One run per cell, one machine**, and the cells are not bit-stable. Two
-  independent runs of the same configuration differed by one question in 1,536
-  (up to three: MGCP 0.680 vs 0.681 in observation, 0.628 vs 0.626 in
-  dialog): Qdrant's HNSW search is
-  approximate and its graph depends on insertion order, and MPS matmul is not
-  bit-reproducible either. The p-values in the headline table come from the run
-  whose per-question outcomes were exported, so the two tables here differ in
-  the third decimal. No conclusion turns on a margin that small — which is the
-  point of testing the margin rather than eyeballing it. BM25 is deterministic.
+### Timestamps are worth about three points
 
-## Reproducing
+The LoCoMo authors store each message with the date and time of the session.
+Copying that format raised MGCP's score from 0.652 to 0.680. MGCP does not record
+a timestamp on each note today.
 
-The dataset is **not vendored**: `locomo10.json` is CC BY-NC 4.0 (Maharana et
-al., *Evaluating Very Long-Term Conversational Memory of LLM Agents*).
-Non-commercial — results here are publishable as research, not as product
-material.
+## Why we ran their search engine instead of quoting their results
+
+The LoCoMo paper reports how often a language model answers correctly after
+reading the search results. We measure how often the search returns the right
+message. Those are two different measurements, and putting one next to the other
+would not be a comparison.
+
+The paper's scripts name the search engine behind their published results. It is
+DRAGON, used over either the extracted facts or the raw messages. So we ran
+DRAGON here, on the same stored items, with the same questions and the same
+scoring. Every number in this document was produced by one program on one
+machine.
+
+Our copy of DRAGON follows their `task_eval/rag_utils.py`. It uses their two
+models, takes the first output vector, scales it to length one, and compares by
+cosine similarity. Their file holds a second copy of this code with the scaling
+switched off. We follow the copy that builds the database for their published
+results.
+
+All three search engines read the same stored text, character for character.
+MGCP's note format is reported as a separate line, because it changes the text
+and that would make the comparison unfair.
+
+## Limits
+
+This measures search only. It does not measure answers. No language model reads
+the results and writes a reply, so no number here compares to the paper's
+headline results. That needs a second stage of work.
+
+**This is not all of MGCP.** MGCP also adds related notes from its link graph.
+That feature does not run here, because importing LoCoMo creates no links. In
+daily use it supplies 31 percent of returned items, so a real session behaves
+differently from this test in a way these numbers cannot show.
+
+**Trick questions are left out.** The authors wrote 446 questions that the
+conversation does not answer. The correct reply is to say so. Each one still
+records a message that makes a wrong answer look plausible. Returning that
+message is neither right nor wrong for a search engine, so those questions are
+scored on their own and kept out of the table. Their numbers are in the saved
+results.
+
+**Pictures are not included.** 1,226 messages share an image and carry a written
+caption. The authors' code looks for a field that this release of the data does
+not contain, so no captions reach any search engine, theirs or ours. Questions
+about images fail for all three engines equally.
+
+**One run per row, one machine.** The rows do not repeat to the last digit. Two
+runs of the same setup differed by up to three questions in 1,536. MGCP scored
+0.680 and then 0.681 on the facts, and 0.628 and then 0.626 on the raw messages.
+The search index is approximate, and the graphics hardware does not produce
+identical arithmetic twice. Three questions is larger than two of the gaps in the
+results table, which is why those gaps were tested instead of read. BM25 repeats
+exactly.
+
+## How to repeat this
+
+The data is not stored in this repository. `locomo10.json` is published under the
+Creative Commons BY-NC 4.0 licence by Maharana and co-authors, in "Evaluating
+Very Long-Term Conversational Memory of LLM Agents". The licence allows research
+use and forbids commercial use. These results can go in a paper or a blog post,
+but not in sales material.
 
 ```bash
 curl -sLO https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json
 
-for r in mgcp dragon bm25; do
-  for mode in observation dialog; do
+for engine in mgcp dragon bm25; do
+  for stored_as in observation dialog; do
     .venv/bin/python -m tests.locomo_benchmark \
-      --data-file locomo10.json --retriever $r --mode $mode \
+      --data-file locomo10.json --retriever $engine --mode $stored_as \
       --record-format locomo \
-      --out-json docs/locomo-results/cmp-$r-$mode.json \
-      --out-per-question /tmp/pq-$r-$mode.json
+      --out-json docs/locomo-results/cmp-$engine-$stored_as.json \
+      --out-per-question /tmp/pq-$engine-$stored_as.json
   done
 done
 ```
 
-The harness builds its own throwaway MGCP instance and **refuses to run against
-`~/.mgcp`**: 2,541 strangers' facts in a 304-lesson curated corpus would change
-every number in the benchmark this is meant to complement.
+The program builds its own throwaway copy of MGCP, and it refuses to run against
+`~/.mgcp`. Adding 2,541 facts from somebody else's conversations to a store of
+304 working notes would change every number in the other test set.
 
-Aggregate results for each cell are committed under `docs/locomo-results/`.
-Those are our measurements, not LoCoMo content.
+The saved results in `docs/locomo-results/` are our measurements. They contain no
+LoCoMo text.

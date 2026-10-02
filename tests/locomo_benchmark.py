@@ -1,90 +1,90 @@
-"""Compare MGCP's retrieval stack against LoCoMo's own baselines, on LoCoMo.
+"""Compare MGCP's search against the search engines used in the LoCoMo paper.
 
 WHY THIS EXISTS
-    MGCP's own labelled set (tests/benchmark_data/retrieval_queries.yaml) has 34
-    queries over a corpus of imperative lessons written by one person. It cannot
-    say whether the stack generalises to a corpus somebody else built, in another
-    register, at another scale. LoCoMo is an external published benchmark of the
-    thing MGCP claims to do — find the right memory in a long history — so it is
-    the available check on that claim.
+    MGCP's own test set (tests/benchmark_data/retrieval_queries.yaml) holds 34
+    questions about notes written by the same person who wrote the questions. It
+    cannot show whether search works on material from somewhere else. LoCoMo is a
+    public test set of ten long conversations with 1,986 annotated questions, so
+    it is the available check.
 
-    LoCoMo publishes QA F1, not retrieval recall, so there is no number to sit
-    beside ours. Rather than compare against a differently-shaped metric, this
-    runs THEIR retriever (`dragon`, as configured in their
-    scripts/evaluate_rag_gpts.sh) and a lexical BM25 floor over the SAME records,
-    the SAME questions and the SAME gold labels. Every number here is measured by
-    this harness, so the comparison does not depend on reproducing their
-    generation stack.
+    The LoCoMo paper reports how often a language model answers correctly after
+    reading search results. This program measures how often search returns the
+    right message. Those are two different measurements, so rather than quote
+    their number, this runs their search engine here: same stored items, same
+    questions, same scoring.
 
-WHAT IS MEASURED
-    The retrieval layer only. Two things above the vector layer are out of scope,
-    and no result here should be reported as "MGCP scores X on LoCoMo" without
-    saying so:
+WHAT IT MEASURES
+    Search only. Two parts of MGCP are left out, and no result from this program
+    should be reported as "MGCP scores X on LoCoMo" without saying so:
 
-      - the community bridge, which appends graph neighbours at score 0.0 and is
-        31% of slots in the live trace. It needs a curated relationship graph;
-        ingesting LoCoMo produces none, so it cannot fire.
-      - the SQLite/graph/telemetry layer, which does not affect which vector wins.
+      - the link graph, which adds related notes at score 0.0 and supplies 31% of
+        results in daily use. It needs links between notes, and importing LoCoMo
+        creates none, so it never runs.
+      - the SQLite store, the graph, and usage logging, none of which change
+        which item search returns first.
 
-RETRIEVERS
-    mgcp    BAAI/bge-base-en-v1.5 via MGCP's own embedding module, with its
-            asymmetric query instruction prefix, cosine over a real Qdrant index.
-    dragon  facebook/dragon-plus-{query,context}-encoder, CLS pooling,
-            L2-normalised, cosine — replicating task_eval/rag_utils.py's
-            `get_context_embeddings` dragon branch, which is the retriever their
-            published RAG rows use.
-    bm25    Okapi BM25 (k1=1.5, b=0.75). The lexical floor. A dense retriever
-            that cannot beat keyword matching is not earning its inference cost.
+SEARCH ENGINES
+    mgcp    BAAI/bge-base-en-v1.5 through MGCP's own embedding code, including
+            its question prefix, compared by cosine similarity in a real Qdrant
+            index.
+    dragon  facebook/dragon-plus-query-encoder and -context-encoder, first output
+            vector, scaled to length one, compared by cosine similarity. This
+            copies the dragon branch of task_eval/rag_utils.py, which is the
+            engine behind the paper's published results.
+    bm25    Keyword search, Okapi BM25 with k1=1.5 and b=0.75. Any search engine
+            that cannot beat keyword matching is not worth its cost.
 
-    Every retriever sees byte-identical record text, so this isolates the
-    retriever. `--encoding template` additionally wraps records in MGCP's storage
-    template and is therefore mgcp-only; it is off by default for that reason.
+    All three read the same stored text, character for character, so the result
+    reflects the engine and not the text. The --encoding template option also
+    wraps each item in MGCP's note format, so it applies to mgcp only and is off
+    by default.
 
-DATABASES, named after their --rag-mode
-    observation  their pre-extracted facts, each paired with the dia_id it came
-                 from: 2,541 records. Their best-performing condition, and the
-                 shape MGCP natively stores.
-    dialog       raw turns, one record per utterance: 5,882 records.
+HOW ITEMS ARE STORED, using the paper's own names
+    observation  the facts the LoCoMo authors extracted, each recording the
+                 messages it came from: 2,541 items. This is their
+                 best-performing setup, and it matches how MGCP stores notes.
+    dialog       raw messages, one item each: 5,882 items.
 
-RECORD FORMAT
-    --record-format locomo  "(1:56 pm on 8 May, 2023) Caroline said, "...""
-                            exactly as rag_utils.get_context_embeddings builds it,
-                            including the session timestamp. Default, because the
-                            timestamp is load-bearing for the temporal category
-                            and omitting it handicaps every retriever equally but
-                            pointlessly.
-    --record-format plain   "Caroline: ..." — no timestamp. The ablation that
-                            shows what the timestamp is worth.
+ITEM FORMAT
+    --record-format locomo  '(1:56 pm on 8 May, 2023) Caroline said, "..."'
+                            This is what rag_utils.get_context_embeddings builds,
+                            including the session timestamp. It is the default,
+                            because questions about dates need that timestamp and
+                            leaving it out lowers every engine's score for no
+                            reason.
+    --record-format plain   "Caroline: ..." with no timestamp, which shows what
+                            the timestamp is worth.
 
-SCORING SET
-    1,536 of 1,986 questions: categories 1-4 (multi-hop, temporal, open-domain,
-    single-hop), less 4 open-domain items carrying no evidence.
+WHICH QUESTIONS ARE SCORED
+    1,536 of 1,986. These are the four kinds that the conversation answers, less
+    four questions that record no answer location.
 
-    All 446 category-5 (adversarial) items are excluded from recall and reported
-    separately. They carry `adversarial_answer` instead of `answer`, and their
-    `evidence` points at the turn that makes a wrong answer look plausible — the
-    correct QA behaviour is abstention, so retrieving that turn is neither right
-    nor wrong at this layer.
+    The other 446 are trick questions, scored on their own. They record an answer
+    that the conversation does not support, and the correct reply is to say so.
+    Each one still names a message that makes the wrong answer look plausible.
+    Returning that message is neither right nor wrong for a search engine.
 
-KNOWN LIMITATION
-    1,226 turns carry a `blip_caption` for a shared image. Their retrieval code
-    checks for `img_file`, which this release does not contain, so captions enter
-    no pipeline — theirs or ours. Image-grounded questions are therefore
-    unanswerable for every retriever here, equally.
+KNOWN LIMIT
+    1,226 messages share an image and carry a written caption. The authors' code
+    looks for a field that this release of the data does not contain, so captions
+    reach no search engine, theirs or ours. Questions about images fail for all
+    three engines equally.
 
-DATA
-    Not vendored. locomo10.json is CC BY-NC 4.0 (Maharana et al., "Evaluating
-    Very Long-Term Conversational Memory of LLM Agents"), fetched by the operator:
+THE DATA
+    Not stored in this repository. locomo10.json is licensed CC BY-NC 4.0
+    (Maharana and co-authors, "Evaluating Very Long-Term Conversational Memory of
+    LLM Agents"), so the operator downloads it:
 
         curl -sLO https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json
         python -m tests.locomo_benchmark --data-file locomo10.json --retriever mgcp
 
-    Non-commercial: results are publishable as research, not as product material.
+    Non-commercial. Results may be used in research, not in sales material.
 
 ISOLATION
-    Refuses to run against the operator's live data directory and builds its own
-    throwaway instance: 2,541 strangers' facts in a 304-lesson curated corpus
-    would change every number in the benchmark this is meant to complement.
+    This program builds its own throwaway copy of MGCP and refuses to run against
+    the operator's data directory. Adding 2,541 facts from somebody else's
+    conversations to a store of 304 working notes would change every number in
+    the other test set.
 """
 
 from __future__ import annotations
@@ -174,7 +174,7 @@ def load_records(
                 when = conversation.get(f"{base}_date_time")
                 for speaker, facts in per_speaker.items():
                     for i, entry in enumerate(facts):
-                        # [fact_text, dia_id] — occasionally more than one dia_id.
+                        # [fact_text, dia_id]. Sometimes more than one dia_id.
                         text = entry[0] if isinstance(entry, list) else str(entry)
                         ids = (
                             {str(x) for x in entry[1:] if isinstance(x, str)}
@@ -516,7 +516,7 @@ def format_report(label, n_records, scored, sweep, ceil, cosine: bool) -> str:
     lines += [
         "",
         f"ceiling: any-evidence {ceil['any']:.3f}, all-evidence {ceil['all']:.3f} "
-        f"({ceil['distinct_dia_ids']} dia_ids reachable) — recall cannot exceed this",
+        f"({ceil['distinct_dia_ids']} dia_ids reachable). No score can exceed this.",
         f"  R@50 as a fraction of ceiling: {scored['all']['recall@50'] / ceil['any']:.3f}",
         "",
         "all-evidence@k (every gold turn retrieved, not just one):",
@@ -556,7 +556,7 @@ def main() -> None:
         help=(
             "write per-question outcomes here. Two retrievers run on the same "
             "questions are a PAIRED sample, so a one-point difference in recall "
-            "can only be called a difference with a paired test — these files are "
+            "can only be called a difference with a paired test. These files are "
             "what makes that possible."
         ),
     )
@@ -574,7 +574,7 @@ def main() -> None:
     questions = load_questions(data)
     answerable = [q for q in questions if q["category"] in ANSWERABLE and q["evidence"]]
     label = (
-        f"LoCoMo retrieval — retriever={args.retriever} mode={args.mode} "
+        f"LoCoMo search: retriever={args.retriever} mode={args.mode} "
         f"format={args.record_format}"
         + (f" encoding={args.encoding}" if args.retriever == "mgcp" else "")
     )

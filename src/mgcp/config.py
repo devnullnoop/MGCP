@@ -1,8 +1,8 @@
 """Machine-local MGCP settings that have to outlive a shell.
 
 `MGCP_QDRANT_URL` as an environment variable cannot reach an MCP server the
-harness spawns, and that is precisely the case multi-session is about: several
-agent sessions, each started by a client whose environment you do not control.
+harness spawns, and that is the case this feature is about. Several agent
+sessions each start from a client whose environment you do not control.
 A file in the data directory is readable by every one of them, so the setting
 survives where an export does not.
 

@@ -32,7 +32,7 @@ class TestLinearSchedule:
     def test_next_due(self):
         """Next due is last run + interval, not the next multiple of it.
 
-        These used to read 10 and 15 — the interval GRID — while is_due
+        These used to read 10 and 15, which is the interval grid, while is_due
         measures sessions elapsed since the last run. A run at 7 does not
         make the operation due at 10; it makes it due at 12.
         """
@@ -172,7 +172,7 @@ class TestOperationDispatch:
     @pytest.mark.asyncio
     async def test_pending_todos_are_found_in_a_project_with_no_notes(self, tmp_path):
         """Knowledge extraction used to skip a whole project when none of its
-        snapshots carried a note, gated on a list of notes it never read — and
+        snapshots carried a note, gated on a list of notes it never read, and
         the todo check below does not depend on notes."""
         import hashlib
 

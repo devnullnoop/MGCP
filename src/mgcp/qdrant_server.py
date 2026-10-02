@@ -2,8 +2,8 @@
 
 Embedded Qdrant permits one client per directory, so more than one MGCP session
 needs a Qdrant *server*. Until now the only route to one was a Docker container
-the user installed themselves, which `mgcp-init` never mentioned — a capability
-reachable only by an undocumented manual dependency is not shipped.
+the user installed themselves, which `mgcp-init` never mentioned. A feature you
+can only reach through an undocumented manual step is not shipped.
 
 Qdrant publishes native binaries for macOS (arm64 and x86_64), Windows (x86_64)
 and Linux, so this module downloads the one matching the machine, verifies it
@@ -126,7 +126,7 @@ def binary_path() -> Path:
 
 
 def storage_dir() -> Path:
-    """Server-mode storage, deliberately NOT the embedded directory.
+    """Where the server keeps its data. This is not the embedded directory.
 
     Sharing one directory between the embedded store and the server would mean
     two different processes owning the same files with different assumptions.
@@ -175,9 +175,9 @@ def _tls_context() -> ssl.SSLContext:
     with CERTIFICATE_VERIFY_FAILED until somebody runs Install Certificates.command.
     certifi is already in the tree (httpx, via qdrant-client, requires it) and is
     now declared directly, so the installer verifies TLS on every platform rather
-    than depending on how the interpreter was installed. There is deliberately no
-    opt-out: the checksum protects the bytes, but a download that cannot verify
-    its peer is not something to make easy.
+    than depending on how the interpreter was installed. There is no option to
+    switch the check off. The checksum protects the bytes, and a download that
+    cannot verify the server it is talking to should not be easy to arrange.
     """
     try:
         import certifi
@@ -344,10 +344,11 @@ def start(port: int = DEFAULT_PORT, wait: bool = True, progress: bool = True) ->
         "QDRANT__SERVICE__HTTP_PORT": str(port),
         "QDRANT__STORAGE__STORAGE_PATH": str(storage_dir() / "storage"),
         "QDRANT__STORAGE__SNAPSHOTS_PATH": str(storage_dir() / "snapshots"),
-        # Loopback only, so the store is unreachable off-box and needs no auth —
-        # the same reasoning as the embedding daemon's unix socket. The dashboard
-        # already carries an open "no authentication" finding; this must not add
-        # a second unauthenticated surface, on a wider interface.
+        # Local address only. Nothing outside this computer can reach the store,
+        # so it needs no password. This follows the same reasoning as the shared
+        # embedding model's socket. The dashboard already has an open finding for
+        # running without authentication, and this must not add a second one on a
+        # wider interface.
         "QDRANT__TELEMETRY_DISABLED": "true",
     })
 
@@ -440,8 +441,8 @@ def ensure_running_if_configured(port: int = DEFAULT_PORT) -> bool:
     with this, the first session to need vectors brings the server up and the
     rest simply connect. Returns True when a server is answering afterwards.
 
-    Deliberately quiet and best-effort: a failure here degrades to the caller's
-    existing "vector store unavailable" path, which names what to do.
+    This stays quiet and does its best. A failure here falls through to the
+    caller's existing "vector store unavailable" message, which says what to do.
     """
     url = get_value("qdrant_url")
     if not url:

@@ -73,3 +73,8 @@ scripts/*
 
 # Project-specific Claude instructions (users create their own)
 CLAUDE.md
+
+# LoCoMo evaluation data: CC BY-NC 4.0, fetched by the operator, never vendored.
+# docs/locomo-results/*.json are OUR aggregate measurements and ARE committed.
+locomo10.json
+msc_personas_all.json

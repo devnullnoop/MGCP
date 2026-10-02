@@ -977,3 +977,60 @@ def test_every_store_honours_MGCP_DATA_DIR(monkeypatch, tmp_path):
     assert not escaped, (
         f"these stores ignored MGCP_DATA_DIR and resolved to the live location: {escaped}"
     )
+
+
+def test_E12_locomo_writeup_matches_the_recorded_run():
+    """The LoCoMo write-up must agree with the JSON the run actually produced.
+
+    Row E12 cites specific numbers from an external benchmark. The dataset is CC
+    BY-NC and not vendored, so this cannot re-run the benchmark — and a VERIFIED
+    row whose only test skips is reported as unchecked. What it can do is the
+    thing the ledger exists for: catch prose drifting away from its measurement.
+    The aggregates in docs/locomo-results/ are the evidence; the markdown must
+    match them.
+    """
+    import json
+
+    results_dir = REPO / "docs" / "locomo-results"
+    doc = (REPO / "docs" / "locomo-retrieval-eval.md").read_text()
+
+    cells = {}
+    for retriever in ("mgcp", "dragon", "bm25"):
+        for mode in ("observation", "dialog"):
+            path = results_dir / f"cmp-{retriever}-{mode}.json"
+            assert path.exists(), f"{path.name} is missing; E12 cites it"
+            cells[(retriever, mode)] = json.loads(path.read_text())
+
+    # The full-metrics table is quoted from the mgcp/observation run, exactly.
+    mgcp_obs = cells[("mgcp", "observation")]["scored"]["all"]
+    row = next(
+        line for line in doc.splitlines() if line.startswith("| **all answerable** |")
+    )
+    quoted = [c.strip() for c in row.strip("|").split("|")]
+    _label, n, r5, r10, r25, r50, mrr = quoted
+    assert int(n.replace(",", "")) == mgcp_obs["n"], f"n drifted: doc {n}"
+    for name, doc_value, measured in (
+        ("recall@5", r5, mgcp_obs["recall@5"]),
+        ("recall@10", r10, mgcp_obs["recall@10"]),
+        ("recall@25", r25, mgcp_obs["recall@25"]),
+        ("recall@50", r50, mgcp_obs["recall@50"]),
+        ("MRR@10", mrr, mgcp_obs["MRR@10"]),
+    ):
+        assert f"{measured:.3f}" == doc_value, (
+            f"{name}: doc says {doc_value}, the recorded run says {measured:.3f}"
+        )
+
+    # The headline comparison is from a second run of the same configuration,
+    # which the doc says differs in the third decimal because HNSW search is
+    # approximate. Tolerance, not equality -- but a real drift still fails.
+    for (retriever, mode), payload in cells.items():
+        measured = payload["scored"]["all"]["recall@5"]
+        assert any(
+            abs(measured - float(candidate)) <= 0.002
+            for candidate in re.findall(r"0\.\d{3}", doc)
+        ), f"{retriever}/{mode} recall@5 {measured:.3f} appears nowhere in the write-up"
+
+    # The ceiling is what stops 0.803 being read as 80% of attainable.
+    ceiling = cells[("mgcp", "observation")]["ceiling"]
+    assert f"{ceiling['any']:.3f}" in doc, "the recall ceiling is not stated"
+    assert "community bridge never fires" in doc, "the unmeasured 31% must stay disclosed"

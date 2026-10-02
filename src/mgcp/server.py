@@ -675,6 +675,7 @@ async def refine_lesson(
     refinement: str,
     new_action: str = "",
     new_trigger: str = "",
+    new_tags: list[str] | None = None,
 ) -> str:
     """Improve an existing lesson with new insight.
 
@@ -695,6 +696,9 @@ async def refine_lesson(
         new_action: Replacement action text. Leave empty to keep the current one.
         new_trigger: Replacement trigger text, which is what retrieval matches
             on. Leave empty to keep the current one.
+        new_tags: Replacement tag list. Tags are part of the indexed text and
+            they also drive tag-filtered search. Omit to keep the current tags.
+            Pass an empty list to remove all of them.
     """
     store, graph, telemetry = await _ensure_initialized()
     vector_store, catalogue_vector, index_warning = await _try_vector_stores()
@@ -713,6 +717,19 @@ async def refine_lesson(
     if new_trigger:
         lesson.trigger = new_trigger
 
+    # None keeps the tags. An empty list removes them, which is a thing somebody
+    # may well mean, so the two cases cannot share a falsy check.
+    old_tags = list(lesson.tags)
+    tags_changed = False
+    if new_tags is not None:
+        cleaned: list[str] = []
+        for tag in new_tags:
+            tag = str(tag).strip()
+            if tag and tag not in cleaned:
+                cleaned.append(tag)
+        tags_changed = cleaned != old_tags
+        lesson.tags = cleaned
+
     # Append refinement to rationale. The [vN] marker goes on even when there
     # was no rationale to append to: it is the only in-band record of which
     # version introduced which sentence, and a first refinement stored as bare
@@ -728,7 +745,9 @@ async def refine_lesson(
     # later why a lesson started or stopped being retrieved.
     reason = refinement
     if trigger_changed:
-        reason = f"{refinement}\n\nTrigger changed from: {old_trigger}"
+        reason = f"{reason}\n\nTrigger changed from: {old_trigger}"
+    if tags_changed:
+        reason = f"{reason}\n\nTags changed from: {', '.join(old_tags) or '(none)'}"
     try:
         await store.update_lesson(
             lesson, refinement_reason=reason, expected_version=old_version
@@ -743,10 +762,21 @@ async def refine_lesson(
         )
     vector_store.add_lesson(lesson)  # Re-index
 
+    # Update the in-memory graph too. It carries the trigger, action and tags,
+    # and nothing refreshed them, so every refinement left the graph holding the
+    # pre-refinement copy until the next server start. Community detection reads
+    # those tags, and REM maps community tags onto intents.
+    graph.add_lesson(lesson)
+
     # Log
     await telemetry.log_refine(lesson_id, old_version, lesson.version, refinement)
 
-    note = " Trigger replaced, so what this lesson matches has changed." if trigger_changed else ""
+    changes = []
+    if trigger_changed:
+        changes.append("Trigger replaced, so what this lesson matches has changed.")
+    if tags_changed:
+        changes.append(f"Tags are now: {', '.join(lesson.tags) or '(none)'}.")
+    note = (" " + " ".join(changes)) if changes else ""
     return (
         f"Lesson '{lesson_id}' refined to version {lesson.version}.{note}{index_warning}"
     )

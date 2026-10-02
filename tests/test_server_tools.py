@@ -1907,3 +1907,93 @@ class TestRefineLessonTrigger:
         assert any(lesson_id == "trigger-search" for lesson_id, _score in hits), (
             "the lesson was not re-indexed under its new trigger"
         )
+
+
+class TestRefineLessonTags:
+    """Editing tags, which feed both the indexed text and tag-filtered search."""
+
+    @pytest.mark.asyncio
+    async def test_new_tags_replace_the_tag_list(self, server_stores):
+        await add_lesson(
+            id="tag-edit", trigger="t", action="a", tags=["wrong", "alsowrong"]
+        )
+        result = await refine_lesson(
+            lesson_id="tag-edit", refinement="Retag it", new_tags=["git", "style"]
+        )
+        assert "Tags are now: git, style" in result
+        lesson = await get_lesson("tag-edit")
+        assert "git" in lesson and "style" in lesson
+        assert "alsowrong" not in lesson
+
+    @pytest.mark.asyncio
+    async def test_omitting_tags_keeps_them(self, server_stores):
+        """None and an empty list have to mean different things."""
+        await add_lesson(id="tag-keep", trigger="t", action="a", tags=["keep"])
+        result = await refine_lesson(lesson_id="tag-keep", refinement="No tag change")
+        assert "Tags are now" not in result
+        assert "keep" in await get_lesson("tag-keep")
+
+    @pytest.mark.asyncio
+    async def test_an_empty_list_removes_every_tag(self, server_stores):
+        await add_lesson(id="tag-clear", trigger="t", action="a", tags=["drop"])
+        result = await refine_lesson(
+            lesson_id="tag-clear", refinement="Untag it", new_tags=[]
+        )
+        assert "Tags are now: (none)" in result
+        assert "drop" not in await get_lesson("tag-clear")
+
+    @pytest.mark.asyncio
+    async def test_blank_and_duplicate_tags_are_cleaned(self, server_stores):
+        await add_lesson(id="tag-dirty", trigger="t", action="a")
+        await refine_lesson(
+            lesson_id="tag-dirty",
+            refinement="Clean tags",
+            new_tags=["  git  ", "", "git", "style"],
+        )
+        store = server_stores["store"]
+        lesson = await store.get_lesson("tag-dirty")
+        assert lesson.tags == ["git", "style"], lesson.tags
+
+    @pytest.mark.asyncio
+    async def test_tag_filtered_search_follows_the_new_tags(self, server_stores):
+        """The Qdrant payload has to be rewritten, not only the text."""
+        stores = server_stores
+        await add_lesson(
+            id="tag-filter", trigger="deploying to production", action="Check twice",
+            tags=["oldtag"],
+        )
+        await refine_lesson(
+            lesson_id="tag-filter", refinement="Retag", new_tags=["newtag"]
+        )
+        found = stores["vector_store"].search(
+            "deploying to production", limit=5, min_score=0.0, tags=["newtag"]
+        )
+        assert any(lid == "tag-filter" for lid, _ in found), "new tag does not filter"
+        stale = stores["vector_store"].search(
+            "deploying to production", limit=5, min_score=0.0, tags=["oldtag"]
+        )
+        assert not any(lid == "tag-filter" for lid, _ in stale), "old tag still filters"
+
+    @pytest.mark.asyncio
+    async def test_the_graph_stops_holding_the_old_copy(self, server_stores):
+        """refine_lesson updated SQLite and the index but never the graph.
+
+        The graph node carries the trigger, action and tags, so every refinement
+        left it holding the pre-refinement copy until the next server start.
+        Community detection reads those tags and REM maps them onto intents.
+        """
+        stores = server_stores
+        await add_lesson(
+            id="graph-refresh", trigger="before", action="before", tags=["before"]
+        )
+        await refine_lesson(
+            lesson_id="graph-refresh",
+            refinement="Change everything",
+            new_action="after",
+            new_trigger="after",
+            new_tags=["after"],
+        )
+        node = stores["graph"].graph.nodes["graph-refresh"]
+        assert node["trigger"] == "after", node
+        assert node["action"] == "after", node
+        assert node["tags"] == ["after"], node

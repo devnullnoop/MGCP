@@ -7,13 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added: refine_lesson can change a trigger
+### Added: refine_lesson can change a trigger and tags
 - **`refine_lesson` takes a `new_trigger`.** The trigger carries most of the weight in retrieval, so a lesson with the wrong trigger is never returned and never applied. Until now the tool could change the action and append to the rationale, which meant a mis-triggered lesson could be added to but not corrected. The only way to fix one was a direct write to the store or the web editor.
 - Found by hitting it. A rule about writing style was not returned by `query_lessons("git commit")`, which is the query the commit gate forces, so the rule never reached the moment it was written for. Appending to its rationale did not help, because the trigger is what the search compares against.
 - The replaced trigger is written into the version history. Why a lesson started or stopped being retrieved is otherwise unrecoverable, and that is the question you ask months later when a lesson has gone quiet.
 - The return value says the trigger changed, because a caller who edits a trigger has changed which future questions reach this lesson, and that is easy to do by accident.
 - Four tests in `tests/test_server_tools.py`: the trigger is replaced, the old one is kept in the history, an empty argument changes nothing, and a search for the new wording finds the lesson. The last one matters most. An edit that is not re-indexed changes nothing at all.
-- Still not editable from the MCP tools: a lesson's tags, which also feed the text that gets indexed.
+- **`new_tags` replaces the tag list.** Tags are part of the indexed text and they also drive tag-filtered search, so a wrong tag list is a second way to make a lesson hard to reach. Omitting the argument keeps the tags. Passing an empty list removes them all, because somebody may well mean that and the two cases cannot share one falsy check. Blank and duplicate tags are dropped.
+- **Fixed while adding this: `refine_lesson` never updated the in-memory graph.** The graph node carries the trigger, action, and tags, and nothing refreshed them, so every refinement left the graph holding the pre-refinement copy until the next server start. Community detection reads those tags, and REM maps community tags onto intents, so a retag could be invisible to the job that acts on tags. One line, and a test that fails against the old code with the node still reading its original value.
 
 
 ### Added: a style rule the commit path checks

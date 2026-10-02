@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: refine_lesson can change a trigger
+- **`refine_lesson` takes a `new_trigger`.** The trigger carries most of the weight in retrieval, so a lesson with the wrong trigger is never returned and never applied. Until now the tool could change the action and append to the rationale, which meant a mis-triggered lesson could be added to but not corrected. The only way to fix one was a direct write to the store or the web editor.
+- Found by hitting it. A rule about writing style was not returned by `query_lessons("git commit")`, which is the query the commit gate forces, so the rule never reached the moment it was written for. Appending to its rationale did not help, because the trigger is what the search compares against.
+- The replaced trigger is written into the version history. Why a lesson started or stopped being retrieved is otherwise unrecoverable, and that is the question you ask months later when a lesson has gone quiet.
+- The return value says the trigger changed, because a caller who edits a trigger has changed which future questions reach this lesson, and that is easy to do by accident.
+- Four tests in `tests/test_server_tools.py`: the trigger is replaced, the old one is kept in the history, an empty argument changes nothing, and a search for the new wording finds the lesson. The last one matters most. An edit that is not re-indexed changes nothing at all.
+- Still not editable from the MCP tools: a lesson's tags, which also feed the text that gets indexed.
+
+
 ### Added: a style rule the commit path checks
 - **New seeded rule `commit-message-prose-style`.** It refuses any commit whose message contains an em dash. Prose in this repository follows ASD-STE100 and the Google developer documentation style guide, and the em dash used as a pause is the clearest sign a sentence was not written to either. The check reads `tool_input.command`, where the message arrives whether it comes through `-m` or a heredoc. Bypass with `MGCP_BYPASS:prose` when a message quotes an em dash on purpose.
 - **The check is one character, on purpose.** A wider pattern would start refusing legitimate commits, and the rest of the style is the author's job. The lesson states the rest.

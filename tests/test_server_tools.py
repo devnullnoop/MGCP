@@ -1827,3 +1827,83 @@ class TestCrossStoreConsistency:
 
         # Graph should have edge
         assert stores["graph"].graph.has_edge("src", "tgt")
+
+
+class TestRefineLessonTrigger:
+    """Editing the field that decides whether a lesson is ever found.
+
+    The trigger carries most of the weight in retrieval. Until refine_lesson took
+    a new_trigger, only the action and rationale could change, so a lesson with
+    the wrong trigger could be added to but never corrected. The case that found
+    this: a rule about writing style was not returned by
+    query_lessons("git commit"), which is the query the commit gate forces, so
+    the rule never arrived when it was needed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_new_trigger_replaces_the_trigger(self, server_stores):
+        await add_lesson(
+            id="trigger-edit",
+            trigger="an unrelated subject nobody searches for",
+            action="Do the thing",
+        )
+        result = await refine_lesson(
+            lesson_id="trigger-edit",
+            refinement="Widen the trigger so this is reachable",
+            new_trigger="writing a commit message, README, or CHANGELOG",
+        )
+        assert "refined to version 2" in result
+        assert "Trigger replaced" in result, "the caller must be told the match changed"
+
+        lesson = await get_lesson("trigger-edit")
+        assert "commit message" in lesson
+        assert "unrelated subject" not in lesson
+
+    @pytest.mark.asyncio
+    async def test_the_old_trigger_is_kept_in_the_version_history(self, server_stores):
+        """Why a lesson started or stopped being retrieved has to stay on record."""
+        await add_lesson(
+            id="trigger-history", trigger="the first trigger", action="Act"
+        )
+        await refine_lesson(
+            lesson_id="trigger-history",
+            refinement="Replace the trigger",
+            new_trigger="the second trigger",
+        )
+        store = server_stores["store"]
+        versions = await store.get_lesson_versions("trigger-history")
+        assert versions, "a refinement must leave a version row"
+        reasons = " ".join(v.get("refinement_reason") or "" for v in versions)
+        assert "the first trigger" in reasons, (
+            "the replaced trigger is missing from the history, so a later reader "
+            "cannot tell what this lesson used to match"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_empty_new_trigger_changes_nothing(self, server_stores):
+        await add_lesson(id="trigger-keep", trigger="keep me", action="Act")
+        result = await refine_lesson(
+            lesson_id="trigger-keep", refinement="Only add to the rationale"
+        )
+        assert "Trigger replaced" not in result
+        lesson = await get_lesson("trigger-keep")
+        assert "keep me" in lesson
+
+    @pytest.mark.asyncio
+    async def test_the_new_trigger_is_what_search_matches(self, server_stores):
+        """Re-indexing is the whole point. An unindexed edit changes nothing."""
+        stores = server_stores
+        await add_lesson(
+            id="trigger-search",
+            trigger="beekeeping in cold climates",
+            action="Insulate the hive",
+        )
+        await refine_lesson(
+            lesson_id="trigger-search",
+            refinement="This is really about database migrations",
+            new_trigger="running a database migration on a live system",
+        )
+        hits = stores["vector_store"].search("database migration", limit=5, min_score=0.0)
+        assert any(lesson_id == "trigger-search" for lesson_id, _score in hits), (
+            "the lesson was not re-indexed under its new trigger"
+        )

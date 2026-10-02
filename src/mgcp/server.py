@@ -674,15 +674,27 @@ async def refine_lesson(
     lesson_id: str,
     refinement: str,
     new_action: str = "",
+    new_trigger: str = "",
 ) -> str:
     """Improve an existing lesson with new insight.
 
-    Use when you've learned something that enhances a lesson.
+    Use when you have learned something that improves a lesson.
+
+    Pass new_trigger when the lesson is right but nobody can find it. The
+    trigger carries most of the weight in retrieval, so a lesson with the wrong
+    trigger is never returned and never applied. Until this argument existed, the
+    only editable fields were the action and the rationale, which meant a
+    mis-triggered lesson could be added to but not corrected. One real case: a
+    rule about writing style could not be found by query_lessons("git commit"),
+    which is the query the commit gate forces, so the rule never reached the
+    moment it was written for.
 
     Args:
         lesson_id: ID of the lesson to refine
-        refinement: What to add or improve - will be appended to rationale
-        new_action: Updated action text (optional, leave empty to keep current)
+        refinement: What to add or improve. Appended to the rationale.
+        new_action: Replacement action text. Leave empty to keep the current one.
+        new_trigger: Replacement trigger text, which is what retrieval matches
+            on. Leave empty to keep the current one.
     """
     store, graph, telemetry = await _ensure_initialized()
     vector_store, catalogue_vector, index_warning = await _try_vector_stores()
@@ -696,6 +708,10 @@ async def refine_lesson(
     # Update lesson
     if new_action:
         lesson.action = new_action
+    trigger_changed = bool(new_trigger) and new_trigger != lesson.trigger
+    old_trigger = lesson.trigger
+    if new_trigger:
+        lesson.trigger = new_trigger
 
     # Append refinement to rationale. The [vN] marker goes on even when there
     # was no rationale to append to: it is the only in-band record of which
@@ -707,10 +723,15 @@ async def refine_lesson(
     lesson.version += 1
     lesson.last_refined = datetime.now(UTC)
 
-    # Save (pass refinement reason for version history)
+    # Save (pass refinement reason for version history). A trigger change is
+    # recorded in that reason, because the old trigger is the only way to tell
+    # later why a lesson started or stopped being retrieved.
+    reason = refinement
+    if trigger_changed:
+        reason = f"{refinement}\n\nTrigger changed from: {old_trigger}"
     try:
         await store.update_lesson(
-            lesson, refinement_reason=refinement, expected_version=old_version
+            lesson, refinement_reason=reason, expected_version=old_version
         )
     except StaleWriteError as exc:
         # Another session refined this lesson between the read and this write.
@@ -725,7 +746,10 @@ async def refine_lesson(
     # Log
     await telemetry.log_refine(lesson_id, old_version, lesson.version, refinement)
 
-    return f"Lesson '{lesson_id}' refined to version {lesson.version}.{index_warning}"
+    note = " Trigger replaced, so what this lesson matches has changed." if trigger_changed else ""
+    return (
+        f"Lesson '{lesson_id}' refined to version {lesson.version}.{note}{index_warning}"
+    )
 
 
 @mcp.tool()

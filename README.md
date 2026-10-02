@@ -224,7 +224,7 @@ mgcp-dashboard
 | Tool | Purpose |
 |------|---------|
 | `add_lesson` | Create a new lesson |
-| `refine_lesson` | Improve existing lesson |
+| `refine_lesson` | Improve an existing lesson. `new_trigger` changes what it matches on |
 | `link_lessons` | Create typed relationships |
 | `delete_lesson` | Remove lesson from all stores |
 

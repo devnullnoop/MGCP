@@ -179,7 +179,7 @@ something that no longer exists.
 
 **Lesson Management (4):**
 - `add_lesson` - Create a new lesson
-- `refine_lesson` - Improve an existing lesson
+- `refine_lesson` - Improve an existing lesson. `new_trigger` replaces the trigger, which is the field retrieval matches on, so a lesson nobody can find can be corrected rather than only added to. The replaced trigger is kept in the version history.
 - `link_lessons` - Create typed relationships between lessons
 - `delete_lesson` - Remove a lesson from all stores (SQLite, Qdrant, NetworkX)
 

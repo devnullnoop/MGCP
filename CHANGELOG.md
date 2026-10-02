@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`tests/retrieval_benchmark.py` could not run in server mode.** It constructed `QdrantClient(path=...)` directly — a fourth construction site the "one resolver feeds every site" invariant did not cover — so with `qdrant_url` configured it failed outright while the live store was perfectly readable. It now goes through `qdrant_client_args()`, `--qdrant-path` is optional when a server is configured, and the docstring no longer tells operators to copy the store first.
+- **`test_status_reports_mode_without_a_server` asserted machine-global state.** It checked that nothing answers on 127.0.0.1:6333, which was true when written and false as soon as a real server was running — the configuration the feature exists for. The probe is now stubbed, so the test is about what `status` reports.
+
+
 ### Added — multi-session on a local install, with no container and nothing to fetch by hand
 - **`mgcp-qdrant`, which installs and supervises a local Qdrant server.** v3.0.0 shipped Qdrant server mode as the answer to lock contention, but the only route to a server was a Docker container the user installed themselves: `grep -ic 'qdrant.server\|docker\|6333\|MGCP_QDRANT_URL' src/mgcp/init_project.py` returned 0, so nothing in the product mentioned that the capability existed or how to reach it. A capability reachable only by an undocumented manual dependency is not shipped. `mgcp-qdrant setup` now downloads the official binary for the platform (macOS arm64/x86_64, Windows x86_64, Linux x86_64/aarch64), verifies it against a sha256 recorded in `qdrant_server.py`, installs it to `~/.mgcp/bin`, starts it on `127.0.0.1:6333` with `QDRANT__TELEMETRY_DISABLED`, and configures MGCP to use it. `status`, `start`, `stop`, `install` and `teardown` round it out, and `mgcp-init --multi-session` runs the same thing.
 - **Qdrant publishes no checksum file**, so the integrity check is five sha256 values recorded by downloading every published archive at the pinned version. A mismatch refuses to install and says why, rather than leaving a partially-written binary.

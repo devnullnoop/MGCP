@@ -297,7 +297,15 @@ class TestPaths:
 
         assert qdrant_server.storage_dir() != Path(get_default_qdrant_path())
 
-    def test_status_reports_mode_without_a_server(self, data_dir):
+    def test_status_reports_mode_without_a_server(self, data_dir, monkeypatch):
+        """`answering` probes 127.0.0.1:6333, which is machine-global state.
+
+        Asserting it directly made this test pass only on a machine with nothing
+        on that port — it broke the moment a real server was running, which is
+        the configuration the feature exists for. The probe is stubbed so the
+        test is about what `status` reports, not about what happens to be up.
+        """
+        monkeypatch.setattr(qdrant_server, "is_answering", lambda *a, **k: False)
         status = qdrant_server.status()
         assert status["mode"] == "embedded (single session)"
         assert status["installed_version"] is None

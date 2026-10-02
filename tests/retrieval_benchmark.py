@@ -5,8 +5,13 @@ This is the instrument behind ``QdrantVectorStore.search(min_score=...)``. The
 floor is a number that must be justified by a curve, not by preference, so the
 curve is committed alongside the code.
 
-Run against a COPY of a real store (never the live one -- Qdrant local mode
-allows a single client per path and the MCP server holds it)::
+In server mode (`mgcp-qdrant setup`) this reads the live store directly, since
+searches are read-only and the server takes concurrent clients::
+
+    python -m tests.retrieval_benchmark
+
+In embedded mode, run it against a COPY -- local Qdrant allows a single client
+per path and the MCP server holds it::
 
     cp -R ~/.mgcp/qdrant /tmp/mgcp-eval/qdrant
     python -m tests.retrieval_benchmark --qdrant-path /tmp/mgcp-eval/qdrant
@@ -89,8 +94,13 @@ def collect_raw(
     from qdrant_client import QdrantClient
 
     from mgcp.embedding import embed_query
+    from mgcp.qdrant_vector_store import qdrant_client_args
 
-    client = QdrantClient(path=qdrant_path)
+    # Through the same resolver every other construction site uses, so this
+    # follows whichever mode is configured. It used to hardcode path=, which
+    # meant the benchmark could only ever read an embedded copy — and in server
+    # mode it failed outright while the live store was perfectly readable.
+    client = QdrantClient(**qdrant_client_args(qdrant_path))
     try:
         raw = {}
         for case in cases:
@@ -188,8 +198,14 @@ def main() -> None:
         raw = {k: [(lid, s) for lid, s in v] for k, v in raw.items()}
     else:
         if not args.qdrant_path:
-            ap.error("--qdrant-path is required unless --raw-in is given")
-        raw = collect_raw(args.qdrant_path, cases, args.variant)
+            from mgcp.qdrant_vector_store import get_qdrant_url
+
+            if not get_qdrant_url():
+                ap.error(
+                    "--qdrant-path is required unless --raw-in is given or a Qdrant "
+                    "server is configured (mgcp-qdrant status)"
+                )
+        raw = collect_raw(args.qdrant_path or "", cases, args.variant)
     if args.raw_out:
         Path(args.raw_out).write_text(json.dumps(raw, indent=1))
 

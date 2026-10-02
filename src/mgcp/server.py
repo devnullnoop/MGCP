@@ -2364,13 +2364,18 @@ async def rem_run(
     store, graph, telemetry = await _ensure_initialized()
     from .rem_cycle import RemEngine
 
-    # Only duplicate_detection needs vectors. None makes it report that it could
-    # not scan; the other six operations run regardless of the Qdrant lock.
-    try:
-        vector_store, _ = await _ensure_vector_stores()
-    except VectorStoreUnavailableError as exc:
-        logger.warning(f"REM running without vectors: {exc}")
-        vector_store = None
+    # Hand REM a way to open the vector store, not an open one. Only
+    # duplicate_detection needs vectors, and opening them here took the Qdrant
+    # lock on every cycle, including the cycles the commit gate forces when
+    # nothing is due. A session that never searched anything held the lock for
+    # the rest of its life.
+    async def _open_vector_store_for_rem():
+        try:
+            vector_store, _ = await _ensure_vector_stores()
+            return vector_store
+        except VectorStoreUnavailableError as exc:
+            logger.warning(f"REM running without vectors: {exc}")
+            return None
 
     project = await _rem_project(store, project_path)
     if project is None:
@@ -2387,7 +2392,7 @@ async def rem_run(
     engine = RemEngine(
         store=store,
         project_id=project.project_id,
-        vector_store=vector_store,
+        vector_store_factory=_open_vector_store_for_rem,
     )
 
     ops = [o.strip() for o in operations.split(",") if o.strip()] if operations else None

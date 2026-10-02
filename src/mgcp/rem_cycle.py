@@ -51,12 +51,21 @@ class RemEngine:
         *,
         project_id: str,
         vector_store=None,
+        vector_store_factory=None,
     ):
         self.store = store
         # duplicate_detection needs the caller's live Qdrant client: local mode
         # allows one client per path, so an engine running inside the MCP server
         # cannot open its own. None is valid only out-of-process (the CLI).
         self.vector_store = vector_store
+        # Prefer a factory. Only one of the seven operations needs a vector
+        # store, and passing an open one made every cycle take the Qdrant lock
+        # even when that operation was not due. Since the commit gate forces a
+        # cycle before every commit, a session that never searched anything
+        # still held the lock for the rest of its life. The factory is awaited
+        # once, inside the operation that needs it.
+        self._vector_store_factory = vector_store_factory
+        self._factory_called = False
         self.schedules = schedules or DEFAULT_SCHEDULES
         # Which project's schedule cursor this engine reads and writes. The
         # corpus it maintains is global; only the cadence is per project.
@@ -228,6 +237,24 @@ class RemEngine:
 
         return findings
 
+    async def _resolve_vector_store(self):
+        """The vector store, opened now if the caller gave a way to open it.
+
+        Called only from the one operation that needs vectors. The result is
+        remembered, including a None, so a failed open is not retried inside the
+        same cycle.
+        """
+        if self.vector_store is None and self._vector_store_factory and not self._factory_called:
+            self._factory_called = True
+            try:
+                self.vector_store = await self._vector_store_factory()
+            except Exception as exc:
+                # The caller's factory reports its own reasons. A failure here
+                # must not stop the six operations that need no vectors.
+                logger.warning(f"Could not open the vector store for REM: {exc}")
+                self.vector_store = None
+        return self.vector_store
+
     async def _duplicate_detection(self) -> list[RemFinding]:
         """Find semantically similar lessons."""
         from .data_ops import find_duplicates
@@ -236,7 +263,7 @@ class RemEngine:
             pairs = await find_duplicates(
                 threshold=0.85,
                 store=self.store,
-                vector_store=self.vector_store,
+                vector_store=await self._resolve_vector_store(),
             )
         except Exception as e:
             # Returning [] here read as "no duplicates found", which the report

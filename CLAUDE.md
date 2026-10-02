@@ -211,6 +211,8 @@ something that no longer exists.
 - `save_community_summary` - Persist LLM-generated summary for a community
 - `search_communities` - Semantic search across community summaries
 
+**REM opens the vector store only when it needs one.** Six of the seven operations need no vectors. `rem_run` hands the engine a factory rather than an open store, and `_duplicate_detection` awaits it. Opening one up front took the Qdrant lock on every cycle, including the cycles `rem-required-before-commit` forces when nothing is due, so a session that never searched anything held the lock for the rest of its life and blocked the dashboard and any second session. A failed open leaves the other six operations running.
+
 **REM Cycle (3):** All three take an optional `project_path` (empty = `CLAUDE_PROJECT_DIR`, else cwd) and report an error rather than a guess when that project has no saved context.
 - `rem_run` - Run consolidation operations (staleness, duplicates, communities)
 - `rem_report` - Per-operation last run, next due and finding count for this project. Findings themselves are not persisted. Only `{"finding_count": N}` reaches `rem_state`

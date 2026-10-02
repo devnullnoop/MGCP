@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: a maintenance cycle no longer takes the search lock it does not need
+- **`rem_run` opened a vector store before building the engine.** Only one of the seven operations, `duplicate_detection`, needs vectors. Opening one up front meant every cycle took the Qdrant lock, including the cycles `rem-required-before-commit` forces at commit time when nothing is due. The built-in search index allows one program per directory, so a session that never searched anything still held the lock for the rest of its life. That blocked the dashboard and any second session from reading the index.
+- `rem_run` now passes a factory, and `_duplicate_detection` awaits it. The result is remembered, including a failure, so one cycle does not retry a failed open. An explicit `vector_store` still wins, which keeps the CLI and the existing tests working.
+- A failed open no longer affects the other six operations. The warning names the reason, and `duplicate_detection` reports that it could not scan rather than reporting health it never measured.
+- Measured in embedded mode after the change: a cycle with nothing due creates no Qdrant directory and no lock file. In server mode the process opens no connection to the server.
+- Six tests in `tests/test_rem_scheduling.py`. Five cover the engine: a cycle without `duplicate_detection` never calls the factory, `duplicate_detection` does call it, a failed call is not retried, a failing factory leaves the other operations running, and an explicit store still wins. The sixth covers `rem_run` itself, which is where the defect was, and fails if the call site opens a store when nothing is due.
+
+
 ### Added: refine_lesson can change a trigger and tags
 - **`refine_lesson` takes a `new_trigger`.** The trigger carries most of the weight in retrieval, so a lesson with the wrong trigger is never returned and never applied. Until now the tool could change the action and append to the rationale, which meant a mis-triggered lesson could be added to but not corrected. The only way to fix one was a direct write to the store or the web editor.
 - Found by hitting it. A rule about writing style was not returned by `query_lessons("git commit")`, which is the query the commit gate forces, so the rule never reached the moment it was written for. Appending to its rationale did not help, because the trigger is what the search compares against.

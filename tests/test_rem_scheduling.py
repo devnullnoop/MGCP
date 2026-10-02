@@ -313,3 +313,140 @@ async def _coro_impl(value):
 
 def _coro(value):
     return _coro_impl(value)
+
+
+class TestVectorStoreOpensOnlyWhenNeeded:
+    """REM used to take the Qdrant lock on every cycle.
+
+    Only duplicate_detection needs a vector store. The server opened one before
+    building the engine, so every cycle took the lock, including the cycles the
+    commit gate forces when nothing is due. A session that never searched
+    anything held the lock for the rest of its life, which blocked the dashboard
+    and any second session from reading the index.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_cycle_without_duplicate_detection_never_opens_it(self, tmp_path):
+        from mgcp.models import Lesson
+
+        engine, store = _engine(tmp_path)
+        await store.add_lesson(Lesson(id="a", trigger="t", action="a", tags=["x"]))
+
+        opened = []
+
+        async def factory():
+            opened.append(1)
+            return object()
+
+        engine._vector_store_factory = factory
+        await engine.run(session_number=5, operations=["staleness_scan"])
+        assert opened == [], "staleness_scan does not need vectors and must not open them"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_detection_opens_it(self, tmp_path):
+        engine, _store = _engine(tmp_path)
+        opened = []
+
+        async def factory():
+            opened.append(1)
+            return None  # the scan then reports that it could not run
+
+        engine._vector_store_factory = factory
+        await engine.run(session_number=10, operations=["duplicate_detection"])
+        assert opened == [1], "the one operation that needs vectors must open them"
+
+    @pytest.mark.asyncio
+    async def test_the_factory_is_called_once(self, tmp_path):
+        engine, _store = _engine(tmp_path)
+        opened = []
+
+        async def factory():
+            opened.append(1)
+            return None
+
+        engine._vector_store_factory = factory
+        await engine.run(session_number=10, operations=["duplicate_detection"])
+        await engine._resolve_vector_store()
+        assert opened == [1], "a failed open must not be retried inside one cycle"
+
+    @pytest.mark.asyncio
+    async def test_a_failing_factory_does_not_stop_the_other_operations(self, tmp_path):
+        """Six of the seven operations need no vectors and must still run.
+
+        What duplicate_detection then reports depends on the machine. With the
+        factory refusing, find_duplicates falls back to opening its own client,
+        which succeeds in a clean temp directory and fails against a real lock.
+        Both outcomes are fine here. What must hold is that the cycle finishes
+        and the operations that need no vectors still run.
+        """
+        engine, _store = _engine(tmp_path)
+        tried = []
+
+        async def factory():
+            tried.append(1)
+            raise RuntimeError("the store is locked by another process")
+
+        engine._vector_store_factory = factory
+        report = await engine.run(
+            session_number=10, operations=["duplicate_detection", "staleness_scan"]
+        )
+        assert tried == [1], "the failure path was not exercised"
+        assert "staleness_scan" in report.operations_run
+        assert "duplicate_detection" in report.operations_run
+
+    @pytest.mark.asyncio
+    async def test_an_explicit_store_still_wins(self, tmp_path):
+        """The CLI and the tests pass an open store, and that path must keep working."""
+        sentinel = object()
+        engine, _store = _engine(tmp_path, vector_store=sentinel)
+        called = []
+
+        async def factory():
+            called.append(1)
+            return None
+
+        engine._vector_store_factory = factory
+        assert await engine._resolve_vector_store() is sentinel
+        assert called == []
+
+
+class TestRemRunDoesNotOpenVectors:
+    """The defect was in rem_run, so it is pinned at rem_run.
+
+    The engine tests above cover the factory. This covers the call site that
+    opened a vector store before building the engine.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_cycle_with_nothing_due_leaves_the_store_closed(
+        self, tmp_path, monkeypatch
+    ):
+        import mgcp.server as srv
+        from mgcp.models import ProjectContext
+        from mgcp.persistence import LessonStore
+
+        store = LessonStore(str(tmp_path / "lessons.db"))
+        await store.save_project_context(
+            ProjectContext(
+                project_id="p1",
+                project_name="P",
+                project_path=str(tmp_path),
+                session_count=1,  # too early for anything to be due
+            )
+        )
+        monkeypatch.setattr(srv, "_store", store)
+        monkeypatch.setattr(srv, "_graph", None)
+        monkeypatch.setattr(srv, "_telemetry", None)
+        monkeypatch.setattr(srv, "_initialized", True)
+
+        opened = []
+
+        async def _never():
+            opened.append(1)
+            raise AssertionError("rem_run opened the vector store with nothing due")
+
+        monkeypatch.setattr(srv, "_ensure_vector_stores", _never)
+
+        out = await srv.rem_run(project_path=str(tmp_path))
+        assert opened == [], out
+        assert "Nothing ran" in out

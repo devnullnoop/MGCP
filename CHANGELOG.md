@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: a Measurements section in the README, and evidence anybody can rerun
+- **The README said nothing about the LoCoMo results.** The work sat in `docs/` and in ledger row E12, with no link from the front page. There is now a Measurements section with the headline numbers, the six steps taken to keep the comparison fair, a table of where every artifact lives, and the two commands that reproduce it.
+- **The paired statistics could not be reproduced from anything committed.** The report quoted p=0.18 and a set of confidence intervals that came from a script written inline during the session and saved nowhere. The files that fed it sat in a temp directory. A published claim of "too close to call" that nobody can rerun is not evidence.
+- `tests/locomo_benchmark.py --compare` now does that work. It takes per-question files, computes recall, McNemar's exact test on the questions where two engines disagree, and a 95% interval from 10,000 resamples with a fixed seed. It needs no dataset, so anybody who clones the repository can rerun the test.
+- **The per-question files are committed, with the question text hashed.** Those files are the evidence for the paired test, but LoCoMo's questions are CC BY-NC data. Each row now holds a 16-character hash of the question instead of the text. A hash is stable across runs, which is all the pairing needs, so the evidence can be committed without copying their data. 180 KB per file.
+- **Corrected a number in the report.** It said the paired test ran on 1,536 questions. It ran on 1,525. Eleven questions appear twice in the same conversation, and a question cannot be paired with itself. The 1,536 figure was hardcoded in the throwaway script's output rather than counted, and making the test reproducible is what exposed it. Both numbers are right for what they count, and the report now says which is which.
+- `test_E12` checks the committed paired files: 1,525 questions, the p-value the report quotes, and the recorded verdict. The write-up and the evidence can no longer drift apart.
+
+
 ### Fixed: a maintenance cycle no longer takes the search lock it does not need
 - **`rem_run` opened a vector store before building the engine.** Only one of the seven operations, `duplicate_detection`, needs vectors. Opening one up front meant every cycle took the Qdrant lock, including the cycles `rem-required-before-commit` forces at commit time when nothing is due. The built-in search index allows one program per directory, so a session that never searched anything still held the lock for the rest of its life. That blocked the dashboard and any second session from reading the index.
 - `rem_run` now passes a factory, and `_duplicate_detection` awaits it. The result is remembered, including a failure, so one cycle does not retry a failed open. An explicit `vector_store` still wins, which keeps the CLI and the existing tests working.

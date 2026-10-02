@@ -90,9 +90,11 @@ ISOLATION
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
+import random
 import re
 import statistics
 import sys
@@ -536,9 +538,106 @@ def format_report(label, n_records, scored, sweep, ceil, cosine: bool) -> str:
     return "\n".join(lines)
 
 
+def mcnemar_exact(b: int, c: int) -> float:
+    """Two-sided exact test on the questions where the two engines disagree.
+
+    Both engines answer the same questions, so the samples are paired. Comparing
+    two rates without accounting for that can call a one-question difference a
+    result. Only the disagreements carry information: b is the count where the
+    first engine wins, c where the second does.
+    """
+    n = b + c
+    if n == 0:
+        return 1.0
+    k = min(b, c)
+    tail = sum(math.comb(n, i) for i in range(k + 1)) / (2**n)
+    return min(1.0, 2 * tail)
+
+
+def bootstrap_ci(pairs, iterations: int = 10000, seed: int = 7):
+    """A 95% interval for the difference, by resampling the question list."""
+    rng = random.Random(seed)
+    n = len(pairs)
+    diffs = []
+    for _ in range(iterations):
+        sample = [pairs[rng.randrange(n)] for _ in range(n)]
+        diffs.append(sum(a for a, _ in sample) / n - sum(b for _, b in sample) / n)
+    diffs.sort()
+    return diffs[int(0.025 * iterations)], diffs[int(0.975 * iterations)]
+
+
+def compare(paths: list[str], k: int = 5) -> dict:
+    """Compare per-question files pairwise, with a paired test on each pair."""
+    runs = {}
+    for path in paths:
+        rows = json.loads(Path(path).read_text())
+        label = Path(path).stem.replace("pq-", "")
+        runs[label] = {row["key"]: row for row in rows}
+
+    labels = list(runs)
+    shared = set.intersection(*[set(r) for r in runs.values()])
+    keys = sorted(shared)
+    out = {"k": k, "questions": len(keys), "runs": {}, "pairs": []}
+    for label in labels:
+        hits = [runs[label][key][f"hit@{k}"] for key in keys]
+        out["runs"][label] = round(sum(hits) / len(hits), 4)
+
+    for i, first in enumerate(labels):
+        for second in labels[i + 1 :]:
+            a = [bool(runs[first][key][f"hit@{k}"]) for key in keys]
+            b = [bool(runs[second][key][f"hit@{k}"]) for key in keys]
+            first_only = sum(1 for x, y in zip(a, b) if x and not y)
+            second_only = sum(1 for x, y in zip(a, b) if y and not x)
+            p = mcnemar_exact(first_only, second_only)
+            low, high = bootstrap_ci(list(zip(a, b)))
+            out["pairs"].append(
+                {
+                    "a": first,
+                    "b": second,
+                    "recall_a": round(sum(a) / len(a), 4),
+                    "recall_b": round(sum(b) / len(b), 4),
+                    "difference": round(sum(a) / len(a) - sum(b) / len(b), 4),
+                    "ci_low": round(low, 4),
+                    "ci_high": round(high, 4),
+                    "a_only": first_only,
+                    "b_only": second_only,
+                    "mcnemar_p": round(p, 6),
+                    "verdict": "different" if p < 0.05 else "too small to call",
+                }
+            )
+    return out
+
+
+def format_comparison(result: dict) -> str:
+    lines = [
+        f"\nPaired comparison on hit@{result['k']}, {result['questions']} questions",
+        "=" * 78,
+    ]
+    for label, recall in sorted(result["runs"].items(), key=lambda kv: -kv[1]):
+        lines.append(f"  {label:<24}{recall:.3f}")
+    lines += ["", f"{'pair':<34}{'diff':>8}{'95% interval':>20}{'p':>10}  verdict", "-" * 78]
+    for pair in result["pairs"]:
+        name = f"{pair['a']} vs {pair['b']}"
+        interval = f"[{pair['ci_low']:+.3f}, {pair['ci_high']:+.3f}]"
+        lines.append(
+            f"{name:<34}{pair['difference']:>+8.3f}{interval:>20}"
+            f"{pair['mcnemar_p']:>10.4g}  {pair['verdict']}"
+        )
+    return "\n".join(lines)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--data-file", required=True, help="path to locomo10.json (not vendored)")
+    ap.add_argument(
+        "--compare",
+        nargs="+",
+        metavar="PER_QUESTION_JSON",
+        help=(
+            "compare per-question files instead of running a search. Needs no "
+            "dataset, because those files hold hashed question keys and outcomes."
+        ),
+    )
+    ap.add_argument("--data-file", help="path to locomo10.json (not vendored)")
     ap.add_argument("--retriever", choices=["mgcp", "dragon", "bm25"], default="mgcp")
     ap.add_argument("--mode", choices=["observation", "dialog"], default="observation")
     ap.add_argument("--record-format", choices=["locomo", "plain"], default="locomo")
@@ -561,6 +660,17 @@ def main() -> None:
         ),
     )
     args = ap.parse_args()
+
+    if args.compare:
+        result = compare(args.compare)
+        print(format_comparison(result))
+        if args.out_json:
+            Path(args.out_json).write_text(json.dumps(result, indent=2))
+            print(f"\nwrote {args.out_json}")
+        return
+
+    if not args.data_file:
+        ap.error("--data-file is required unless --compare is given")
 
     if args.encoding == "template" and args.retriever != "mgcp":
         ap.error("--encoding template is mgcp-only; it would not be a retriever comparison")
@@ -616,9 +726,16 @@ def main() -> None:
                 ),
                 None,
             )
+            # The question text is LoCoMo's, under CC BY-NC, so it is hashed
+            # rather than written out. A hash is stable across runs, which is all
+            # the pairing needs, and it lets this file be committed as evidence
+            # without copying their data into the repository.
+            digest = hashlib.sha256(
+                f"{r['sample']}||{r['question']}".encode()
+            ).hexdigest()[:16]
             rows.append(
                 {
-                    "key": f"{r['sample']}||{r['question']}",
+                    "key": digest,
                     "category": r["category"],
                     "rank": rank,
                     **per_k,

@@ -1,0 +1,50 @@
+{
+  "k": 5,
+  "questions": 1525,
+  "runs": {
+    "mgcp-dialog": 0.6256,
+    "dragon-dialog": 0.6308,
+    "bm25-dialog": 0.4787
+  },
+  "pairs": [
+    {
+      "a": "mgcp-dialog",
+      "b": "dragon-dialog",
+      "recall_a": 0.6256,
+      "recall_b": 0.6308,
+      "difference": -0.0052,
+      "ci_low": -0.0256,
+      "ci_high": 0.0151,
+      "a_only": 118,
+      "b_only": 126,
+      "mcnemar_p": 0.654149,
+      "verdict": "too small to call"
+    },
+    {
+      "a": "mgcp-dialog",
+      "b": "bm25-dialog",
+      "recall_a": 0.6256,
+      "recall_b": 0.4787,
+      "difference": 0.1469,
+      "ci_low": 0.1193,
+      "ci_high": 0.1738,
+      "a_only": 354,
+      "b_only": 130,
+      "mcnemar_p": 0.0,
+      "verdict": "different"
+    },
+    {
+      "a": "dragon-dialog",
+      "b": "bm25-dialog",
+      "recall_a": 0.6308,
+      "recall_b": 0.4787,
+      "difference": 0.1521,
+      "ci_low": 0.1259,
+      "ci_high": 0.179,
+      "a_only": 342,
+      "b_only": 110,
+      "mcnemar_p": 0.0,
+      "verdict": "different"
+    }
+  ]
+}

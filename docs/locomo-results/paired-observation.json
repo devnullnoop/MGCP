@@ -1,0 +1,50 @@
+{
+  "k": 5,
+  "questions": 1525,
+  "runs": {
+    "mgcp-observation": 0.6807,
+    "dragon-observation": 0.6702,
+    "bm25-observation": 0.5246
+  },
+  "pairs": [
+    {
+      "a": "mgcp-observation",
+      "b": "dragon-observation",
+      "recall_a": 0.6807,
+      "recall_b": 0.6702,
+      "difference": 0.0105,
+      "ci_low": -0.0039,
+      "ci_high": 0.0249,
+      "a_only": 71,
+      "b_only": 55,
+      "mcnemar_p": 0.181224,
+      "verdict": "too small to call"
+    },
+    {
+      "a": "mgcp-observation",
+      "b": "bm25-observation",
+      "recall_a": 0.6807,
+      "recall_b": 0.5246,
+      "difference": 0.1561,
+      "ci_low": 0.1344,
+      "ci_high": 0.1777,
+      "a_only": 281,
+      "b_only": 43,
+      "mcnemar_p": 0.0,
+      "verdict": "different"
+    },
+    {
+      "a": "dragon-observation",
+      "b": "bm25-observation",
+      "recall_a": 0.6702,
+      "recall_b": 0.5246,
+      "difference": 0.1456,
+      "ci_low": 0.1246,
+      "ci_high": 0.1666,
+      "a_only": 260,
+      "b_only": 38,
+      "mcnemar_p": 0.0,
+      "verdict": "different"
+    }
+  ]
+}

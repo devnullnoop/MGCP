@@ -1034,6 +1034,24 @@ def test_E12_locomo_writeup_matches_the_recorded_run():
             for candidate in re.findall(r"0\.\d{3}", doc)
         ), f"{engine}/{stored_as} top-5 score {measured:.3f} is not in the document"
 
+    # The p-values in the write-up have to come from the committed evidence. They
+    # were first produced by a throwaway script that existed nowhere, which meant
+    # a published claim of "too small to call" could not be rerun by anybody.
+    for name in ("paired-observation.json", "paired-dialog.json"):
+        paired = json.loads((results_dir / name).read_text())
+        assert paired["questions"] == 1525, (
+            f"{name} should pair 1,525 distinct questions, found {paired['questions']}. "
+            "Eleven of the 1,536 scored rows are repeats of the same question."
+        )
+        for pair in paired["pairs"]:
+            if "mgcp" in pair["a"] and "dragon" in pair["b"]:
+                quoted = f"{pair['mcnemar_p']:.2f}"
+                assert quoted in doc, (
+                    f"{name}: the write-up does not quote p={quoted} for "
+                    f"{pair['a']} against {pair['b']}"
+                )
+                assert pair["verdict"] == "too small to call", pair
+
     # Without the highest available score, 0.803 reads as a worse result than it is.
     ceiling = cells[("mgcp", "observation")]["ceiling"]
     assert f"{ceiling['any']:.3f}" in doc, "the document does not state the highest score available"

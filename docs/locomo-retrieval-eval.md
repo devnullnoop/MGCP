@@ -67,6 +67,25 @@ needs. In that run the scores were 0.681, 0.670, and 0.525 for the facts, and
 0.626, 0.631, and 0.479 for the raw messages. The two runs differ by up to three
 questions. The section on limits explains why.
 
+The paired test runs on **1,525 questions, not 1,536**. Eleven questions appear
+twice in the same conversation, so the 1,536 scored rows are 1,525 distinct
+questions. A question cannot be paired with itself, so the duplicates collapse.
+Both numbers are correct for what they count. Use 1,536 for the recall tables and
+1,525 for the test.
+
+Reproduce the test from the committed files, with no dataset needed:
+
+```bash
+python -m tests.locomo_benchmark --compare docs/locomo-results/pq-*-observation.json
+python -m tests.locomo_benchmark --compare docs/locomo-results/pq-*-dialog.json
+```
+
+Those `pq-` files hold one row per question: a hashed key, the category, the rank
+of the first correct result, and whether a correct result appeared in the top 5,
+10, 25, and 50. The question text is hashed because it belongs to LoCoMo. A hash
+is stable across runs, which is all the pairing needs. The saved output of both
+commands is in `paired-observation.json` and `paired-dialog.json`.
+
 ## More detail on MGCP
 
 The LoCoMo authors sorted their questions into four kinds. MGCP handles them at

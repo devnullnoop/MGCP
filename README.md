@@ -170,6 +170,100 @@ at least one link appear. The ones missing from the picture tell you something
 too.
 ![Graph](docs/screenshots/instrument-graph.png)
 
+## Measurements
+
+Does the search actually find the right thing? The honest answer needs an outside
+test set, because a test written by the same person who wrote the notes proves
+little.
+
+**MGCP finds the right memory about as often as the search engine used in the
+LoCoMo research paper, and far more often than keyword search.**
+
+| Search engine | Correct result in the top 5 | Verdict |
+|---|---|---|
+| **MGCP** (BGE with a question prefix) | **68.0%** | |
+| DRAGON, the engine in the LoCoMo paper | 66.9% | Too close to call, p=0.18 |
+| BM25 keyword search | 52.4% | MGCP is better, p below 0.0001 |
+
+Measured on all ten LoCoMo conversations: 5,882 messages, 1,986 annotated
+questions, 1,536 of which the conversation answers. LoCoMo is a public test set
+from "Evaluating Very Long-Term Conversational Memory of LLM Agents" by Maharana
+and co-authors.
+
+Read [docs/locomo-retrieval-eval.md](docs/locomo-retrieval-eval.md) for the full
+tables, the per-question-type breakdown, and the limits. It defines every term it
+uses, so you do not need a statistics background.
+
+### How the comparison was kept fair
+
+The LoCoMo paper reports how often a language model answers correctly after
+reading search results. MGCP is the search step, not the answering step. Those are
+two different measurements, so quoting their number next to ours would prove
+nothing. Instead we ran their search engine ourselves, on this machine, under
+these conditions:
+
+1. **Same stored items.** All three engines read byte-identical text, including
+   LoCoMo's own format of `(timestamp) Speaker said, "..."`. MGCP's own note
+   format is reported as a separate line, because it changes the text.
+2. **Same questions and same answer key.** The LoCoMo authors recorded which
+   messages contain each answer. That recorded location is the answer key for
+   every engine.
+3. **Same scoring code.** One function scores all three runs.
+4. **Their engine, built from their code.** DRAGON follows their
+   `task_eval/rag_utils.py`: their two models, the first output vector, scaled to
+   length one, compared by cosine similarity.
+5. **A paired test, not a glance.** Every engine answers the same questions, so
+   the samples are paired. A one-point gap between two rates means nothing
+   without a test, so each pair gets McNemar's exact test on the questions where
+   the two engines disagree, plus a 95% interval from 10,000 resamples.
+6. **Two of the three databases they tested.** Their extracted facts, which is
+   their best setup, and the raw messages.
+
+### The data and how to repeat it
+
+| What | Where |
+|---|---|
+| The program | [tests/locomo_benchmark.py](tests/locomo_benchmark.py) |
+| Per-run totals | `docs/locomo-results/cmp-*.json` |
+| Per-question outcomes | `docs/locomo-results/pq-*.json` |
+| Paired test output | `docs/locomo-results/paired-*.json` |
+| Write-up | [docs/locomo-retrieval-eval.md](docs/locomo-retrieval-eval.md) |
+| Claim and status | row E12 in [docs/CAPABILITIES.md](docs/CAPABILITIES.md) |
+
+The test data is not in this repository. `locomo10.json` is licensed CC BY-NC 4.0,
+which allows research use and forbids commercial use, so you download it:
+
+```bash
+curl -sLO https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json
+python -m tests.locomo_benchmark --data-file locomo10.json --retriever mgcp --mode observation
+```
+
+The paired test needs no download, because the per-question files hold hashed
+question keys rather than LoCoMo's text:
+
+```bash
+python -m tests.locomo_benchmark --compare docs/locomo-results/pq-*-observation.json
+```
+
+The program builds its own throwaway copy of MGCP and refuses to run against
+`~/.mgcp`, so importing 2,541 facts from somebody else's conversations cannot
+disturb your own notes.
+
+### What this does not measure
+
+- **Answer quality.** No language model reads the results and replies, so there is
+  no number here comparable to the paper's headline figures.
+- **All of MGCP.** The link graph, which adds related notes and supplies 31% of
+  results in daily use, cannot run on imported data because that data has no
+  links.
+- **Trick questions.** 446 questions have no answer in the conversation, and the
+  correct reply is to say so. Judging a search engine on those is meaningless, so
+  they are scored separately.
+
+Two findings about MGCP came out of this. The score filter of 0.30 removes nothing
+on either test set and needs measuring again. The note format, which was expected
+to hurt, helps by 6.3 points on raw messages.
+
 ## Quick Start
 
 ### 1. Install

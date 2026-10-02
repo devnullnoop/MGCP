@@ -106,3 +106,45 @@ class TestPersistence:
             p,
         )
         assert [r.name for r in load_config(p).rules] == ["user-authored"]
+
+
+def test_prose_style_rule_ships_enabled_and_narrow():
+    """The commit prose rule must be a shipped default, not a local edit.
+
+    The style rule has to apply in every project on the machine, and a rule that
+    only exists in one operator's enforcement_rules.json does not survive a fresh
+    install. This also pins the check to one character. A wider pattern would
+    start refusing legitimate commits, and a rule people switch off enforces
+    nothing.
+    """
+    from mgcp.enforcement import DEFAULT_RULES
+
+    rule = next((r for r in DEFAULT_RULES if r.name == "commit-message-prose-style"), None)
+    assert rule is not None, "commit-message-prose-style is missing from DEFAULT_RULES"
+    assert rule.enabled is True, "the prose rule ships enabled"
+    assert rule.trigger.tool_name == "Bash"
+    assert rule.trigger.command_match.subcommands == ["commit"], (
+        "push carries no message, so the rule belongs on commit only"
+    )
+    assert len(rule.preconditions) == 1
+    pre = rule.preconditions[0]
+    assert pre.type == "tool_input_glob"
+    assert pre.field == "command", "the message arrives inside the Bash command"
+    assert pre.deny_globs == ["—".join(["*", "*"])], (
+        f"the check must stay one character, found {pre.deny_globs}"
+    )
+    assert rule.bypass_scope == "prose"
+    # The message has to teach the rule, because it is the only place the agent
+    # reads at the moment it is blocked.
+    for expected in ("ASD-STE100", "Google", "MGCP_BYPASS:prose"):
+        assert expected in rule.deny_reason, f"deny_reason does not mention {expected}"
+
+
+def test_no_default_rule_message_contains_an_em_dash():
+    """The rules that teach the style must follow it."""
+    from mgcp.enforcement import DEFAULT_RULES
+
+    for rule in DEFAULT_RULES:
+        for field in ("description", "deny_reason"):
+            text = getattr(rule, field) or ""
+            assert "—" not in text, f"{rule.name}.{field} contains an em dash"

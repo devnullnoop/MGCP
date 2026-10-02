@@ -377,6 +377,16 @@ The dispatcher falls back to a minimal hard-coded intent set if the JSON file is
 
 Trigger `command_match.type` ∈ {`git_subcommand`, `regex`, `contains`}. Precondition `type` ∈ {`tool_called_this_turn`, `tool_not_called_this_turn`, `staged_files_coupling`, `tool_input_glob`}. The staged-file coupling type takes `couplings: [{"when_staged": [glob,...], "require_one_of": [glob,...]}]`. If any staged file matches `when_staged`, at least one must match `require_one_of` or the tool call is denied. Use it to enforce doc-coupling, test-coupling, or changelog discipline on commits. The `tool_input_glob` type takes `field` (which `tool_input` key to read) and `deny_globs`, and denies when any glob matches that field. Use it to gate Edit/Write against sensitive paths (settings.json, secrets) or to gate URL targets on web fetches. It fails open on a missing field or a non-string value.
 
+**Committed prose has a style, and a rule that checks one part of it.** Everything written
+into this repository follows ASD-STE100 and the Google developer documentation style guide: one
+idea per sentence, 20 words or fewer, active voice, present tense, and every technical term
+defined where it first appears. This covers commit messages, README, CHANGELOG, documents under
+`docs/`, code comments, and docstrings. The lesson `human-prose-no-ai-tells` carries the full
+rule and surfaces on `query_lessons("git commit")`, which the git gate already forces. The
+seeded rule `commit-message-prose-style` refuses any commit whose message contains an em dash.
+That check is one character on purpose, because a wider pattern would refuse legitimate commits.
+Bypass with `MGCP_BYPASS:prose` when a message quotes an em dash to describe the rule itself.
+
 Per-turn state flows through `workflow_state.json`: UserPromptSubmit resets `turn_tools_called=[]` and parses `MGCP_BYPASS[:scope]` tokens into `turn_bypass_scopes`. PostToolUse appends every tool name to `turn_tools_called`. PreToolUse reads both. Schema + defaults live in `src/mgcp/enforcement.py`; **the evaluator lives in the hook and only in the hook**. The hook must be stdlib-only with no `mgcp` import, and a second copy in the package had no production caller. `server.py` imports the models and `load_config`/`save_config`, never the evaluator. That copy, and the ~300 lines of tests that were its only consumer, were deleted; the evaluator's contract is tested where the code runs, in `tests/test_pre_tool_dispatcher.py`. `tests/test_enforcement.py` covers the schema and its round-trip.
 
 ## Implementation Roadmap

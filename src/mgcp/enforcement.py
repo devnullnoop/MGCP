@@ -185,9 +185,52 @@ DEFAULT_RULES: list[EnforcementRule] = [
         bypass_scope="docs",
         deny_reason=(
             "A hook VERSION bump is staged without README.md. Version bumps "
-            "change documented behavior — update README in the same commit, "
-            "not as a follow-up. If this is a no-op version bump (no "
-            "user-visible change), bypass with MGCP_BYPASS:docs."
+            "change documented behavior, so update README in the same commit "
+            "rather than as a follow-up. If this is a no-op version bump with no "
+            "user-visible change, bypass with MGCP_BYPASS:docs."
+        ),
+    ),
+    EnforcementRule(
+        name="commit-message-prose-style",
+        description=(
+            "Refuse a commit whose message contains an em dash. Prose committed "
+            "to a repository follows ASD-STE100 and the Google developer "
+            "documentation style guide, and the em dash used as a pause is the "
+            "clearest sign that a sentence was not written to either. This backs "
+            "the human-prose-no-ai-tells lesson with a rule, because that lesson "
+            "was written on 2026-08-26 after the same complaint and did not hold "
+            "on its own. The check is mechanical and narrow on purpose. One "
+            "character, no guessing. The rest of the style is the author's job, "
+            "and the lesson states it."
+        ),
+        enabled=True,
+        trigger=Trigger(
+            tool_name="Bash",
+            command_match=CommandMatch(
+                type="git_subcommand",
+                subcommands=["commit"],
+            ),
+        ),
+        preconditions=[
+            Precondition(
+                type="tool_input_glob",
+                field="command",
+                # The message reaches git inside the Bash command, whether it
+                # arrives through -m or a heredoc, so the command string is where
+                # it can be read.
+                deny_globs=["*\u2014*"],
+            ),
+        ],
+        bypass_scope="prose",
+        deny_reason=(
+            "This commit message contains an em dash. Rewrite the sentence with "
+            "a period, a comma, or a colon. Prose in this repository follows "
+            "ASD-STE100 and the Google developer documentation style guide: one "
+            "idea per sentence, 20 words or fewer, active voice, and every term "
+            "defined where it first appears. Call "
+            "query_lessons('commit message prose style') for the full rule. If "
+            "the message quotes an em dash on purpose, for example when "
+            "describing this rule, bypass with MGCP_BYPASS:prose."
         ),
     ),
     EnforcementRule(
@@ -195,7 +238,7 @@ DEFAULT_RULES: list[EnforcementRule] = [
         description=(
             "Force REM cycle execution before git commit/push. REM has no "
             "auto-trigger; without forced execution at commit time the "
-            "schedule drifts unboundedly. Seeded DISABLED by default — fresh "
+            "schedule drifts unboundedly. Seeded DISABLED by default, because fresh "
             "installs do not benefit from REM enforcement until they have "
             "lesson history and REM state. Toggle with "
             "toggle_enforcement_rule('rem-required-before-commit') once REM "

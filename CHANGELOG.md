@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: a style rule the commit path checks
+- **New seeded rule `commit-message-prose-style`.** It refuses any commit whose message contains an em dash. Prose in this repository follows ASD-STE100 and the Google developer documentation style guide, and the em dash used as a pause is the clearest sign a sentence was not written to either. The check reads `tool_input.command`, where the message arrives whether it comes through `-m` or a heredoc. Bypass with `MGCP_BYPASS:prose` when a message quotes an em dash on purpose.
+- **The check is one character, on purpose.** A wider pattern would start refusing legitimate commits, and the rest of the style is the author's job. The lesson states the rest.
+- **The lesson was unreachable at the moment it was needed.** `human-prose-no-ai-tells` was written on 2026-08-26 and is correct, but `query_lessons("git commit")` never returned it, because its trigger said nothing about commits. The git gate forces that exact query before every commit, so the advisory half of the rule never fired. The trigger now covers commit messages, README, CHANGELOG, documents under `docs/`, comments, and docstrings. It ranks first for "git commit" at 72% relevance.
+- The `git_operation` intent now states the rule in the text the dispatcher injects on every message, so the requirement appears before the commit is drafted rather than after it is refused.
+- All three live in `~/.mgcp`, so they apply to every project on the machine. The rule is also in `DEFAULT_RULES`, so a fresh install gets it.
+- `refine_lesson` cannot change a lesson's trigger, and the trigger is the field that decides whether a lesson is ever found. Fixing this one needed a direct write. Worth an MCP tool.
+- Tests: five in `tests/test_pre_tool_dispatcher.py` run the hook as a subprocess and cover a heredoc message, a `-m` message, a plain message, an em dash in an unrelated command, and the bypass. Two in `tests/test_enforcement.py` pin the rule to the shipped defaults and check that no default rule's own text contains an em dash. One did.
+
+
 ### Added: search quality measured against an outside test set
 - **New program `tests/locomo_benchmark.py` and a report in [docs/locomo-retrieval-eval.md](docs/locomo-retrieval-eval.md).** Until now the only test of MGCP's search was 34 questions about notes written by the same person who wrote the questions. That cannot show whether search works on other people's material. LoCoMo is a public test set of ten long conversations, 5,882 messages, and 1,986 questions with the answer location recorded for each one.
 - **Result: MGCP returns the correct message in its top five results for 68.0% of questions.** DRAGON, the search engine used in the LoCoMo paper, scores 66.9% on the same material. The gap is one question in a hundred, and a paired test says that is noise (p=0.18). Keyword search scores 52.4%. Both engines beat it by about 15 points, so the model is worth its cost.

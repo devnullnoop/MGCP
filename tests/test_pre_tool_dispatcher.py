@@ -873,3 +873,96 @@ class TestCheckCoupling:
     def test_when_hit_req_miss(self, hook_module):
         ok, trig = hook_module._check_coupling(["src/x.py"], ["src/*.py"], ["README.md"])
         assert ok is False and "src/x.py" in trig
+
+
+class TestCommitMessageProseStyle:
+    """The em dash check that runs on every commit.
+
+    The style rule lived only in a lesson written on 2026-08-26. It did not hold,
+    and the same complaint arrived on 2026-10-02 about this repository. The lesson
+    was also unreachable at the moment it was needed, because
+    query_lessons("git commit") did not return it. So the rule is now data the
+    hook reads, and the check is one character with no guessing.
+
+    These run the hook as a subprocess, which is how it runs in production.
+    """
+
+    RULE = {
+        "name": "commit-message-prose-style",
+        "description": "",
+        "enabled": True,
+        "trigger": {
+            "tool_name": "Bash",
+            "command_match": {
+                "type": "git_subcommand",
+                "subcommands": ["commit"],
+                "pattern": "",
+            },
+        },
+        "preconditions": [
+            {
+                "type": "tool_input_glob",
+                "field": "command",
+                "deny_globs": ["*\u2014*"],
+                "couplings": [],
+            },
+        ],
+        "bypass_scope": "prose",
+        "deny_reason": "This commit message contains an em dash.",
+    }
+
+    def _run(self, command: str, tmp_path: Path, bypass: list | None = None):
+        state_file = tmp_path / "state.json"
+        state_file.write_text(
+            json.dumps(
+                {"turn_tools_called": [], "turn_bypass_scopes": bypass or []}
+            )
+        )
+        rules_file = tmp_path / "enforcement_rules.json"
+        rules_file.write_text(json.dumps({"version": 1, "rules": [self.RULE]}))
+        env = {
+            "MGCP_STATE_FILE": str(state_file),
+            "MGCP_ENFORCEMENT_CONFIG": str(rules_file),
+            "MGCP_DATA_DIR": str(tmp_path),
+            "PATH": "/usr/bin:/bin",
+        }
+        return subprocess.run(
+            [sys.executable, str(HOOK_PATH)],
+            input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    def test_em_dash_in_a_heredoc_message_is_refused(self, tmp_path):
+        """A heredoc message still arrives inside the command string."""
+        command = "git commit -F - <<'MSG'\nFix the thing \u2014 and another thing\nMSG"
+        r = self._run(command, tmp_path)
+        assert r.returncode == 0, r.stderr
+        payload = json.loads(r.stdout)
+        assert payload["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "em dash" in payload["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_em_dash_in_a_dash_m_message_is_refused(self, tmp_path):
+        r = self._run('git commit -m "Fix the thing \u2014 and more"', tmp_path)
+        payload = json.loads(r.stdout)
+        assert payload["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_a_plain_message_passes(self, tmp_path):
+        command = "git commit -F - <<'MSG'\nFix the thing. Then fix another thing.\nMSG"
+        r = self._run(command, tmp_path)
+        assert r.stdout.strip() == "", r.stdout
+
+    def test_an_em_dash_outside_a_commit_is_ignored(self, tmp_path):
+        """The rule reads commit messages, not every command on the machine."""
+        r = self._run('echo "a \u2014 b" > /tmp/notes.txt', tmp_path)
+        assert r.stdout.strip() == "", r.stdout
+
+    def test_the_bypass_scope_releases_it(self, tmp_path):
+        """A commit that quotes an em dash on purpose needs a way through."""
+        r = self._run(
+            'git commit -m "Ban the em dash \u2014 like this one"',
+            tmp_path,
+            bypass=["prose"],
+        )
+        assert r.stdout.strip() == "", r.stdout

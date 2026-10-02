@@ -1082,8 +1082,10 @@ def test_E05_bridge_measurement_matches_its_evidence():
             f"{label} does not state the appended count of {analysis['appended_slots']}"
         )
     useful = analysis["appends_that_added_a_labelled_lesson"]
-    assert f"| **{useful}** |" in doc or f" {useful} note" in doc, (
-        f"bridge-measurement.md does not state {useful} useful appends"
+    # Match the table row, not its formatting. Removing bold from the number
+    # broke an earlier version of this check.
+    assert f"search missed | {useful} |" in doc, (
+        f"bridge-measurement.md does not report {useful} useful appends in its result table"
     )
     assert len(analysis["appends_reaching_top_3"]) == 0, (
         "an append reached the top 3, which contradicts the write-up"

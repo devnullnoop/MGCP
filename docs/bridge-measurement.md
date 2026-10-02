@@ -1,8 +1,9 @@
-# Does the link graph add anything?
+# The link graph, measured
 
-**On the labelled query set, the link graph added 30 extra lessons and one of them
-was useful.** None of them reached the top three results. Measured 2026-10-02
-against a copy of a 305-lesson store.
+Over the 34 labelled queries, the link graph appended 30 lessons. One of them was
+a lesson the search had missed and a human had marked relevant. None of the 30
+reached the top three results. Measured 2026-10-02 against a copy of a 305-lesson
+store.
 
 Reproduce with `python -m tests.bridge_benchmark`.
 
@@ -13,8 +14,8 @@ summaries, finds the group of notes that matches the question, and appends membe
 of that group which the search itself did not return. Those appended results are
 recorded with a score of 0.0, because relevance did not match them.
 
-This matters because the appends are not rare. Over nine months of real use, 2,355
-of 7,397 returned results arrived this way, which is 31.8%. Ledger row E05 found
+The appends are not rare. Over nine months of real use, 2,355 of 7,397 returned
+results arrived this way, which is 31.8%. Ledger row E05 found
 that the mechanism ranked its candidates by how often each note had been used, and
 then recorded a use on whatever it appended, so it was ranking by a number it
 produced. That was fixed. Whether the appended notes are useful was never measured.
@@ -41,8 +42,8 @@ The operator's store is copied and never opened.
 |---|---|
 | Positive queries that received appends | 14 of 26 |
 | Appended results in total | 30 |
-| Appends that supplied a relevant note the search missed | **1** |
-| Queries where an appended note reached the top 3 | **0** |
+| Appends that supplied a relevant note the search missed | 1 |
+| Queries where an appended note reached the top 3 | 0 |
 | Hard negatives that received appends | 0 |
 
 The one useful append was on the query `before-push`, which gained
@@ -60,7 +61,8 @@ at position six at the earliest. It can add to what the agent reads, and it cann
 change what the agent reads first.
 
 One useful append in 30 is the measured rate on this set. The cost is 30 extra
-notes in the context window.
+notes in the context window. The limits below bound how far that rate can be
+read.
 
 ## What this does not settle
 
@@ -69,9 +71,9 @@ here, and it might not be. The labels were pooled from a 238-note snapshot in Ju
 2026 and the store now holds 305, so a genuinely useful append could be unlabelled
 and scored as a miss.
 
-**26 positive queries is a small sample.** This shows a direction, not a rate. A
-second labelled set, or labels added for the 29 unlabelled appends, would settle
-it.
+**26 positive queries is a small sample.** This shows a direction. It does not
+establish a rate. A second labelled set, or labels added for the 29 unlabelled
+appends, would settle that.
 
 **This is one corpus.** The notes, the queries, and the labels all come from one
 person's store.

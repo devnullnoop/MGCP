@@ -172,29 +172,26 @@ too.
 
 ## Measurements
 
-Does the search actually find the right thing? The honest answer needs an outside
-test set, because a test written by the same person who wrote the notes proves
-little.
+MGCP's own test set was written by the same person who wrote the notes, so it
+cannot say whether the search works on other material. LoCoMo is an outside test
+set, and these are the results on it.
 
-**MGCP finds the right memory about as often as the search engine used in the
-LoCoMo research paper, and far more often than keyword search.**
-
-| Search engine | Correct result in the top 5 | Verdict |
+| Search engine | Correct result in the top 5 | Compared with MGCP |
 |---|---|---|
-| **MGCP** (BGE with a question prefix) | **68.0%** | |
-| DRAGON, the engine in the LoCoMo paper | 66.9% | Too close to call, p=0.18 |
-| BM25 keyword search | 52.4% | MGCP is better, p below 0.0001 |
+| MGCP (BGE with a question prefix) | 68.0% | |
+| DRAGON, the engine in the LoCoMo paper | 66.9% | gap too small to call, p=0.18 |
+| BM25 keyword search | 52.4% | MGCP higher, p below 0.0001 |
 
 Measured on all ten LoCoMo conversations: 5,882 messages, 1,986 annotated
 questions, 1,536 of which the conversation answers. LoCoMo is a public test set
 from "Evaluating Very Long-Term Conversational Memory of LLM Agents" by Maharana
 and co-authors.
 
-Read [docs/locomo-retrieval-eval.md](docs/locomo-retrieval-eval.md) for the full
-tables, the per-question-type breakdown, and the limits. It defines every term it
-uses, so you do not need a statistics background.
+[docs/locomo-retrieval-eval.md](docs/locomo-retrieval-eval.md) holds the full
+tables, the breakdown by question type, and the limits. It defines every term
+where the term first appears.
 
-### How the comparison was kept fair
+### How the comparison was set up
 
 The LoCoMo paper reports how often a language model answers correctly after
 reading search results. MGCP is the search step, not the answering step. Those are
@@ -212,7 +209,7 @@ these conditions:
 4. **Their engine, built from their code.** DRAGON follows their
    `task_eval/rag_utils.py`: their two models, the first output vector, scaled to
    length one, compared by cosine similarity.
-5. **A paired test, not a glance.** Every engine answers the same questions, so
+5. **A paired test.** Every engine answers the same questions, so
    the samples are paired. A one-point gap between two rates means nothing
    without a test, so each pair gets McNemar's exact test on the questions where
    the two engines disagree, plus a 95% interval from 10,000 resamples.
@@ -249,25 +246,25 @@ The program builds its own throwaway copy of MGCP and refuses to run against
 `~/.mgcp`, so importing 2,541 facts from somebody else's conversations cannot
 disturb your own notes.
 
-### Two more measurements
+### Two further measurements
 
-**The score says something about whether an answer exists.** LoCoMo includes 446
-questions the conversation does not answer, where the right reply is to say so.
-MGCP's score separates those from answerable questions with an AUC of 0.784, where
-0.5 would mean no signal at all. The engine from the paper reaches 0.609 on the
-same questions, and keyword search reaches 0.509, which is no signal. The gap is
-confirmed by a paired test, not by comparing two intervals. So the two engines are
-level at finding the right message, and MGCP is better at indicating whether a
-right message exists. Full numbers are in
+**Score as a signal that an answer exists.** LoCoMo includes 446 questions the
+conversation does not answer, where the right reply is to say so. MGCP's score
+separates those from answerable questions with an AUC of 0.784, where 0.5 would
+mean no signal. The engine from the paper reaches 0.609 on the same questions and
+keyword search reaches 0.509, whose interval includes 0.5. A paired test puts the
+MGCP to DRAGON difference at +0.176, interval [+0.140, +0.210]. The two engines
+score the same on finding the right message and differ on this measure. Full
+numbers are in
 [docs/locomo-retrieval-eval.md](docs/locomo-retrieval-eval.md).
 
-**The link graph adds little.** `query_lessons` appends related notes from the link
-graph after the searched results, and those appends are 31.8% of everything
-returned in nine months of real use. Measured against the labelled query set, 30
-appends produced one note that the search had missed and that a human had marked
-relevant. None reached the top three, because the search fills the first five
-places and appends start at the sixth. That count is a lower bound, since an
-unlabelled append scores as useless. See
+**The link graph.** `query_lessons` appends related notes from the link graph
+after the searched results, and those appends are 31.8% of everything returned in
+nine months of real use. Measured against the labelled query set, 30 appends
+produced one note that the search had missed and that a human had marked relevant.
+None reached the top three, because the search fills the first five places and
+appends start at the sixth. That count is a lower bound, since an unlabelled
+append scores as useless. See
 [docs/bridge-measurement.md](docs/bridge-measurement.md), and reproduce with
 `python -m tests.bridge_benchmark`.
 
@@ -282,10 +279,10 @@ unlabelled append scores as useless. See
   correct reply is to say so. Judging a search engine on those is meaningless, so
   they are scored separately.
 
-Three findings about MGCP came out of this. The score filter of 0.30 removes
-nothing on either test set and needs measuring again, and the second measurement
-above shows roughly where a working limit would sit. The note format, which was
-expected to hurt, helps by 6.3 points on raw messages.
+Three results about MGCP came out of this. The score filter of 0.30 removes
+nothing on either test set and needs measuring again, and the threshold table in
+the report shows what other values would cost. The note format, which was expected
+to lower the score, raises it by 6.3 points on raw messages.
 
 ## Quick Start
 

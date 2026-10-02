@@ -1,7 +1,8 @@
 # MGCP search quality, measured against LoCoMo
 
-MGCP finds the right memory about as often as the search engine used in the
-LoCoMo research paper. Both find it far more often than a keyword search does.
+Three search engines run over the same stored material, with the same questions
+and the same answer key. MGCP scores 68.0% on the top-five measure, the engine
+used in the LoCoMo paper scores 66.9%, and keyword search scores 52.4%.
 
 Measured on 2026-10-02, on all ten LoCoMo conversations and 1,536 questions.
 
@@ -49,16 +50,16 @@ top five results?
 
 | Stored as | Search engine | recall@5 | Difference from MGCP | p-value | Conclusion |
 |---|---|---|---|---|---|
-| 2,541 extracted facts | **MGCP (BGE)** | **0.680** | | | |
+| 2,541 extracted facts | MGCP (BGE) | 0.680 | | | |
 | | DRAGON (the paper's) | 0.669 | +0.010 [-0.004, +0.025] | 0.18 | Too small to call |
-| | BM25 (keywords) | 0.524 | +0.156 [+0.134, +0.178] | 0.0000 | MGCP is better |
+| | BM25 (keywords) | 0.524 | +0.156 [+0.134, +0.178] | 0.0000 | MGCP higher |
 | 5,882 raw messages | MGCP (BGE) | 0.628 | | | |
 | | DRAGON (the paper's) | 0.632 | -0.005 [-0.026, +0.014] | 0.65 | Too small to call |
-| | BM25 (keywords) | 0.479 | +0.147 [+0.119, +0.174] | 0.0000 | MGCP is better |
+| | BM25 (keywords) | 0.479 | +0.147 [+0.119, +0.174] | 0.0000 | MGCP higher |
 
-MGCP and DRAGON are level. The gap between them is one question in a hundred,
-and the test says a gap that small is noise. Both beat keyword search by about
-15 questions in a hundred.
+The gap between MGCP and DRAGON is one question in a hundred, and the test
+reports that gap as noise. Both score about 15 questions in a hundred above
+keyword search.
 
 The recall column comes from the run saved in `docs/locomo-results/`. The
 difference, interval, and p-value columns come from a second run. That run saved
@@ -119,7 +120,7 @@ is the one that makes a wrong answer look plausible. The question worth asking i
 whether the score itself carries the difference, since that is what a score filter
 acts on.
 
-It does, and how much depends on the search engine.
+It does. How much depends on the search engine.
 
 AUC below is the chance that a random answerable question scores higher than a
 random unanswerable one. 0.5 means the score says nothing. 1.0 means it separates
@@ -127,7 +128,7 @@ them completely.
 
 | Search engine | Facts | Raw messages |
 |---|---|---|
-| **MGCP** | 0.784 [0.760, 0.807] | 0.638 [0.608, 0.669] |
+| MGCP | 0.784 [0.760, 0.807] | 0.638 [0.608, 0.669] |
 | DRAGON | 0.609 [0.581, 0.638] | 0.510 [0.481, 0.541] |
 | BM25 | 0.509 [0.480, 0.538] | 0.435 [0.408, 0.464] |
 
@@ -137,8 +138,8 @@ score says nothing about whether an answer exists. BM25 over raw messages sits a
 plain cause. A trick question borrows wording from a related message, so keyword
 overlap is high while the answer is absent.
 
-**The gap between MGCP and DRAGON is tested, not eyeballed.** Both engines scored
-the same questions, so two separate intervals are the wrong comparison. A paired
+The gap between MGCP and DRAGON needs a paired test. Both engines scored the
+same questions, so two separate intervals are the wrong comparison. A paired
 interval resamples the questions once and scores both engines on that same
 resample:
 
@@ -149,10 +150,10 @@ resample:
 | MGCP against DRAGON, raw messages | +0.129 | [+0.088, +0.168] |
 | MGCP against BM25, raw messages | +0.203 | [+0.169, +0.238] |
 
-Every interval excludes zero. So the two engines are level at finding the right
-message, and MGCP's score is better at indicating whether a right message exists.
-Those are different questions, and the second one decides whether a system can
-decline to answer.
+Every interval excludes zero. The two engines score the same on finding the
+right message, and MGCP's score separates answerable from unanswerable questions
+by a wider margin. Those are two different measurements of two different things.
+The second one is what a system would use to decline to answer.
 
 ### What a filter would cost
 
@@ -167,7 +168,8 @@ For MGCP over extracted facts:
 | 0.70 | 90.8% | 56.8% |
 
 The shipped limit of 0.30 removes nothing, which the earlier finding already said.
-A limit near 0.60 would start to work, at a cost of one answerable question in ten.
+At 0.60 the filter removes 40.6% of unanswerable questions and 9.9% of answerable
+ones.
 
 **This does not set MGCP's limit.** These scores come from LoCoMo's material. MGCP
 searches its own notes, where the distribution differs, and the same measurement

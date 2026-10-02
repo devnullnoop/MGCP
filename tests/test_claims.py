@@ -1056,3 +1056,80 @@ def test_E12_locomo_writeup_matches_the_recorded_run():
     ceiling = cells[("mgcp", "observation")]["ceiling"]
     assert f"{ceiling['any']:.3f}" in doc, "the document does not state the highest score available"
     assert "link graph" in doc, "the document must still say the link graph did not run"
+
+
+def test_E05_bridge_measurement_matches_its_evidence():
+    """Row E05 quotes counts from the link graph measurement. Pin them.
+
+    Every number in the write-up has to come out of the saved run. The first draft
+    of the LoCoMo report carried five figures typed from memory, and a check like
+    this one is what found them.
+    """
+    import json
+
+    analysis = json.loads(
+        (REPO / "docs" / "bridge-results" / "bridge-analysis.json").read_text()
+    )
+    doc = (REPO / "docs" / "bridge-measurement.md").read_text()
+    ledger = LEDGER.read_text()
+
+    assert analysis["direct_results_differ"] == [], (
+        "the two runs disagree on the searched results, so the comparison is void "
+        "and the numbers in the write-up mean nothing"
+    )
+    for text, label in ((doc, "bridge-measurement.md"), (ledger, "the ledger")):
+        assert str(analysis["appended_slots"]) in text, (
+            f"{label} does not state the appended count of {analysis['appended_slots']}"
+        )
+    useful = analysis["appends_that_added_a_labelled_lesson"]
+    assert f"| **{useful}** |" in doc or f" {useful} note" in doc, (
+        f"bridge-measurement.md does not state {useful} useful appends"
+    )
+    assert len(analysis["appends_reaching_top_3"]) == 0, (
+        "an append reached the top 3, which contradicts the write-up"
+    )
+    assert analysis["negatives_with_appends"] == [], analysis["negatives_with_appends"]
+
+
+def test_E12_abstention_numbers_match_their_evidence():
+    """The answerability finding is quoted in three places. Pin it to the run."""
+    import json
+
+    results = REPO / "docs" / "locomo-results"
+    doc = (REPO / "docs" / "locomo-retrieval-eval.md").read_text()
+    readme = README.read_text()
+
+    # Every AUC in the table, against the file it came from. One of them was
+    # wrong on the first pass: the table holds single-file figures over 1,982
+    # rows, and 0.436 had been copied in from the paired run over 1,970.
+    for engine in ("mgcp", "dragon", "bm25"):
+        for stored_as in ("observation", "dialog"):
+            saved = json.loads(
+                (results / f"abstention-{engine}-{stored_as}.json").read_text()
+            )
+            quoted = (
+                f"{saved['auc']:.3f} [{saved['auc_ci_low']:.3f}, {saved['auc_ci_high']:.3f}]"
+            )
+            assert quoted in doc, (
+                f"the report does not quote {engine}/{stored_as} as {quoted}"
+            )
+
+    single = json.loads((results / "abstention-mgcp-observation.json").read_text())
+    assert f"{single['auc']:.3f}" in doc, f"the report does not quote AUC {single['auc']:.3f}"
+    assert f"{single['auc']:.3f}" in readme, "the README does not quote the AUC"
+    assert single["auc"] > 0.5, single
+    assert single["auc_ci_low"] > 0.5, (
+        "the interval includes 0.5, so the write-up must not claim a signal"
+    )
+
+    paired = json.loads(
+        (results / "abstention-diff-mgcp-vs-dragon-observation.json").read_text()
+    )
+    assert f"{paired['difference']:+.3f}" in doc, (
+        f"the report does not quote the paired difference {paired['difference']:+.3f}"
+    )
+    assert paired["ci_low"] > 0, (
+        "the paired interval includes zero, so the claim that MGCP is better "
+        "cannot stand"
+    )
+    assert paired["verdict"] == "different", paired

@@ -1,0 +1,11 @@
+{
+  "a": "mgcp-observation",
+  "b": "bm25-observation",
+  "questions": 1970,
+  "auc_a": 0.7842,
+  "auc_b": 0.5096,
+  "difference": 0.2746,
+  "ci_low": 0.2425,
+  "ci_high": 0.309,
+  "verdict": "different"
+}

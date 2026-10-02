@@ -566,13 +566,158 @@ def bootstrap_ci(pairs, iterations: int = 10000, seed: int = 7):
     return diffs[int(0.025 * iterations)], diffs[int(0.975 * iterations)]
 
 
+def auc(pos: list[float], neg: list[float]) -> float:
+    """The chance that a random answerable question scores above a random trick one.
+
+    0.5 means the score says nothing about whether the conversation holds an
+    answer. 1.0 means it separates them completely. Ties count as half.
+
+    Rank based, so it runs in n log n. tests/test_locomo_benchmark.py checks it
+    against a brute force count over every pair, on tie-heavy random data,
+    because a statistic nobody checked is how a confident wrong number happens.
+    """
+    if not pos or not neg:
+        return float("nan")
+    merged = sorted([(v, 1) for v in pos] + [(v, 0) for v in neg])
+    ranks = [0.0] * len(merged)
+    i = 0
+    while i < len(merged):
+        j = i
+        while j + 1 < len(merged) and merged[j + 1][0] == merged[i][0]:
+            j += 1
+        average_rank = (i + j) / 2 + 1  # ranks start at 1
+        for index in range(i, j + 1):
+            ranks[index] = average_rank
+        i = j + 1
+    rank_sum = sum(r for r, (_value, label) in zip(ranks, merged) if label == 1)
+    n_pos, n_neg = len(pos), len(neg)
+    return (rank_sum - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+
+
+def abstention(path: str, thresholds=(0.30, 0.55, 0.60, 0.65, 0.70)) -> dict:
+    """Can the score tell an answerable question from an unanswerable one?
+
+    LoCoMo includes 446 questions the conversation does not answer, where the
+    right reply is to say so. Recall is meaningless on them, because their
+    recorded message is the one that makes a wrong answer look plausible. The
+    question worth asking is whether the score itself carries the difference,
+    since that is what a score filter would act on.
+    """
+    rows = json.loads(Path(path).read_text())
+    answerable = [r["top1"] for r in rows if r["category"] in ANSWERABLE and r["top1"] is not None]
+    trick = [r["top1"] for r in rows if r["category"] == 5 and r["top1"] is not None]
+    if not trick:
+        raise SystemExit(
+            f"{path} holds no category 5 rows, so there is nothing to compare "
+            "against. Regenerate it with a current --out-per-question run."
+        )
+    low, high = _bootstrap_auc(answerable, trick)
+    table = []
+    for threshold in thresholds:
+        # Stored at full precision. Rounding here then formatting as a
+        # percentage moved 1.953% to 1.9% in one row and 2.0% in another.
+        table.append(
+            {
+                "threshold": threshold,
+                "trick_filtered": sum(1 for v in trick if v < threshold) / len(trick),
+                "answerable_lost": sum(1 for v in answerable if v < threshold) / len(answerable),
+            }
+        )
+    answerable_sorted, trick_sorted = sorted(answerable), sorted(trick)
+    return {
+        "file": Path(path).name,
+        "answerable": len(answerable),
+        "trick": len(trick),
+        "auc": round(auc(answerable, trick), 4),
+        "auc_ci_low": round(low, 4),
+        "auc_ci_high": round(high, 4),
+        "answerable_median": round(answerable_sorted[len(answerable_sorted) // 2], 4),
+        "trick_median": round(trick_sorted[len(trick_sorted) // 2], 4),
+        "thresholds": table,
+    }
+
+
+def _bootstrap_auc(pos, neg, iterations: int = 2000, seed: int = 11):
+    rng = random.Random(seed)
+    values = []
+    for _ in range(iterations):
+        p = [pos[rng.randrange(len(pos))] for _ in range(len(pos))]
+        n = [neg[rng.randrange(len(neg))] for _ in range(len(neg))]
+        values.append(auc(p, n))
+    values.sort()
+    return values[int(0.025 * iterations)], values[int(0.975 * iterations)]
+
+
+def abstention_difference(path_a: str, path_b: str, iterations: int = 2000, seed: int = 13) -> dict:
+    """Compare two engines on answerability signal, accounting for shared questions.
+
+    Both engines answered the same questions, so two separate intervals are the
+    wrong comparison. This resamples the questions once per iteration and scores
+    both engines on that same resample, which is what makes the interval paired.
+    """
+    rows_a = {r["key"]: r for r in json.loads(Path(path_a).read_text())}
+    rows_b = {r["key"]: r for r in json.loads(Path(path_b).read_text())}
+    keys = sorted(set(rows_a) & set(rows_b))
+    answerable = [k for k in keys if rows_a[k]["category"] in ANSWERABLE]
+    trick = [k for k in keys if rows_a[k]["category"] == 5]
+
+    def auc_for(rows, pos_keys, neg_keys):
+        return auc([rows[k]["top1"] for k in pos_keys], [rows[k]["top1"] for k in neg_keys])
+
+    observed = auc_for(rows_a, answerable, trick) - auc_for(rows_b, answerable, trick)
+    rng = random.Random(seed)
+    diffs = []
+    for _ in range(iterations):
+        pos = [answerable[rng.randrange(len(answerable))] for _ in range(len(answerable))]
+        neg = [trick[rng.randrange(len(trick))] for _ in range(len(trick))]
+        diffs.append(auc_for(rows_a, pos, neg) - auc_for(rows_b, pos, neg))
+    diffs.sort()
+    low, high = diffs[int(0.025 * iterations)], diffs[int(0.975 * iterations)]
+    return {
+        "a": Path(path_a).stem.replace("pq-", ""),
+        "b": Path(path_b).stem.replace("pq-", ""),
+        "questions": len(answerable) + len(trick),
+        "auc_a": round(auc_for(rows_a, answerable, trick), 4),
+        "auc_b": round(auc_for(rows_b, answerable, trick), 4),
+        "difference": round(observed, 4),
+        "ci_low": round(low, 4),
+        "ci_high": round(high, 4),
+        "verdict": "different" if low > 0 or high < 0 else "too small to call",
+    }
+
+
+def format_abstention(result: dict) -> str:
+    lines = [
+        f"\nScore as an answerability signal: {result['file']}",
+        "=" * 70,
+        f"  {result['answerable']} answerable questions, {result['trick']} the conversation does not answer",
+        f"  AUC {result['auc']:.3f}  95% interval [{result['auc_ci_low']:.3f}, "
+        f"{result['auc_ci_high']:.3f}]   (0.5 means no signal)",
+        f"  median score: answerable {result['answerable_median']:.3f}, "
+        f"unanswerable {result['trick_median']:.3f}",
+        "",
+        f"  {'threshold':>10}{'unanswerable filtered':>24}{'answerable lost':>18}",
+    ]
+    for row in result["thresholds"]:
+        lines.append(
+            f"  {row['threshold']:>10.2f}{row['trick_filtered']:>23.1%}"
+            f"{row['answerable_lost']:>18.1%}"
+        )
+    return "\n".join(lines)
+
+
 def compare(paths: list[str], k: int = 5) -> dict:
     """Compare per-question files pairwise, with a paired test on each pair."""
     runs = {}
     for path in paths:
         rows = json.loads(Path(path).read_text())
         label = Path(path).stem.replace("pq-", "")
-        runs[label] = {row["key"]: row for row in rows}
+        # Answerable questions only. The files also carry the 446 trick
+        # questions, whose recorded message is the one that makes a wrong answer
+        # look plausible, so including them would change what this averages.
+        runs[label] = {
+            row["key"]: row for row in rows if row["category"] in ANSWERABLE
+        }
 
     labels = list(runs)
     shared = set.intersection(*[set(r) for r in runs.values()])
@@ -637,6 +782,20 @@ def main() -> None:
             "dataset, because those files hold hashed question keys and outcomes."
         ),
     )
+    ap.add_argument(
+        "--abstention-difference",
+        nargs=2,
+        metavar=("A", "B"),
+        help="compare two engines on answerability signal with a paired interval",
+    )
+    ap.add_argument(
+        "--abstention",
+        metavar="PER_QUESTION_JSON",
+        help=(
+            "measure whether the score tells an answerable question from one the "
+            "conversation does not answer. Needs no dataset."
+        ),
+    )
     ap.add_argument("--data-file", help="path to locomo10.json (not vendored)")
     ap.add_argument("--retriever", choices=["mgcp", "dragon", "bm25"], default="mgcp")
     ap.add_argument("--mode", choices=["observation", "dialog"], default="observation")
@@ -661,6 +820,29 @@ def main() -> None:
     )
     args = ap.parse_args()
 
+    if args.abstention_difference:
+        result = abstention_difference(*args.abstention_difference)
+        print(
+            f"\n{result['a']} AUC {result['auc_a']:.3f} against "
+            f"{result['b']} AUC {result['auc_b']:.3f}\n"
+            f"  difference {result['difference']:+.3f}  "
+            f"95% paired interval [{result['ci_low']:+.3f}, {result['ci_high']:+.3f}]  "
+            f"{result['verdict']}\n"
+            f"  over {result['questions']} shared questions"
+        )
+        if args.out_json:
+            Path(args.out_json).write_text(json.dumps(result, indent=2))
+            print(f"wrote {args.out_json}")
+        return
+
+    if args.abstention:
+        result = abstention(args.abstention)
+        print(format_abstention(result))
+        if args.out_json:
+            Path(args.out_json).write_text(json.dumps(result, indent=2))
+            print(f"\nwrote {args.out_json}")
+        return
+
     if args.compare:
         result = compare(args.compare)
         print(format_comparison(result))
@@ -670,7 +852,10 @@ def main() -> None:
         return
 
     if not args.data_file:
-        ap.error("--data-file is required unless --compare is given")
+        ap.error(
+            "--data-file is required unless --compare, --abstention or "
+            "--abstention-difference is given"
+        )
 
     if args.encoding == "template" and args.retriever != "mgcp":
         ap.error("--encoding template is mgcp-only; it would not be a retriever comparison")
@@ -710,7 +895,10 @@ def main() -> None:
     if args.out_per_question:
         rows = []
         for r in results:
-            if r["category"] not in ANSWERABLE or not r["evidence"]:
+            # Category 5 rows are included here although they are excluded from
+            # recall. Their scores are the comparison group for the abstention
+            # question, and a reader can filter on "category" either way.
+            if r["category"] != 5 and (r["category"] not in ANSWERABLE or not r["evidence"]):
                 continue
             per_k = {}
             for k in K_VALUES:
@@ -738,6 +926,10 @@ def main() -> None:
                     "key": digest,
                     "category": r["category"],
                     "rank": rank,
+                    # The score of the highest ranked result, whether or not it
+                    # is correct. This is the quantity a score filter would act
+                    # on, so it is what an abstention test needs.
+                    "top1": round(r["ranked"][0][1], 6) if r["ranked"] else None,
                     **per_k,
                 }
             )

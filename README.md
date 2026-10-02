@@ -249,6 +249,28 @@ The program builds its own throwaway copy of MGCP and refuses to run against
 `~/.mgcp`, so importing 2,541 facts from somebody else's conversations cannot
 disturb your own notes.
 
+### Two more measurements
+
+**The score says something about whether an answer exists.** LoCoMo includes 446
+questions the conversation does not answer, where the right reply is to say so.
+MGCP's score separates those from answerable questions with an AUC of 0.784, where
+0.5 would mean no signal at all. The engine from the paper reaches 0.609 on the
+same questions, and keyword search reaches 0.509, which is no signal. The gap is
+confirmed by a paired test, not by comparing two intervals. So the two engines are
+level at finding the right message, and MGCP is better at indicating whether a
+right message exists. Full numbers are in
+[docs/locomo-retrieval-eval.md](docs/locomo-retrieval-eval.md).
+
+**The link graph adds little.** `query_lessons` appends related notes from the link
+graph after the searched results, and those appends are 31.8% of everything
+returned in nine months of real use. Measured against the labelled query set, 30
+appends produced one note that the search had missed and that a human had marked
+relevant. None reached the top three, because the search fills the first five
+places and appends start at the sixth. That count is a lower bound, since an
+unlabelled append scores as useless. See
+[docs/bridge-measurement.md](docs/bridge-measurement.md), and reproduce with
+`python -m tests.bridge_benchmark`.
+
 ### What this does not measure
 
 - **Answer quality.** No language model reads the results and replies, so there is
@@ -260,9 +282,10 @@ disturb your own notes.
   correct reply is to say so. Judging a search engine on those is meaningless, so
   they are scored separately.
 
-Two findings about MGCP came out of this. The score filter of 0.30 removes nothing
-on either test set and needs measuring again. The note format, which was expected
-to hurt, helps by 6.3 points on raw messages.
+Three findings about MGCP came out of this. The score filter of 0.30 removes
+nothing on either test set and needs measuring again, and the second measurement
+above shows roughly where a working limit would sit. The note format, which was
+expected to hurt, helps by 6.3 points on raw messages.
 
 ## Quick Start
 

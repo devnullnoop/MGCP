@@ -1,0 +1,37 @@
+{
+  "file": "pq-bm25-observation.json",
+  "answerable": 1536,
+  "trick": 446,
+  "auc": 0.5093,
+  "auc_ci_low": 0.4804,
+  "auc_ci_high": 0.5384,
+  "answerable_median": 15.8363,
+  "trick_median": 15.6774,
+  "thresholds": [
+    {
+      "threshold": 0.3,
+      "trick_filtered": 0.0,
+      "answerable_lost": 0.0
+    },
+    {
+      "threshold": 0.55,
+      "trick_filtered": 0.0,
+      "answerable_lost": 0.0
+    },
+    {
+      "threshold": 0.6,
+      "trick_filtered": 0.0,
+      "answerable_lost": 0.0
+    },
+    {
+      "threshold": 0.65,
+      "trick_filtered": 0.0,
+      "answerable_lost": 0.0
+    },
+    {
+      "threshold": 0.7,
+      "trick_filtered": 0.0,
+      "answerable_lost": 0.0
+    }
+  ]
+}

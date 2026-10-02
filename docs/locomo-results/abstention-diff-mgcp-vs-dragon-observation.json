@@ -1,0 +1,11 @@
+{
+  "a": "mgcp-observation",
+  "b": "dragon-observation",
+  "questions": 1970,
+  "auc_a": 0.7842,
+  "auc_b": 0.6086,
+  "difference": 0.1756,
+  "ci_low": 0.1397,
+  "ci_high": 0.2105,
+  "verdict": "different"
+}

@@ -1,0 +1,18 @@
+{
+  "queries": 34,
+  "positives": 26,
+  "direct_results_differ": [],
+  "positives_with_appends": 14,
+  "appended_slots": 30,
+  "appends_that_added_a_labelled_lesson": 1,
+  "useful_detail": [
+    {
+      "query": "before-push",
+      "added": [
+        "query-before-git-operations"
+      ]
+    }
+  ],
+  "appends_reaching_top_3": [],
+  "negatives_with_appends": []
+}

@@ -1,0 +1,11 @@
+{
+  "a": "mgcp-dialog",
+  "b": "dragon-dialog",
+  "questions": 1970,
+  "auc_a": 0.6385,
+  "auc_b": 0.51,
+  "difference": 0.1286,
+  "ci_low": 0.0877,
+  "ci_high": 0.168,
+  "verdict": "different"
+}

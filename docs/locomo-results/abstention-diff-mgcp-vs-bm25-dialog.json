@@ -1,0 +1,11 @@
+{
+  "a": "mgcp-dialog",
+  "b": "bm25-dialog",
+  "questions": 1970,
+  "auc_a": 0.6385,
+  "auc_b": 0.4357,
+  "difference": 0.2028,
+  "ci_low": 0.1691,
+  "ci_high": 0.2379,
+  "verdict": "different"
+}

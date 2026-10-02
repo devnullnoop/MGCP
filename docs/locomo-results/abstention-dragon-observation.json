@@ -1,0 +1,37 @@
+{
+  "file": "pq-dragon-observation.json",
+  "answerable": 1536,
+  "trick": 446,
+  "auc": 0.609,
+  "auc_ci_low": 0.5807,
+  "auc_ci_high": 0.6383,
+  "answerable_median": 0.5733,
+  "trick_median": 0.57,
+  "thresholds": [
+    {
+      "threshold": 0.3,
+      "trick_filtered": 0.0,
+      "answerable_lost": 0.0
+    },
+    {
+      "threshold": 0.55,
+      "trick_filtered": 0.04708520179372197,
+      "answerable_lost": 0.020182291666666668
+    },
+    {
+      "threshold": 0.6,
+      "trick_filtered": 0.9977578475336323,
+      "answerable_lost": 0.99609375
+    },
+    {
+      "threshold": 0.65,
+      "trick_filtered": 1.0,
+      "answerable_lost": 1.0
+    },
+    {
+      "threshold": 0.7,
+      "trick_filtered": 1.0,
+      "answerable_lost": 1.0
+    }
+  ]
+}

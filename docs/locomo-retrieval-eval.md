@@ -111,6 +111,81 @@ Finding one correct message is easier than finding all of them. Some questions
 need two or more messages to answer. MGCP returns every needed message for 53.7
 percent of questions in the top five, against 68.0 percent for at least one.
 
+## Can the score tell whether an answer exists?
+
+LoCoMo includes 446 questions the conversation does not answer, where the correct
+reply is to say so. Recall is meaningless on them, because the message they record
+is the one that makes a wrong answer look plausible. The question worth asking is
+whether the score itself carries the difference, since that is what a score filter
+acts on.
+
+It does, and how much depends on the search engine.
+
+AUC below is the chance that a random answerable question scores higher than a
+random unanswerable one. 0.5 means the score says nothing. 1.0 means it separates
+them completely.
+
+| Search engine | Facts | Raw messages |
+|---|---|---|
+| **MGCP** | 0.784 [0.760, 0.807] | 0.638 [0.608, 0.669] |
+| DRAGON | 0.609 [0.581, 0.638] | 0.510 [0.481, 0.541] |
+| BM25 | 0.509 [0.480, 0.538] | 0.435 [0.408, 0.464] |
+
+DRAGON over raw messages sits at 0.510 with an interval that includes 0.5, so its
+score says nothing about whether an answer exists. BM25 over raw messages sits at
+0.435 with the whole interval below 0.5, so its score runs backwards. That has a
+plain cause. A trick question borrows wording from a related message, so keyword
+overlap is high while the answer is absent.
+
+**The gap between MGCP and DRAGON is tested, not eyeballed.** Both engines scored
+the same questions, so two separate intervals are the wrong comparison. A paired
+interval resamples the questions once and scores both engines on that same
+resample:
+
+| Comparison | Difference | 95% paired interval |
+|---|---|---|
+| MGCP against DRAGON, facts | +0.176 | [+0.140, +0.210] |
+| MGCP against BM25, facts | +0.275 | [+0.242, +0.309] |
+| MGCP against DRAGON, raw messages | +0.129 | [+0.088, +0.168] |
+| MGCP against BM25, raw messages | +0.203 | [+0.169, +0.238] |
+
+Every interval excludes zero. So the two engines are level at finding the right
+message, and MGCP's score is better at indicating whether a right message exists.
+Those are different questions, and the second one decides whether a system can
+decline to answer.
+
+### What a filter would cost
+
+For MGCP over extracted facts:
+
+| Score limit | Unanswerable filtered | Answerable lost |
+|---|---|---|
+| 0.30, the shipped value | 0.0% | 0.0% |
+| 0.55 | 11.2% | 2.0% |
+| 0.60 | 40.6% | 9.9% |
+| 0.65 | 73.5% | 29.1% |
+| 0.70 | 90.8% | 56.8% |
+
+The shipped limit of 0.30 removes nothing, which the earlier finding already said.
+A limit near 0.60 would start to work, at a cost of one answerable question in ten.
+
+**This does not set MGCP's limit.** These scores come from LoCoMo's material. MGCP
+searches its own notes, where the distribution differs, and the same measurement
+has to be run there before the shipped value changes.
+
+Reproduce with:
+
+```bash
+python -m tests.locomo_benchmark --abstention docs/locomo-results/pq-mgcp-observation.json
+python -m tests.locomo_benchmark --abstention-difference \
+  docs/locomo-results/pq-mgcp-observation.json \
+  docs/locomo-results/pq-dragon-observation.json
+```
+
+The first number uses all 1,982 exported rows. The paired comparison uses the
+1,970 distinct questions, because eleven answerable questions and one unanswerable
+one appear twice in the same conversation.
+
 ## What we learned about MGCP
 
 ### The score filter does not filter anything

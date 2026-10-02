@@ -207,6 +207,9 @@ def get_vector_store() -> QdrantVectorStore:
     global vector_store
     if vector_store is None:
         try:
+            from .qdrant_server import ensure_running_if_configured
+
+            ensure_running_if_configured()
             vector_store = QdrantVectorStore()
         except Exception as exc:
             raise HTTPException(

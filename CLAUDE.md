@@ -41,6 +41,11 @@ python -m mgcp.web_server
 mgcp-embed
 mgcp-embed --status   # is this machine sharing a model, or loading one per process?
 
+# Multi-session: install and run a local Qdrant server (no container, nothing to fetch)
+mgcp-qdrant setup     # download + verify + start + write qdrant_url to config.json
+mgcp-qdrant status    # installed version, pid, answering, and which mode is live
+mgcp-qdrant teardown  # stop it and return to embedded single-session
+
 # Run tests
 pytest
 
@@ -94,6 +99,8 @@ All source files are in `src/mgcp/`:
 - `graph.py` - NetworkX graph operations with typed relationships and Louvain community detection
 - `embedding.py` - Centralized BGE embedding model (`BAAI/bge-base-en-v1.5`); daemon-first with an in-process fallback
 - `embedding_daemon.py` - Shared embedding daemon (`mgcp-embed`): BGE loaded once per machine, served over a unix socket
+- `qdrant_server.py` - Installs and supervises a local Qdrant server (`mgcp-qdrant`): platform-matched official binary, sha256-verified, loopback only, telemetry off
+- `config.py` - Machine-local settings in `~/.mgcp/config.json`; holds `qdrant_url`, which is how multi-session reaches an MCP server whose environment the LLM client controls
 - `qdrant_vector_store.py` - Qdrant integration for lesson, workflow, and community summary search
 - `qdrant_catalogue_store.py` - Qdrant integration for project catalogue search
 - `persistence.py` - SQLite/JSON storage for lessons, project contexts, and community summaries
@@ -117,6 +124,18 @@ All source files are in `src/mgcp/`:
 ### Data Model
 
 **Every agent-facing write is envelope-guarded.** `reject_tool_call_envelope` (`models.py`) runs on all six: `add_lesson`, `update_lesson`, `save_project_context`, `save_workflow`, `save_community_summary` and `write_soliloquy`. It refuses text that is a serialised tool-call envelope rather than prose — the corruption that had already reached 7 of 24 stored project contexts before the guard existed, and which `get_project_context` still has to tolerate on read so those projects can resume.
+
+**Multi-session is reached through a file, not an environment variable.**
+`get_qdrant_url()` reads `MGCP_QDRANT_URL` first, then `qdrant_url` from
+`~/.mgcp/config.json`. The file is what makes the feature usable: an MCP server is spawned by
+the LLM client, so `export` in a shell never reaches it, and several sessions sharing one store
+means several such processes. `mgcp-qdrant setup` writes that key after installing and starting
+the server; a session that finds its own configured server down starts it
+(`MGCP_QDRANT_AUTOSTART=0` forbids it), and a failed start degrades to the per-store error below
+rather than raising. A config file that exists but does not parse **raises** — silently falling
+back to embedded while the operator believes they are on the server is two sessions writing to
+two stores with nothing saying so. Server storage is `~/.mgcp/qdrant-server`, deliberately not
+the embedded directory.
 
 **One locked store does not fail unrelated tools.** `_ensure_initialized` opens SQLite, the
 graph and telemetry; `_ensure_vector_stores` opens Qdrant on first use by one of the ten tools

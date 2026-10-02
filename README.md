@@ -469,25 +469,47 @@ is required, and MGCP still needs no server, no daemon and no container to run.
 
 | | 2.x | 3.0 |
 |---|---|---|
-| Concurrent sessions | one writer; a second blocks on the Qdrant lock | opt in with `MGCP_QDRANT_URL` |
+| Concurrent sessions | one writer; a second blocks on the Qdrant lock | `mgcp-qdrant setup`, once |
 | Memory, 3 sessions | 1,344.6 MiB (each loads BGE) | **565.4 MiB** — one shared model |
 | Cost per extra session | ~448 MiB, ~2,100 ms cold start | **39 MiB, ~65 ms** |
 | Two sessions edit one lesson | last writer silently wins | `StaleWriteError` naming both versions |
 
 ### Two sessions, one store
 
+Embedded Qdrant allows one client per directory, so sharing a store across sessions needs a
+Qdrant server. MGCP installs and runs one for you — there is nothing to fetch by hand, no
+container, no package manager, no Rust toolchain:
+
 ```bash
-docker run -p 6333:6333 -v ~/.mgcp/qdrant-server:/qdrant/storage qdrant/qdrant
-export MGCP_QDRANT_URL=http://localhost:6333   # MGCP_QDRANT_API_KEY if the server wants one
-mgcp-migrate --force                           # rebuild the index into the server from lessons.db
+mgcp-qdrant setup       # download, verify, start, configure. Once per machine.
+mgcp-migrate --force    # rebuild the index into it from lessons.db
 ```
 
-`--force` is what an existing install needs, because the local embedded directory is still
-sitting there — and it removes that directory on the way through. SQLite is the source of truth,
-so unsetting `MGCP_QDRANT_URL` and running `mgcp-migrate` again rebuilds the embedded index from
-scratch.
+That downloads the official Qdrant binary for your platform (macOS arm64 and x86_64, Windows
+x86_64, Linux x86_64 and aarch64), checks it against a recorded sha256, puts it in `~/.mgcp/bin`,
+starts it on `127.0.0.1:6333` with telemetry off, and writes `qdrant_url` into
+`~/.mgcp/config.json`. Every session on the machine then shares one store.
 
-Without server mode the embedded default no longer locks you out: SQLite and Qdrant open
+```bash
+mgcp-qdrant status      # installed version, pid, whether it answers, which mode is live
+mgcp-qdrant stop        # stop it; sessions degrade to SQLite-only until it is back
+mgcp-qdrant teardown    # stop it and go back to embedded single-session
+```
+
+**The URL lives in a file, not an environment variable**, and that is the part that makes this
+usable. An MCP server is spawned by your LLM client, so its environment is whatever that client
+passes it — `export MGCP_QDRANT_URL=...` in a shell never reaches it, and multi-session means
+several such processes. `MGCP_QDRANT_URL` still wins when set, for pointing at a server you run
+yourself. A session that finds its configured local server down starts it; set
+`MGCP_QDRANT_AUTOSTART=0` to forbid that.
+
+`--force` on the migrate is what an existing install needs, because the embedded directory is
+still sitting there — and it removes that directory on the way through. SQLite is the source of
+truth, so `mgcp-qdrant teardown` followed by `mgcp-migrate` rebuilds the embedded index from
+scratch. The server keeps its data in `~/.mgcp/qdrant-server`, deliberately not the embedded
+directory: two processes owning the same files with different assumptions is its own bug.
+
+Without any of this the embedded default no longer locks you out. SQLite and Qdrant open
 separately, so project context, the soliloquy journal, lesson reads, workflows and six of REM's
 seven operations work while another process holds the vector store. The ten tools that need
 vectors say which PID holds it. Writes land in SQLite and are indexed when the store next opens
@@ -566,6 +588,7 @@ Every release before 3.0 — v1.0 through v2.13 — is in [CHANGELOG.md](CHANGEL
 | `mgcp-duplicates` | Find semantically similar lessons |
 | `mgcp-backup` | Backup/restore all MGCP data |
 | `mgcp-migrate` | Rebuild the Qdrant index from `lessons.db` |
+| `mgcp-qdrant` | Local Qdrant server for multi-session: `setup`, `status`, `start`, `stop`, `teardown` |
 | `mgcp-embed` | Shared embedding daemon — load BGE once per machine instead of once per process (`--status`, `--stop`) |
 
 ## API & Dashboard

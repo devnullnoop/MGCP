@@ -233,6 +233,14 @@ async def _ensure_vector_stores() -> tuple[QdrantVectorStore, QdrantCatalogueSto
         logger.info("Opening vector stores...")
         client = None
         try:
+            # If the config points at our own local server and it is not up, start
+            # it. Otherwise the first session to need vectors after a reboot would
+            # lose semantic search for its whole life, with a server installed and
+            # idle on disk. No-op in embedded mode.
+            from .qdrant_server import ensure_running_if_configured
+
+            ensure_running_if_configured()
+
             # Create a single shared Qdrant client for all vector stores
             # CRITICAL: Qdrant local mode only allows ONE client per path.
             # Multiple clients cause "Storage folder already accessed" errors.
@@ -295,8 +303,9 @@ async def _ensure_vector_stores() -> tuple[QdrantVectorStore, QdrantCatalogueSto
                 f"Semantic search is unavailable: {e}"
                 f"{_describe_lock_holder()} Embedded Qdrant allows one client per "
                 "path, so another MGCP process (an older session's server, or the "
-                "dashboard) can hold it. Set MGCP_QDRANT_URL to run Qdrant as a "
-                "server and remove the restriction. Everything backed by SQLite — "
+                "dashboard) can hold it. Run `mgcp-qdrant setup` once to install a "
+                "local Qdrant server and share one store across every session — no "
+                "container, nothing to fetch by hand. Everything backed by SQLite — "
                 "project context, the soliloquy journal, lesson reads by id, "
                 "workflows, REM — works regardless."
             ) from e

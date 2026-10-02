@@ -57,12 +57,28 @@ def get_qdrant_url() -> str | None:
     """The Qdrant server URL, or None for embedded mode.
 
     Embedded stays the default on purpose: a single-session user should never
-    have to run a daemon to use MGCP. Setting MGCP_QDRANT_URL opts in to server
-    mode, which is what lets concurrent sessions and the dashboard share one
-    store — embedded Qdrant permits exactly one client per path.
+    have to run a server to use MGCP. Opting in to server mode — which is what
+    lets concurrent sessions and the dashboard share one store, since embedded
+    Qdrant permits exactly one client per path — can be done two ways:
+
+    1. `MGCP_QDRANT_URL` in the environment, which wins.
+    2. `qdrant_url` in the config file, written by `mgcp-qdrant setup`.
+
+    The config file is what makes multi-session actually reachable. An MCP
+    server is spawned by the LLM client, so its environment is whatever that
+    client passes; `export MGCP_QDRANT_URL=...` in a shell never reaches it.
+    Several sessions sharing one store means several such processes, and a file
+    in the data directory is readable by all of them.
     """
     url = os.environ.get("MGCP_QDRANT_URL", "").strip()
-    return url or None
+    if url:
+        return url
+    from .config import get_value
+
+    configured = get_value("qdrant_url")
+    if isinstance(configured, str) and configured.strip():
+        return configured.strip()
+    return None
 
 
 def qdrant_client_args(persist_path: str | Path) -> dict:

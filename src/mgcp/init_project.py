@@ -1161,6 +1161,16 @@ Project-local hooks (--local):
     )
 
     parser.add_argument(
+        "--multi-session",
+        action="store_true",
+        help=(
+            "Install and start a local Qdrant server so several sessions can share "
+            "one store (same as `mgcp-qdrant setup`). Embedded single-session is "
+            "the default and needs none of this."
+        ),
+    )
+
+    parser.add_argument(
         "--project-config",
         action="store_true",
         help="Also configure project-scoped MCP server in ~/.claude.json projects entry (Claude Code only)",
@@ -1345,6 +1355,31 @@ Project-local hooks (--local):
             print(f"      {model_result['size']}")
     else:
         print("\n  Embedding model: would verify/download if needed")
+
+    # Multi-session: report which store this machine uses, and set it up on request.
+    # init used to say nothing at all here, which is why a shipped feature was
+    # unreachable -- the only route to it was a container the docs mentioned once.
+    if not dry_run:
+        print("\n  Vector store:\n")
+        try:
+            from .qdrant_server import setup as qdrant_setup
+            from .qdrant_server import status as qdrant_status
+
+            if args.multi_session:
+                qdrant_setup()
+            else:
+                state = qdrant_status()
+                if state["configured_url"]:
+                    answering = "answering" if state["answering"] else "NOT answering"
+                    print(f"    = server mode: {state['configured_url']} ({answering})")
+                    print("      every session on this machine shares one store")
+                else:
+                    print("    = embedded, single session (the default; needs no server)")
+                    print("      a second session keeps everything SQLite-backed —")
+                    print("      context, journal, workflows — but not semantic search")
+                    print("      run `mgcp-init --multi-session` to share one store")
+        except Exception as exc:  # pragma: no cover - never fail init over a report
+            print(f"    ! could not determine vector store mode: {exc}")
 
     if dry_run:
         print("\n  Dry run complete. Run without --dry-run to apply changes.\n")

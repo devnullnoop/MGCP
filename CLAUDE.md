@@ -338,6 +338,15 @@ evidence the system generated for itself, and no single number shows it.
 Buildless: Tailwind-free CSS, d3 from a CDN, no npm and no build step. Assets live in
 `src/mgcp/static/app/`.
 
+**There is no push channel. Views fetch on load.** A `/ws/events` WebSocket route, a
+`ConnectionManager`, and a task that polled telemetry every 500 ms existed until this
+cleanup, and no client ever connected to any of them: the panel does not open a socket, and
+neither did the eight pages it replaced. The README listed the endpoint and
+`architecture.html` advertised live updates, both of which claim test C06 accepted because
+it checks that a documented endpoint resolves to a route rather than that anything uses it.
+`TelemetryLogger.subscribe`/`unsubscribe` went with it. Do not re-add a socket without a
+consumer in the same change.
+
 ## Claude Code Integration
 
 Add to Claude Code MCP config (`~/.claude.json`):
@@ -367,7 +376,7 @@ MGCP v2.2 makes the routing prompt **data, not code**. The intent classification
 | `post-tool-dispatcher.py` | PostToolUse | advisory | Appends every tool name to `turn_tools_called`, which PreToolUse preconditions read. Edit/Write triggers a knowledge-capture checkpoint; Bash output is scanned for error patterns with a cooldown, over the whole serialised `tool_response` so stderr is included. |
 | `mgcp-precompact.py` | PreCompact | advisory | Critical reminder to save context (and write_soliloquy) before context compression |
 
-The dispatcher falls back to a minimal hard-coded intent set if the JSON file is missing or corrupt, so a fresh install never crashes. The PreToolUse hook allows the tool call on any parse error, because enforcement is a net rather than a tripwire. The MCP tools deliberately do **not** match that: a *missing* `enforcement_rules.json` yields the built-in defaults (a fresh install has no other truth), but a file that exists and does not parse now raises, and the calling tool reports the parse error. Falling back to defaults there was worse than useless. The tool would load defaults, apply the caller's edit and save, silently overwriting whatever the user had written in the file the hook is still enforcing from. Legacy regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `examples/claude-hooks/legacy/`.
+The dispatcher falls back to a minimal hard-coded intent set if the JSON file is missing or corrupt, so a fresh install never crashes. The PreToolUse hook allows the tool call on any parse error, because enforcement is a net rather than a tripwire. The MCP tools deliberately do **not** match that: a *missing* `enforcement_rules.json` yields the built-in defaults (a fresh install has no other truth), but a file that exists and does not parse now raises, and the calling tool reports the parse error. Falling back to defaults there was worse than useless. The tool would load defaults, apply the caller's edit and save, silently overwriting whatever the user had written in the file the hook is still enforcing from. Three single-purpose regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) preceded these five and are superseded by them. They live in git history; the archive directory was deleted, along with the test that asserted its existence and nothing else.
 
 **Advisory vs. enforcing.** The first four hooks inject text into `<system-reminder>` tags that the LLM may skim or ignore. `pre-tool-dispatcher.py` is different: it returns `permissionDecision: "deny"` with a `reason` string and the Claude Code harness refuses to run the tool. This addresses the repeated failure mode where `query-before-git-operations` was violated (v1→v4) despite correct hook fires. See `docs/mgcp-interception-flow.html` for the full interception map and remaining enforcement gaps.
 

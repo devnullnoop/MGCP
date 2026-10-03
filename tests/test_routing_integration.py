@@ -405,18 +405,21 @@ class TestIntentCalibration:
 
 
 # ---------------------------------------------------------------------------
-# Legacy Hook Cleanup Tests
+# Project-local hook configuration
 # ---------------------------------------------------------------------------
 
-class TestLegacyHooksArchived:
-    """Verify legacy hooks have been moved to examples/."""
+class TestProjectSettingsStayEmpty:
+    """This repository must not commit its own hook registrations.
 
-    def test_legacy_hooks_archived(self):
-        """Legacy hooks exist in examples/claude-hooks/legacy/."""
-        legacy_dir = Path(__file__).parent.parent / "examples" / "claude-hooks" / "legacy"
-        assert (legacy_dir / "git-reminder.py").exists()
-        assert (legacy_dir / "catalogue-reminder.py").exists()
-        assert (legacy_dir / "task-start-reminder.py").exists()
+    MGCP deploys hooks globally to ~/.mgcp/hooks and registers them in
+    ~/.claude/settings.json. A project-local copy would fire a second time on
+    every event, so the tracked file stays empty on purpose.
+
+    A sibling test used to assert that three superseded hooks still existed in
+    examples/claude-hooks/legacy/. Nothing imported, executed or compared
+    against them, so the test protected the archive and the archive existed to
+    satisfy the test. Both were deleted; git history holds the files.
+    """
 
     def test_settings_json_empty(self):
         """Project settings.json should be empty (hooks are deployed globally)."""

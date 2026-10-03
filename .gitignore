@@ -71,8 +71,12 @@ scripts/*
 # instruction pointing at a file nobody who clones the repo has.
 !scripts/clean_tool_call_envelopes.py
 
-# Project-specific Claude instructions (users create their own)
-CLAUDE.md
+# CLAUDE.md is NOT ignored. This repository ships its own, tests/test_claims.py
+# reads it (C07 checks its hook table against the shipped templates), and the
+# docs-sync rule requires updating it with every behaviour change. The rule
+# that used to sit here said users create their own, which was true of other
+# projects and never of this one, and `git ls-files --ignored -c` listed the
+# contradiction.
 
 # LoCoMo evaluation data: CC BY-NC 4.0, fetched by the operator, never vendored.
 # docs/locomo-results/*.json are OUR aggregate measurements and ARE committed.

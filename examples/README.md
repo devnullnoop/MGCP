@@ -4,9 +4,9 @@ This directory contains example configurations for integrating MGCP with Claude 
 
 ## Claude Code Hooks
 
-The shipped hook templates live in `src/mgcp/hook_templates/` — that is the single copy, and the one
-`mgcp-init` installs from. The `claude-hooks/` directory here holds only the `settings.json` registration
-reference and the `legacy/` archive.
+The shipped hook templates live in `src/mgcp/hook_templates/`. That is the single copy, and the one
+`mgcp-init` installs from. The `claude-hooks/` directory here holds only the `settings.json`
+registration reference.
 
 ### Available Hooks
 
@@ -18,7 +18,7 @@ reference and the `legacy/` archive.
 | `post-tool-dispatcher.py` | PostToolUse | advisory | Knowledge-capture checkpoint after Edit/Write, error detection after Bash, per-turn tool tracking |
 | `mgcp-precompact.py` | PreCompact | advisory | Critical reminder to save context before compression |
 
-The old single-purpose regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) are archived in `claude-hooks/legacy/` and superseded by the dispatchers.
+Three single-purpose regex hooks (`git-reminder.py`, `catalogue-reminder.py`, `task-start-reminder.py`) came before these five and are superseded by them. They are in git history, not in this directory.
 
 ### Setup
 

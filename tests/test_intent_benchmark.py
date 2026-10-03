@@ -586,6 +586,23 @@ class TestBenchmarkReport:
         print(f"  {'None FP Rate':<25} | {regex_agg['none_fp_rate']:>9.0%} | {graph_agg['none_fp_rate']:>9.0%} | {llm_agg['none_fp_rate']:>9.0%}")
         print(f"  {'Total Messages':<25} | {regex_agg['total']:>10d} | {graph_agg['total']:>10d} | {llm_agg['total']:>10d}")
 
+        # The conclusion this report exists to establish. Without these the
+        # function prints a table and can only fail by raising, which is how
+        # it sat in the suite as a test that could not fail.
+        # Measured 2026-10-02: macro F1 regex 0.69, graph 0.23, LLM 0.92;
+        # exact match 58%, 2%, 87%. classify_llm reads committed blind
+        # classifications, so there is no API call and no run-to-run drift.
+        assert llm_mf1 > regex_mf1 > graph_mf1, (
+            f"the ordering changed: regex {regex_mf1:.2f}, graph {graph_mf1:.2f}, "
+            f"LLM {llm_mf1:.2f}. LLM-side classification rests on this."
+        )
+        assert llm_mf1 >= 0.85, f"LLM macro F1 fell to {llm_mf1:.2f}"
+        assert llm_agg["exact_match"] > regex_agg["exact_match"]
+        assert graph_mf1 < 0.40, (
+            f"graph-community classification improved to {graph_mf1:.2f}; it was "
+            "rejected for scoring 0.23 and that decision should be revisited"
+        )
+
         # Routing prompt for reference
         print(f"\n{'LLM ROUTING PROMPT':^100}")
         print("-" * 100)
@@ -649,6 +666,7 @@ class TestBenchmarkReport:
         """Show performance broken down by corpus category."""
         messages = corpus
         categories = ["direct", "indirect", "false_positive", "multi_intent", "no_intent", "edge_case"]
+        hits: dict[str, dict[str, int]] = {}
 
         print(f"\n{'PERFORMANCE BY CATEGORY':^100}")
         print("=" * 100)
@@ -673,6 +691,19 @@ class TestBenchmarkReport:
             print(
                 f"  {cat:<18} | {r_n:>3}/{total:<3} | {g_n:>3}/{total:<3} | {l_n:>3}/{total:<3} | {winner:>8}"
             )
+            hits[cat] = {"regex": r_n, "graph": g_n, "llm": l_n, "total": total}
+
+        # The point of the breakdown is where the gap lives. Regex matches or
+        # beats the LLM on directly worded messages, and collapses on the
+        # indirect ones, which is the whole argument for classifying LLM-side.
+        # Measured 2026-10-02: direct 20/20 regex against 19/20 LLM, indirect
+        # 1/15 regex against 13/15 LLM. These bounds sit well inside that.
+        assert hits["direct"]["regex"] >= hits["direct"]["total"] - 1
+        assert hits["indirect"]["llm"] >= 3 * hits["indirect"]["regex"], (
+            f"the indirect gap has closed: {hits['indirect']}. Regex handling "
+            "indirect phrasing would undercut LLM-side classification."
+        )
+        assert hits["false_positive"]["llm"] > hits["false_positive"]["regex"]
 
 
 def _fmt_set(s: set) -> str:

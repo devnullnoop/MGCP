@@ -1,6 +1,5 @@
 """MGCP web server for telemetry visualization and REST API."""
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -9,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -35,69 +34,10 @@ catalogue_vector = None  # QdrantCatalogueStore, initialized lazily
 graph: LessonGraph | None = None
 
 
-# Background task for polling telemetry DB
-_poll_task: asyncio.Task | None = None
-_last_event_timestamp: str | None = None
-
-
-async def poll_telemetry_events():
-    """Poll the telemetry DB for new events and broadcast to WebSocket clients."""
-    global _last_event_timestamp
-
-    while True:
-        try:
-            if telemetry and manager.active_connections:
-                # Query for events newer than last seen
-                conn = await telemetry._get_conn()
-                try:
-                    if _last_event_timestamp:
-                        cursor = await conn.execute(
-                            """
-                            SELECT * FROM events
-                            WHERE timestamp > ?
-                            ORDER BY timestamp ASC
-                            LIMIT 50
-                            """,
-                            (_last_event_timestamp,),
-                        )
-                    else:
-                        # First poll - just get the latest timestamp to start from
-                        cursor = await conn.execute(
-                            "SELECT MAX(timestamp) as ts FROM events"
-                        )
-                        row = await cursor.fetchone()
-                        if row and row["ts"]:
-                            _last_event_timestamp = row["ts"]
-                        await cursor.close()
-                        await conn.close()
-                        await asyncio.sleep(0.5)
-                        continue
-
-                    rows = await cursor.fetchall()
-                    for row in rows:
-                        event_data = {
-                            "id": row["id"],
-                            "timestamp": row["timestamp"],
-                            "type": row["event_type"],
-                            "session_id": row["session_id"],
-                            "payload": json.loads(row["payload"]),
-                        }
-                        await manager.broadcast(event_data)
-                        _last_event_timestamp = row["timestamp"]
-
-                finally:
-                    await conn.close()
-
-        except Exception as e:
-            logger.error(f"Error polling telemetry: {e}")
-
-        await asyncio.sleep(0.5)  # Poll every 500ms
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize stores on startup."""
-    global telemetry, store, vector_store, graph, _poll_task
+    global telemetry, store, vector_store, graph
 
     telemetry = TelemetryLogger()
     store = LessonStore()
@@ -109,19 +49,10 @@ async def lifespan(app: FastAPI):
     for lesson in lessons:
         graph.add_lesson(lesson)
 
-    # Start background polling task
-    _poll_task = asyncio.create_task(poll_telemetry_events())
-    logger.info(f"Web server initialized with {len(lessons)} lessons, telemetry polling started")
+    logger.info(f"Web server initialized with {len(lessons)} lessons")
 
     yield
 
-    # Cancel polling task
-    if _poll_task:
-        _poll_task.cancel()
-        try:
-            await _poll_task
-        except asyncio.CancelledError:
-            pass
     logger.info("Shutting down web server")
 
 
@@ -141,10 +72,6 @@ REST API for managing lessons, projects, and viewing telemetry.
 - **Intents & Skills**: Intent routing config and skill compilation
   (`/api/intent-config`, `/api/intent-config/intents/{name}/skill-status`,
   `/api/intent-config/intents/{name}/compile`)
-
-### WebSocket
-
-Real-time events at `/ws/events`
 
 ### Analytics
 
@@ -659,7 +586,6 @@ async def add_catalogue_item(project_id: str, item_type: str, data: dict[str, An
 
     await store.save_project_context(ctx)
 
-    # Broadcast update via WebSocket
     if telemetry:
         await telemetry.log_event(
             "catalogue_update",
@@ -801,76 +727,6 @@ async def delete_lesson_endpoint(lesson_id: str) -> dict[str, Any]:
         graph.remove_graph_lesson(lesson_id)
 
     return {"deleted": lesson_id}
-
-
-# ============================================================================
-# WebSocket for Real-time Updates
-# ============================================================================
-
-class ConnectionManager:
-    """Manages WebSocket connections."""
-
-    def __init__(self):
-        self.active_connections: list[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-        logger.info(f"WebSocket connected. Total connections: {len(self.active_connections)}")
-
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-        logger.info(f"WebSocket disconnected. Total connections: {len(self.active_connections)}")
-
-    async def broadcast(self, message: dict):
-        """Broadcast message to all connected clients."""
-        disconnected = []
-        for connection in self.active_connections:
-            try:
-                await connection.send_json(message)
-            except Exception:
-                disconnected.append(connection)
-
-        for conn in disconnected:
-            self.disconnect(conn)
-
-
-manager = ConnectionManager()
-
-
-@app.websocket("/ws/events")
-async def websocket_events(websocket: WebSocket):
-    """Real-time event stream via WebSocket."""
-    await manager.connect(websocket)
-
-    if not telemetry:
-        await websocket.close()
-        return
-
-    # Subscribe to telemetry events
-    queue = telemetry.subscribe()
-
-    try:
-        while True:
-            # Wait for events from telemetry
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
-                await websocket.send_json({
-                    "id": event.id,
-                    "timestamp": event.timestamp.isoformat(),
-                    "type": event.event_type.value,
-                    "session_id": event.session_id,
-                    "payload": event.payload,
-                })
-            except TimeoutError:
-                # Send heartbeat to keep connection alive
-                await websocket.send_json({"type": "heartbeat"})
-    except WebSocketDisconnect:
-        pass
-    finally:
-        telemetry.unsubscribe(queue)
-        manager.disconnect(websocket)
 
 
 # ============================================================================

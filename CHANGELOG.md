@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed: a push channel nothing listened to
+- **Deleted the WebSocket subsystem from the web server.** `/ws/events`, `ConnectionManager`, and the background task that polled the telemetry database every 500 milliseconds to feed it. The instrument panel has no WebSocket client, and neither did the eight pages it replaced in v2.13.
+- The poll task ran for the life of every dashboard process. It woke twice a second, checked for connected clients, found none, and slept again.
+- **Two documents claimed this worked.** The README API table listed `WS /ws/events | Real-time events`, and `architecture.html` described the dashboard as having WebSocket updates. Both were true in the sense that the route existed. Claim test C06 checks that documented endpoints resolve to a route, which is why this passed for months: the test asks whether the endpoint exists, not whether anything uses it.
+- `TelemetryLogger.subscribe`, `unsubscribe`, the `_subscribers` list and the notify loop in `_emit` went with it. Those existed only to feed that endpoint.
+- Three dependencies had zero imports anywhere in `src/` or `tests/` and are removed: `websockets` (needed only to serve the route), `playwright`, and `aiohttp`. The screenshots in `docs/screenshots/` are committed images with no generator script, so nothing used playwright.
+
+### Removed: an archive that existed to satisfy its own test
+- **Deleted `examples/claude-hooks/legacy/`**, 599 lines across six superseded hook scripts. Nothing imported, executed, installed or compared against them.
+- `test_legacy_hooks_archived` asserted that three of those files existed. That was the only reader. The test protected the archive and the archive existed to satisfy the test, so both are gone and git history holds the files.
+- The sibling test in the same class is kept and now explains itself. `test_settings_json_empty` asserts this repository's own `.claude/settings.json` stays `{}`, because a committed project-local hook registration would fire a second time on every event alongside the global one.
+- `tests/test_init_project.py` keeps its legacy-hook tests. Those exercise the scrub that removes stale hook references from `settings.json`, and they write their own fixture files, so they never read the archive.
+
+### Changed: two report printers became tests
+- `test_benchmark_report` and `test_category_breakdown` in `tests/test_intent_benchmark.py` computed a three-way classifier comparison, printed a table, and asserted nothing. They could only fail by raising.
+- Both now assert the conclusion they print, which is the one that decided where intent classification lives. Macro F1 measured at regex 0.69, graph-community 0.23, LLM 0.92, and exact match at 58%, 2% and 87%. The breakdown asserts the shape of the gap: regex matches the LLM on directly worded messages, 20 of 20 against 19 of 20, and collapses on indirect phrasing, 1 of 15 against 13 of 15.
+- `classify_llm` reads committed blind classifications, so there is no API call at test time and no run-to-run drift. The assertions were verified by breaking them: two tests fail when the bounds are tightened past the measured values, and all 19 pass when restored.
+- A third check guards the rejected option. Graph-community classification is asserted to stay below 0.40 macro F1, so if it ever improves, the decision to drop it gets revisited instead of silently standing.
+
+### Fixed: .gitignore contradicted the repository
+- `CLAUDE.md` was listed in `.gitignore` with a comment saying users create their own. This repository ships one, `test_claims.py` reads it, and the docs-sync rule requires updating it with every behaviour change. The rule only ever applied to untracked copies, so the file stayed tracked and the contradiction showed up in `git ls-files --ignored -c`.
+
+### Notes on what was measured and left alone
+- A scan of all 410 definitions in `src/mgcp` found one unreferenced name, the WebSocket route above. After the removal the same scan reports zero. Module-level constants with no reader: zero.
+- `scripts/clean_tool_call_envelopes.py` looked unreferenced and is not. `models.py` and `server.py` both name it in error messages shown to the operator, and `tests/test_tool_call_envelope.py` loads it. Kept.
+- `tests/benchmark_data/run_blind_llm.py` looked unreferenced and is not. It regenerates the classifications that `test_intent_benchmark.py` reads. Kept.
+- **The largest remaining duplication is left in place on purpose.** `tests/test_data_ops.py` repeats a two-patch mock scaffold 14 times, about 120 lines, varying only in the lesson list, which extra async mocks are set, and the search return. One context manager would collapse it. It is not done because a mock setup that reads top to bottom is easier to debug than one assembled from parameters, and 120 lines of test boilerplate is a worse trade than 14 indirections. Recorded here so the next pass does not have to re-measure it.
+
+
 ### Fixed: an apology already paid for could re-arm the gate
 - **A message you send while a turn is still running used to re-fire the apology gate on an apology that had already been answered with a lesson.** Diagnosed from a live transcript: the sentence behind two real refusals was "You're right, I narrated it instead of doing it", written and answered in the preceding turn.
 - Two mechanisms disagreed about where a turn begins. `UserPromptSubmit` fires for a mid-turn message and clears `turn_tools_called`, which is the only record that `add_lesson` already satisfied the gate. The gate's own backwards walk through the transcript breaks on a user entry, and a mid-turn message is written as `queue-operation` and `attachment` entries, never as `type == "user"`. So the state said "new turn, nothing called yet" while the transcript said "same turn, apology still present".

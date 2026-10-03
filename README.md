@@ -800,7 +800,6 @@ Every release before 3.0, from 1.0 to 2.13, is in [CHANGELOG.md](CHANGELOG.md).
 | `GET /api/projects` | All projects |
 | `GET /api/graph` | Graph visualization data |
 | `GET /docs` | OpenAPI documentation |
-| `WS /ws/events` | Real-time events |
 
 ## Beyond Software Development
 

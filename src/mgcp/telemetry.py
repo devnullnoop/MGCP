@@ -1,6 +1,5 @@
 """Telemetry and analytics for MGCP (Memory Graph Core Primitives)."""
 
-import asyncio
 import json
 import logging
 import os
@@ -93,7 +92,6 @@ class TelemetryLogger:
         self.db_path = Path(os.path.expanduser(db_path))
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialized = False
-        self._subscribers: list[asyncio.Queue] = []
         self._current_session_id: str | None = None
 
     async def _get_conn(self) -> aiosqlite.Connection:
@@ -253,7 +251,7 @@ class TelemetryLogger:
         ))
 
     async def _emit(self, event: TelemetryEvent) -> None:
-        """Persist event and notify subscribers."""
+        """Persist one event."""
         conn = await self._get_conn()
         try:
             await conn.execute(
@@ -269,13 +267,6 @@ class TelemetryLogger:
             await conn.commit()
         finally:
             await conn.close()
-
-        # Notify real-time subscribers
-        for queue in self._subscribers:
-            try:
-                queue.put_nowait(event)
-            except asyncio.QueueFull:
-                pass  # Drop if queue is full
 
     async def _update_lesson_stats(
         self,
@@ -338,17 +329,6 @@ class TelemetryLogger:
                 await conn.commit()
         finally:
             await conn.close()
-
-    def subscribe(self) -> asyncio.Queue:
-        """Subscribe to real-time events."""
-        queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-        self._subscribers.append(queue)
-        return queue
-
-    def unsubscribe(self, queue: asyncio.Queue) -> None:
-        """Unsubscribe from events."""
-        if queue in self._subscribers:
-            self._subscribers.remove(queue)
 
     # Analytics queries
 

@@ -219,11 +219,52 @@ It does not. On extracted facts the format makes no difference, 0.647 against
 Short messages such as "Hey Mel! Good to see you!" carry little meaning on their
 own, and the added framing helps.
 
-### Timestamps are worth about three points
+### Timestamps are worth about three points here
 
 The LoCoMo authors store each message with the date and time of the session.
-Copying that format raised MGCP's score from 0.652 to 0.680. MGCP does not record
-a timestamp on each note today.
+Copying that format raised MGCP's score from 0.652 to 0.680.
+
+That is a property of this test set. LoCoMo asks 321 questions about dates and
+times out of 1,536, so a date in the stored text is something a fifth of the
+questions can match against.
+
+### Timestamps do not transfer to MGCP's own notes
+
+MGCP already records when a note was written and when it was last changed.
+`created_at` and `last_refined` are set on all 305 notes in the live store, REM's
+stale-note scan reads both, and export and import carry them. What MGCP does not
+do is put the date into the text that gets embedded, and this result is the reason
+to leave it that way.
+
+Two measurements, both against MGCP's own material.
+
+**Nobody asks MGCP about dates.** Of 562 distinct questions in nine months of real
+use, 1 contains a time or date word, and that one is "when to stop reviewing",
+which asks about circumstances.
+
+**Adding the date to the embedded text does not help.** Two indexes over the same
+305 notes, one with the stock text and one with "Recorded on 7 January 2026."
+appended, scored against the 34 labelled queries at the shipped 0.30 limit:
+
+| Measure | Stock | With the date | Change |
+|---|---|---|---|
+| Rank-1 accuracy, calibration set | 0.923 | 0.923 | none |
+| Rank-1 accuracy, held-out rewordings | 0.885 | 0.885 | none |
+| Recall in the top 3, both sets | 1.000 | 1.000 | none |
+| Precision in the top 3, held-out | 0.526 | 0.513 | -0.013 |
+| Irrelevant results shown per query, held-out | 1.794 | 1.824 | +0.029 |
+
+No gain anywhere, and a small cost on the held-out rewordings. The change is about
+one query's worth on a 34-query set, so the size of the cost is uncertain. The
+direction and the query distribution agree, which is enough to leave the text
+alone.
+
+Reproduce with `tests/timestamp_ab.py`, which the file's own docstring explains.
+
+The one thing the dates are missing from is the search payload. It holds the note
+id, trigger, action, tags, and use count, with no date, so results cannot be
+filtered or sorted by age. That is a filter, not a retrieval improvement, and no
+query on record needs it.
 
 ## Why we ran their search engine instead of quoting their results
 

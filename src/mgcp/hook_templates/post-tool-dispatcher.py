@@ -40,6 +40,12 @@ def _append_tool_called(tool_name: str) -> None:
                 state = json.load(f)
         else:
             state = {}
+        # workflow_state.json is agent-writable, so a valid-JSON non-object
+        # parses and then raises on .get(). This hook has no top-level
+        # handler and the except clause below does not catch AttributeError
+        # or TypeError, so `42` in that file crashed every tool call.
+        if not isinstance(state, dict):
+            state = {}
         called = state.get("turn_tools_called")
         if not isinstance(called, list):
             called = []
@@ -79,11 +85,20 @@ STATE_FILE = Path.home() / ".mgcp" / "error_detector_state.json"
 
 
 def _load_state() -> dict:
+    """Load per-turn state, or the defaults if the file is unusable.
+
+    The isinstance check matches pre-tool-dispatcher's. workflow_state.json is
+    agent-writable, and a valid-JSON non-object parses cleanly and then raises
+    on .get() at the call site. This hook has no top-level handler, so that
+    surfaced as an AttributeError on every tool call.
+    """
     try:
         if STATE_FILE.exists():
             with open(STATE_FILE) as f:
-                return json.load(f)
-    except (json.JSONDecodeError, IOError, OSError):
+                state = json.load(f)
+            if isinstance(state, dict):
+                return state
+    except (json.JSONDecodeError, IOError, OSError, TypeError, ValueError):
         pass
     return {"last_fire": 0}
 

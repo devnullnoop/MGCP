@@ -522,7 +522,22 @@ class TestQdrantServerModeConcurrency:
 
     @staticmethod
     def _server_available() -> bool:
-        url = os.environ.get("MGCP_QDRANT_URL", "").strip()
+        """Resolve the URL the way the project does, not just from the env.
+
+        This read `MGCP_QDRANT_URL` alone, while `get_qdrant_url()` reads that
+        env var and then `qdrant_url` from the config file. CLAUDE.md states
+        why the file matters: an MCP server is spawned by the LLM client, so
+        `export` in a shell never reaches it, and `mgcp-qdrant setup` writes
+        the URL to the file instead. So the one install that can actually run
+        this test, a machine set up for multi-session, is exactly the install
+        where the env var is empty and the test skipped.
+        """
+        from mgcp.qdrant_vector_store import get_qdrant_url
+
+        try:
+            url = (get_qdrant_url() or "").strip()
+        except Exception:
+            return False
         if not url:
             return False
         try:
@@ -535,7 +550,15 @@ class TestQdrantServerModeConcurrency:
 
     def test_concurrent_open_of_a_new_collection(self):
         if not self._server_available():
-            pytest.skip("no Qdrant server at MGCP_QDRANT_URL")
+            pytest.skip(
+                "needs a running Qdrant server. conftest sandboxes "
+                "MGCP_DATA_DIR, so ~/.mgcp/config.json is invisible here on "
+                "purpose; run `MGCP_QDRANT_URL=http://127.0.0.1:6333 pytest "
+                "tests/test_basic.py -k QdrantServerMode` after "
+                "`mgcp-qdrant setup`. It creates a throwaway race_* "
+                "collection on that server, which is why it is not on by "
+                "default."
+            )
 
         import uuid as _uuid
         from concurrent.futures import ThreadPoolExecutor

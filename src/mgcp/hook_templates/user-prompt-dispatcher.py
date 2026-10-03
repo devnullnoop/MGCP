@@ -163,11 +163,22 @@ def _load_state() -> dict:
         if STATE_FILE.exists():
             with open(STATE_FILE) as f:
                 state = json.load(f)
-                for key, value in defaults.items():
-                    if key not in state:
-                        state[key] = value
-                return state
-    except (json.JSONDecodeError, IOError, OSError):
+            # The isinstance check is load-bearing, and pre-tool-dispatcher
+            # has carried it since v2.4 while these two hooks did not.
+            # workflow_state.json is agent-writable, and a valid-JSON
+            # non-object (an array, a string, a number) parses cleanly and
+            # then raises on the key assignment below. This hook has no
+            # top-level handler, so that reached the operator as
+            # "TypeError: list indices must be integers" on every message,
+            # and the clock it claims cannot take the block down with it was
+            # loaded outside that try. Malformed state degrades to defaults.
+            if not isinstance(state, dict):
+                return defaults
+            for key, value in defaults.items():
+                if key not in state:
+                    state[key] = value
+            return state
+    except (json.JSONDecodeError, IOError, OSError, TypeError, ValueError):
         pass
     return defaults
 

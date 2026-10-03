@@ -141,15 +141,28 @@ class TestShippedThresholdMatchesTheSweep:
         )
 
     def test_recorded_sweep_supports_the_chosen_value(self):
-        """Read the evidence file, do not restate its numbers from memory."""
+        """Read the evidence file, do not restate its numbers from memory.
+
+        The path resolves from __file__, not from the process cwd, and a
+        missing file fails rather than skipping. Both were holes: the file is
+        committed, so a skip could only mean the evidence had been lost, and
+        the cwd-relative form skipped on any run launched from outside the
+        repository root even with the evidence present. Nothing counted the
+        skip either, because conftest's accounting only tracks claim-ledger
+        tests named test_<ID>_*.
+        """
         import json
         from pathlib import Path
 
-        path = Path("docs/bridge-results/bridge-sweep.json")
-        if not path.exists():
-            import pytest
-
-            pytest.skip("sweep evidence not present in this checkout")
+        path = (
+            Path(__file__).resolve().parent.parent
+            / "docs" / "bridge-results" / "bridge-sweep.json"
+        )
+        assert path.exists(), (
+            f"the sweep evidence is missing at {path}. The shipped "
+            "BRIDGE_MIN_SCORE rests on it; re-run "
+            "`python -m tests.bridge_benchmark --sweep` to regenerate it."
+        )
 
         rows = {r["min_score"]: r for r in json.loads(path.read_text())["thresholds"]}
         assert 0.55 in rows and 0.25 in rows and 0.60 in rows

@@ -1485,6 +1485,19 @@ class TestScheduleReminder:
         monkeypatch.setattr("mgcp.reminder_state.STATE_DIR", tmp_path)
         from mgcp.reminder_state import load_state
 
+        # The ids have to exist. schedule_reminder validates them now, because
+        # the hook replays workflow_step as a get_workflow_step call and names
+        # each lesson id, so one that resolves to nothing becomes an
+        # instruction that cannot be followed.
+        await add_lesson(id="root-cause-analysis", trigger="t", action="a")
+        await create_workflow(
+            workflow_id="bug-fix", name="Bug Fix", description="d", trigger="bug"
+        )
+        await add_workflow_step(
+            workflow_id="bug-fix", step_id="investigate", name="Investigate",
+            description="d", order=1,
+        )
+
         result = await schedule_reminder(lesson_ids="root-cause-analysis")
         assert "scheduled" in result.lower()
         assert load_state()["lesson_ids"] == ["root-cause-analysis"]
@@ -1492,6 +1505,37 @@ class TestScheduleReminder:
         result = await schedule_reminder(workflow_step="bug-fix/investigate")
         assert "scheduled" in result.lower()
         assert load_state()["workflow_step"] == "bug-fix/investigate"
+
+    @pytest.mark.asyncio
+    async def test_an_id_the_hook_cannot_resolve_is_refused(
+        self, server_stores, monkeypatch, tmp_path
+    ):
+        """schedule_reminder is the second writer of a step id into the state
+        the hook replays, and it validated nothing.
+
+        update_workflow_state gained store-backed validation on the reasoning
+        that the write is the only place an unresolvable id can be caught.
+        This path wrote the same field with no check, so the dispatcher would
+        emit `Call get_workflow_step("bug-fix", "nope")` and get "not found".
+        """
+        monkeypatch.setattr("mgcp.reminder_state.STATE_FILE", tmp_path / "state.json")
+        monkeypatch.setattr("mgcp.reminder_state.STATE_DIR", tmp_path)
+        from mgcp.reminder_state import load_state
+
+        await create_workflow(
+            workflow_id="bug-fix", name="Bug Fix", description="d", trigger="bug"
+        )
+        await add_workflow_step(
+            workflow_id="bug-fix", step_id="investigate", name="Investigate",
+            description="d", order=1,
+        )
+
+        assert "not found" in (await schedule_reminder(workflow_step="no-such-wf/x")).lower()
+        assert "not found" in (await schedule_reminder(workflow_step="bug-fix/nope")).lower()
+        assert "not found" in (await schedule_reminder(lesson_ids="no-such-lesson")).lower()
+        # None of the three wrote anything.
+        assert load_state()["workflow_step"] == ""
+        assert load_state()["lesson_ids"] == []
 
 
 class TestResetReminderState:

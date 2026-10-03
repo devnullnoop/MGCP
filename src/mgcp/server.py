@@ -2256,6 +2256,45 @@ async def schedule_reminder(
     # Parse lesson_ids string to list
     lesson_id_list = [lid.strip() for lid in lesson_ids.split(",") if lid.strip()] if lesson_ids else None
 
+    # Validate anything the hook will replay as an instruction, for the same
+    # reason update_workflow_state validates current_step: the dispatcher turns
+    # workflow_step into `Call get_workflow_step("wf", "step")` and names each
+    # lesson id, so an id nothing contains produces an instruction that cannot
+    # be followed. This is the second writer of a step id into
+    # workflow_state.json and it validated nothing.
+    if workflow_step or lesson_id_list:
+        store, _, _ = await _ensure_initialized()
+
+        if workflow_step:
+            wf_id, _, step_id = workflow_step.partition("/")
+            workflow = await store.get_workflow(wf_id)
+            if not workflow:
+                known = ", ".join(sorted(w.id for w in await store.get_all_workflows())) or "none"
+                return (
+                    f"Workflow not found: '{wf_id}'. Nothing was scheduled.\n"
+                    f"Known workflows: {known}"
+                )
+            if step_id:
+                valid = [st.id for st in workflow.steps]
+                if step_id not in valid:
+                    return (
+                        f"Step not found in workflow '{wf_id}': '{step_id}'. "
+                        "Nothing was scheduled.\n"
+                        f"Its steps are: {', '.join(valid) or 'none yet, add one with add_workflow_step'}.\n"
+                        "The reminder would have told you to call get_workflow_step "
+                        "with an id it cannot resolve."
+                    )
+
+        if lesson_id_list:
+            missing = [lid for lid in lesson_id_list if not await store.get_lesson(lid)]
+            if missing:
+                return (
+                    f"Lesson not found: {', '.join(repr(m) for m in missing)}. "
+                    "Nothing was scheduled.\n"
+                    "The reminder surfaces these by id, so one that does not "
+                    "exist would name a lesson nobody can read."
+                )
+
     state = do_schedule(
         after_calls=after_calls,
         after_minutes=after_minutes,
@@ -2358,7 +2397,7 @@ async def update_workflow_state(
             return (
                 f"Step not found in workflow '{target_id}': "
                 f"{', '.join(repr(b) for b in bad)}. Nothing was written.\n"
-                f"Its steps are: {', '.join(valid)}.\n"
+                f"Its steps are: {', '.join(valid) or 'none yet, add one with add_workflow_step'}.\n"
                 "The hook replays current_step every turn, so an unknown ID "
                 "would repeat an instruction that cannot be followed."
             )

@@ -164,7 +164,7 @@ class TestApologyDetector:
         ],
     )
     def test_apology_text_matches(self, hook_module, text):
-        assert hook_module._has_apology(text) is True
+        assert hook_module._apology_match(text)[0] != ""
 
     @pytest.mark.parametrize(
         "text",
@@ -177,58 +177,126 @@ class TestApologyDetector:
         ],
     )
     def test_non_apology_text_does_not_match(self, hook_module, text):
-        assert hook_module._has_apology(text) is False
+        assert hook_module._apology_match(text)[0] == ""
 
-    def test_current_turn_extracts_only_since_last_user_message(self, hook_module, tmp_path):
-        path = tmp_path / "transcript.jsonl"
-        entries = [
-            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "OLD TURN sorry"}]}},
-            {"type": "user", "message": {"role": "user", "content": "hi"}},
-            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "NEW TURN hello"}]}},
-            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "more of new turn"}]}},
-        ]
+    @staticmethod
+    def _write(path, entries):
         path.write_text("\n".join(json.dumps(e) for e in entries))
-        text = hook_module._current_turn_assistant_text(str(path))
-        assert "NEW TURN" in text
-        assert "more of new turn" in text
-        assert "OLD TURN" not in text
+        return str(path)
 
-    def test_current_turn_walks_past_tool_result_user_entries(self, hook_module, tmp_path):
-        """Tool results are type=='user' entries with tool_result content.
+    @staticmethod
+    def _say(text):
+        return {"type": "assistant",
+                "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
 
-        The backward walk must not stop at them: otherwise any tool call
-        (even a denied or discovery-exempt one) hides the apology and
-        reopens the gate mid-turn.
+    @staticmethod
+    def _call(name):
+        return {"type": "assistant",
+                "message": {"role": "assistant", "content": [{"type": "tool_use", "name": name}]}}
+
+    def test_only_this_turn_counts(self, hook_module, tmp_path):
+        """An apology before the last user prompt is a previous turn's business."""
+        p = self._write(tmp_path / "t.jsonl", [
+            self._say("OLD TURN sorry"),
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            self._say("NEW TURN hello"),
+        ])
+        assert hook_module._latest_apology(p) == ("", "", False)
+
+    def test_an_apology_this_turn_is_found_unanswered(self, hook_module, tmp_path):
+        p = self._write(tmp_path / "t.jsonl", [
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            self._say("Sorry, my mistake."),
+        ])
+        pattern, sentence, answered = hook_module._latest_apology(p)
+        assert pattern == r"\bsorry\b"
+        assert sentence == "Sorry, my mistake."
+        assert answered is False
+
+    def test_add_lesson_after_the_apology_answers_it(self, hook_module, tmp_path):
+        """This is what the gate accepts as payment, and the only thing."""
+        p = self._write(tmp_path / "t.jsonl", [
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            self._say("Sorry, my mistake."),
+            self._call("mcp__mgcp__add_lesson"),
+        ])
+        pattern, _, answered = hook_module._latest_apology(p)
+        assert pattern and answered is True
+
+    def test_add_lesson_before_the_apology_does_not_answer_it(self, hook_module, tmp_path):
+        """Order matters. A lesson written earlier does not pay for a later apology."""
+        p = self._write(tmp_path / "t.jsonl", [
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            self._call("mcp__mgcp__add_lesson"),
+            self._say("Sorry, that was wrong."),
+        ])
+        pattern, _, answered = hook_module._latest_apology(p)
+        assert pattern and answered is False
+
+    def test_a_later_block_in_the_same_message_answers_it(self, hook_module, tmp_path):
+        """An assistant turn can apologize and call add_lesson in one message."""
+        p = self._write(tmp_path / "t.jsonl", [
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "Sorry, my mistake."},
+                {"type": "tool_use", "name": "mcp__mgcp__add_lesson"},
+            ]}},
+        ])
+        pattern, _, answered = hook_module._latest_apology(p)
+        assert pattern and answered is True
+
+    def test_another_tool_does_not_answer_it(self, hook_module, tmp_path):
+        p = self._write(tmp_path / "t.jsonl", [
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            self._say("Sorry, my mistake."),
+            self._call("Bash"),
+            self._call("mcp__mgcp__query_lessons"),
+        ])
+        pattern, _, answered = hook_module._latest_apology(p)
+        assert pattern and answered is False
+
+    def test_the_walk_passes_tool_result_user_entries(self, hook_module, tmp_path):
+        """Tool results are type=='user' entries carrying tool_result blocks.
+
+        Stopping at them would let any tool call, even a denied one, hide the
+        apology and reopen the gate mid-turn.
         """
-        path = tmp_path / "transcript.jsonl"
-        entries = [
+        p = self._write(tmp_path / "t.jsonl", [
             {"type": "user", "message": {"role": "user", "content": "hi"}},
-            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "sorry, my mistake."}]}},
-            # tool_result envelope recorded after a tool call this turn
-            {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "denied"}]}},
-        ]
-        path.write_text("\n".join(json.dumps(e) for e in entries))
-        text = hook_module._current_turn_assistant_text(str(path))
-        assert "sorry" in text
+            self._say("sorry, my mistake."),
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "denied"}]}},
+        ])
+        assert hook_module._latest_apology(p)[0] != ""
 
-    def test_current_turn_stops_at_real_user_prompt(self, hook_module, tmp_path):
-        """A genuine user prompt (string or text-block content) still ends the turn."""
-        path = tmp_path / "transcript.jsonl"
-        entries = [
-            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "OLD sorry"}]}},
-            {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "new prompt"}]}},
-            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "fresh turn"}]}},
-        ]
-        path.write_text("\n".join(json.dumps(e) for e in entries))
-        text = hook_module._current_turn_assistant_text(str(path))
-        assert "fresh turn" in text
-        assert "OLD sorry" not in text
+    def test_a_text_block_user_prompt_still_ends_the_turn(self, hook_module, tmp_path):
+        p = self._write(tmp_path / "t.jsonl", [
+            self._say("OLD sorry"),
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "text", "text": "new prompt"}]}},
+            self._say("fresh turn, all clear here"),
+        ])
+        assert hook_module._latest_apology(p) == ("", "", False)
 
-    def test_current_turn_handles_missing_file(self, hook_module, tmp_path):
-        assert hook_module._current_turn_assistant_text(str(tmp_path / "nope.jsonl")) == ""
+    def test_thinking_blocks_are_not_assistant_text(self, hook_module, tmp_path):
+        """Reasoning the user never sees is not an apology to the user."""
+        p = self._write(tmp_path / "t.jsonl", [
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "sorry, I think I got that wrong"}]}},
+        ])
+        assert hook_module._latest_apology(p) == ("", "", False)
 
-    def test_current_turn_handles_empty_path(self, hook_module):
-        assert hook_module._current_turn_assistant_text("") == ""
+    def test_a_missing_file_matches_nothing(self, hook_module, tmp_path):
+        assert hook_module._latest_apology(str(tmp_path / "nope.jsonl")) == ("", "", False)
+
+    def test_an_empty_path_matches_nothing(self, hook_module):
+        assert hook_module._latest_apology("") == ("", "", False)
+
+    def test_a_corrupt_transcript_matches_nothing_and_does_not_raise(self, hook_module, tmp_path):
+        p = tmp_path / "t.jsonl"
+        p.write_text("not json\n[]\n{\"type\": 7}\n\x00\n{broken")
+        assert hook_module._latest_apology(str(p)) == ("", "", False)
 
 
 class TestEnforcement:
@@ -424,22 +492,90 @@ class TestEnforcement:
         )
         assert r.stdout.strip() == ""
 
-    def test_apology_satisfied_after_add_lesson_called(self, tmp_path):
-        transcript = self._make_transcript(tmp_path, "my bad, you were right.")
+    @staticmethod
+    def _transcript_with_lesson(tmp_path, assistant_text, answered):
+        """A one-turn transcript, optionally with add_lesson after the text."""
+        entries = [
+            {"type": "user", "message": {"role": "user", "content": "go"}},
+            {"type": "assistant", "message": {"role": "assistant",
+             "content": [{"type": "text", "text": assistant_text}]}},
+        ]
+        if answered:
+            entries.append({"type": "assistant", "message": {"role": "assistant",
+                "content": [{"type": "tool_use", "name": "mcp__mgcp__add_lesson"}]}})
+        path = tmp_path / "transcript.jsonl"
+        path.write_text("\n".join(json.dumps(e) for e in entries))
+        return path
+
+    def test_apology_satisfied_once_the_lesson_is_in_the_transcript(self, tmp_path):
+        transcript = self._transcript_with_lesson(tmp_path, "my bad, you were right.", True)
         r = self._run(
-            {
-                "tool_name": "Bash",
-                "tool_input": {"command": "echo ok"},
-                "transcript_path": str(transcript),
-            },
-            {
-                "turn_tools_called": ["mcp__mgcp__add_lesson"],
-                "turn_bypass_scopes": [],
-            },
-            tmp_path,
-            rules=[],
+            {"tool_name": "Bash", "tool_input": {"command": "echo ok"},
+             "transcript_path": str(transcript)},
+            {"turn_tools_called": [], "turn_bypass_scopes": []},
+            tmp_path, rules=[])
+        assert r.stdout.strip() == "", r.stdout
+
+    def test_the_state_file_cannot_open_the_gate(self, tmp_path):
+        """turn_tools_called no longer answers "was this paid for".
+
+        That list lives in workflow_state.json, which is one file for every
+        project and every concurrent session, and which the gated agent can
+        write. Claiming add_lesson there used to open the gate. The transcript
+        decides now, and the transcript is not agent-writable.
+        """
+        transcript = self._transcript_with_lesson(tmp_path, "my bad, you were right.", False)
+        r = self._run(
+            {"tool_name": "Bash", "tool_input": {"command": "echo ok"},
+             "transcript_path": str(transcript)},
+            # Everything an attacker could put in the shared file.
+            {"turn_tools_called": ["mcp__mgcp__add_lesson"],
+             "turn_bypass_scopes": [],
+             "turn_started_at": 9_999_999_999.0,
+             "turn_session_id": "someone-elses-session"},
+            tmp_path, rules=[])
+        assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny", (
+            "the shared state file reopened the gate: " + r.stdout
         )
-        assert r.stdout.strip() == ""
+
+    def test_a_concurrent_session_cannot_disarm_the_gate(self, tmp_path):
+        """The bypass an adversarial audit found, now closed.
+
+        The gate used to bound its transcript walk by turn_started_at read from
+        the shared state file. Any value newer than this session's own text
+        made the walk stop at once, so the gate saw no text, allowed the call,
+        and wrote nothing to gate_audit.jsonl. Another session's turn, a forged
+        number and a clock correction all reached that silent bypass.
+        """
+        transcript = self._transcript_with_lesson(tmp_path, "Sorry, that was wrong.", False)
+        for bound in (9_999_999_999.0, float("inf"), 1e18, -1, "not-a-number", None, True):
+            r = self._run(
+                {"tool_name": "Bash", "tool_input": {"command": "echo ok"},
+                 "transcript_path": str(transcript), "session_id": "mine"},
+                {"turn_tools_called": [], "turn_bypass_scopes": [],
+                 "turn_started_at": bound, "turn_session_id": "other-session"},
+                tmp_path, rules=[])
+            assert r.returncode == 0, r.stderr
+            decision = json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"]
+            assert decision == "deny", f"turn_started_at={bound!r} disarmed the gate"
+
+    def test_an_unanswered_apology_survives_a_mid_turn_message(self, tmp_path):
+        """The mirror of the bug the timestamp bound was added to fix.
+
+        A message sent mid-turn clears turn_tools_called and used to move the
+        window past an apology that had NOT been answered, which let it escape.
+        Reading the transcript fixes both directions at once: an answered
+        apology reads as answered, and an unanswered one still denies.
+        """
+        transcript = self._transcript_with_lesson(tmp_path, "Sorry, that was wrong.", False)
+        r = self._run(
+            {"tool_name": "Bash", "tool_input": {"command": "echo ok"},
+             "transcript_path": str(transcript)},
+            # Exactly the state a mid-turn UserPromptSubmit leaves behind.
+            {"turn_tools_called": [], "turn_bypass_scopes": [],
+             "turn_started_at": 9_999_999_999.0},
+            tmp_path, rules=[])
+        assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_apology_bypass_scope_allows_through(self, tmp_path):
         transcript = self._make_transcript(tmp_path, "sorry about that.")
@@ -1036,7 +1172,7 @@ class TestCommitMessageProseStyle:
         assert r.stdout.strip() == "", r.stdout
 
 
-class TestApologyWindowStopsAtTheTurnBoundary:
+class TestApologyPaymentIsReadFromTheTranscript:
     """A paid-for apology must not re-arm the gate on a mid-turn message.
 
     Diagnosed from a live transcript. UserPromptSubmit fires for a message the
@@ -1051,8 +1187,18 @@ class TestApologyWindowStopsAtTheTurnBoundary:
     denials was "You're right, I narrated it instead of doing it", written and
     answered in the preceding turn.
 
-    Both halves now key off `turn_started_at`, written by the same hook call
-    that clears `turn_tools_called`.
+    The first fix bounded the walk by `turn_started_at` from the same state
+    file. An adversarial audit then showed that bound was itself a bypass: any
+    value newer than this session's text stopped the walk at once, so the gate
+    saw nothing and allowed the call with no audit row, and the value came from
+    a shared agent-writable file. It also only fixed the false deny, leaving
+    the mirror case where an UNANSWERED apology before the mid-turn message
+    escaped.
+
+    The gate now reads payment from the transcript: an `add_lesson` call later
+    than the apology answers it, and nothing else does. The transcript is not
+    shared between sessions and the gated agent cannot write it, so both
+    directions are correct and neither depends on state.
     """
 
     _run = TestEnforcement._run
@@ -1115,24 +1261,6 @@ class TestApologyWindowStopsAtTheTurnBoundary:
             "the gate re-fired on an apology from before this turn: " + r.stdout
         )
 
-    def test_without_the_bound_the_old_bug_still_reproduces(self, tmp_path):
-        """Proves the bound is what fixes it, not something else in the state."""
-        import time
-
-        boundary = time.time() - 60
-        transcript = self._two_turn_transcript(
-            tmp_path,
-            "You're right, I narrated it instead of doing it.",
-            "Checking the suite now.",
-            boundary,
-        )
-        r = self._run(
-            {"tool_name": "Bash", "tool_input": {"command": "echo hi"},
-             "transcript_path": str(transcript)},
-            {"turn_tools_called": [], "turn_bypass_scopes": []},  # no bound
-            tmp_path, rules=[])
-        assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
-
     def test_an_apology_inside_this_turn_still_arms_the_gate(self, tmp_path):
         """The bound must not become a way to escape the gate."""
         import time
@@ -1155,26 +1283,12 @@ class TestApologyWindowStopsAtTheTurnBoundary:
              (tmp_path / "gate_audit.jsonl").read_text().splitlines()][-1]
         assert e["flagged_sentence"] == "Sorry, that number was wrong."
 
-    def test_a_malformed_turn_started_at_means_no_bound(self, tmp_path):
-        """Fail open to the old behaviour, never crash and never allow blindly."""
-        import time
+    def test_a_transcript_with_no_timestamps_still_arms_the_gate(self, tmp_path):
+        """Nothing in the decision reads a timestamp any more.
 
-        boundary = time.time() - 60
-        transcript = self._two_turn_transcript(
-            tmp_path, "Sorry, that was wrong.", "Carrying on.", boundary)
-        for bad in ("not-a-number", None, True, {"a": 1}):
-            r = self._run(
-                {"tool_name": "Bash", "tool_input": {"command": "echo hi"},
-                 "transcript_path": str(transcript)},
-                {"turn_tools_called": [], "turn_bypass_scopes": [],
-                 "turn_started_at": bad},
-                tmp_path, rules=[])
-            assert r.returncode == 0, r.stderr
-            decision = json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"]
-            assert decision == "deny", f"{bad!r} must fall back to denying, not allowing"
-
-    def test_entries_without_a_timestamp_are_not_treated_as_ancient(self, tmp_path):
-        """A transcript format with no timestamps behaves as it did before."""
+        The walk is ordered by position in the file, not by clock, so a
+        transcript format that carries no timestamps is not a special case.
+        """
         import time
 
         path = tmp_path / "transcript.jsonl"
@@ -1190,3 +1304,79 @@ class TestApologyWindowStopsAtTheTurnBoundary:
              "turn_started_at": time.time()},
             tmp_path, rules=[])
         assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+class TestEveryHookSurvivesAMalformedSharedState:
+    """workflow_state.json is agent-writable and shared by all five hooks.
+
+    pre-tool-dispatcher has guarded against a valid-JSON non-object since
+    v2.4, with a comment calling the isinstance check load-bearing. The other
+    two hooks that read the same file did not, and neither has a top-level
+    handler, so a state file holding `[]` crashed both on every message and
+    every tool call: a TypeError on the key assignment in
+    user-prompt-dispatcher and an AttributeError on .get() in
+    post-tool-dispatcher. Found by an adversarial audit, 2026-10-03.
+
+    The failure was not only lost advisory text. PreToolUse survived and kept
+    denying git without query_lessons, while the UserPromptSubmit hook that
+    delivers the routing block and parses MGCP_BYPASS was dead, so the bypass
+    token could not be read and the gate could not be opened.
+    """
+
+    TEMPLATES = HOOK_PATH.parent
+
+    HOOKS = [
+        ("user-prompt-dispatcher.py", {"prompt": "please commit this"}),
+        ("post-tool-dispatcher.py", {"tool_name": "Bash", "tool_response": "ok"}),
+        ("pre-tool-dispatcher.py",
+         {"tool_name": "Bash", "tool_input": {"command": "git commit -m x"}}),
+        ("session-init.py", {"session_id": "s1"}),
+        ("mgcp-precompact.py", {"session_id": "s1"}),
+    ]
+
+    @pytest.mark.parametrize("hook_name,payload", HOOKS)
+    @pytest.mark.parametrize("shape", ["[]", '"a string"', "42", "null", "true", "{}"])
+    def test_a_non_object_state_file_does_not_crash_the_hook(
+        self, hook_name, payload, shape, tmp_path
+    ):
+        state_file = tmp_path / "workflow_state.json"
+        state_file.write_text(shape)
+        result = subprocess.run(
+            [sys.executable, str(self.TEMPLATES / hook_name)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            env={
+                "MGCP_STATE_FILE": str(state_file),
+                "MGCP_DATA_DIR": str(tmp_path),
+                "PATH": "/usr/bin:/bin",
+            },
+        )
+        assert result.returncode == 0, (
+            f"{hook_name} crashed on state={shape}: {result.stderr[-400:]}"
+        )
+        assert "Traceback" not in result.stderr, result.stderr[-400:]
+
+    def test_the_git_gate_still_denies_when_state_is_malformed(self, tmp_path):
+        """Degrading to "no state" must not degrade to "no enforcement"."""
+        state_file = tmp_path / "workflow_state.json"
+        state_file.write_text("[]")
+        rules_file = tmp_path / "enforcement_rules.json"
+        rules_file.write_text(json.dumps({"version": 1, "rules": [GIT_GATE_RULE]}))
+        result = subprocess.run(
+            [sys.executable, str(HOOK_PATH)],
+            input=json.dumps(
+                {"tool_name": "Bash", "tool_input": {"command": "git commit -m x"}}
+            ),
+            capture_output=True,
+            text=True,
+            env={
+                "MGCP_STATE_FILE": str(state_file),
+                "MGCP_ENFORCEMENT_CONFIG": str(rules_file),
+                "MGCP_DATA_DIR": str(tmp_path),
+                "PATH": "/usr/bin:/bin",
+            },
+        )
+        assert result.returncode == 0
+        decision = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"]
+        assert decision == "deny"

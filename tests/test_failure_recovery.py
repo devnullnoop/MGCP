@@ -130,16 +130,31 @@ class TestMissingFiles:
             result = await store.get_lesson("test")
             assert result is not None
 
-            # Delete the database file
+            # Delete the database file underneath the open store.
             db_path.unlink()
 
-            # Next operation should fail gracefully
-            # (behavior depends on implementation - could recreate or error)
-            try:
-                await store.get_lesson("test")
-            except Exception:
-                # Should be a clear database error
-                assert True  # Any exception is acceptable here
+            # Measured behaviour, 2026-10-03. This block used to be a
+            # try/except whose only statement was `assert True`, and the except
+            # branch never ran, so the test passed whatever the store did.
+            # What the store actually does:
+
+            # Reads keep working. SQLite holds the open inode, so the row is
+            # still there even though the path is gone.
+            survived = await store.get_lesson("test")
+            assert survived is not None, (
+                "a read after the file was unlinked returned nothing; the open "
+                "handle should still serve the row"
+            )
+            assert survived.id == "test"
+
+            # And the read does not resurrect the file.
+            assert not db_path.exists()
+
+            # Writes fail, loudly, instead of silently dropping data.
+            with pytest.raises(sqlite3.OperationalError):
+                await store.add_lesson(
+                    Lesson(id="after-delete", trigger="t", action="a")
+                )
 
 
 class TestInvalidData:

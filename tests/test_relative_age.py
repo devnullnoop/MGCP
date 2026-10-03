@@ -94,14 +94,31 @@ class TestAgePhrase:
 
 class TestItReachesTheInjectedText:
     def test_the_project_header_and_todos_carry_an_age(self):
+        """Ages measured against the real clock, because to_context() reads it.
+
+        Every other test in this file passes NOW in explicitly and is frozen.
+        This one cannot be: `to_context()` calls relative_age with no `now`
+        argument, so it reads the real time. Building its input from the frozen
+        NOW made the test pass on the day it was written and fail the next, and
+        then drift further every day. It went red at midnight on 2026-10-03 and
+        the suite was reported green the evening before.
+
+        The two intervals are chosen to sit far from a bucket edge. 3 days is
+        the middle of the day bucket, and 210 days rounds to 7 months with the
+        bucket spanning 198 to 228 days, so neither answer can turn over while
+        the test runs.
+        """
         from mgcp.models import ProjectContext, ProjectTodo
 
+        real_now = datetime.now(UTC)
         context = ProjectContext(
             project_id="p",
             project_name="P",
             project_path="/tmp/p",
-            last_accessed=ago(days=3),
-            todos=[ProjectTodo(content="an old todo", created_at=ago(days=210))],
+            last_accessed=real_now - timedelta(days=3),
+            todos=[
+                ProjectTodo(content="an old todo", created_at=real_now - timedelta(days=210))
+            ],
         )
         rendered = context.to_context()
         assert "3d ago" in rendered, rendered[:200]

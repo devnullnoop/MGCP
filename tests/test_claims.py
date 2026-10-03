@@ -100,6 +100,28 @@ def _tool_source(name: str) -> str:
     return "\n".join(lines[node.lineno - 1 : node.end_lineno])
 
 
+def _calls_in(name: str) -> set:
+    """Every attribute or function actually CALLED inside one MCP tool.
+
+    Comments and strings are invisible here, which is the point. A substring
+    check over the tool's source text is satisfied by a comment that merely
+    names the function, so it confirms that a word appears rather than that
+    the call happens. C26 was disarmed exactly that way: the v2.13 bridge fix
+    added two comments mentioning record_usage, and deleting the only real
+    call left the test green.
+    """
+    called = set()
+    for node in ast.walk(_mcp_tools()[name]):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            called.add(func.attr)
+        elif isinstance(func, ast.Name):
+            called.add(func.id)
+    return called
+
+
 def _backticked(text: str) -> set[str]:
     return set(re.findall(r"`([a-z_][a-z0-9_]*)`", text))
 
@@ -769,8 +791,7 @@ def test_C26_lesson_usage_is_actually_recorded():
     """README screenshots claim 'usage heatmaps'; rem_cycle's staleness scan
     and the community bridge both rank on usage_count. If query_lessons did
     not record usage, all three would be reading zeros."""
-    src = _tool_source("query_lessons")
-    assert "record_usage" in src, (
+    assert "record_usage" in _calls_in("query_lessons"), (
         "query_lessons does not call store.record_usage — usage_count stays 0, "
         "so the staleness scan, the community bridge ranking and the dashboard "
         "heatmap are all reading a dead field"
@@ -1135,3 +1156,44 @@ def test_E12_abstention_numbers_match_their_evidence():
         "cannot stand"
     )
     assert paired["verdict"] == "different", paired
+
+
+def test_C33_stated_tool_counts_match_the_server():
+    """Every file that states a tool count has to agree with server.py.
+
+    `static/architecture.html` is served by the dashboard and said 38 tools
+    while the server exposed 50. Nothing checked it, because the count lives in
+    prose rather than in a version field, and C08's version-parity test only
+    covers the package version. An adversarial audit found it on 2026-10-03.
+
+    The ledger rows that used to pin a number in passing ("one of the 49
+    tools", "VERSION (2.13 as of this writing)") had the count removed instead
+    of updated, since a number in a sentence nobody checks will rot again.
+    """
+    actual = len(_mcp_tools())
+    assert actual > 0, "no @mcp.tool() functions found; the parser is broken"
+
+    pattern = re.compile(r"(\d+)\s+(?:MCP\s+)?tools\b")
+    checked = []
+    for rel in (
+        "CLAUDE.md",
+        "README.md",
+        "src/mgcp/static/architecture.html",
+        "docs/CAPABILITIES.md",
+    ):
+        path = REPO / rel
+        if not path.exists():
+            continue
+        for line_no, line in enumerate(path.read_text().splitlines(), 1):
+            # Historical entries legitimately name old counts.
+            if rel == "docs/CAPABILITIES.md" and ("~~" in line or "Was FAKE" in line):
+                continue
+            for found in pattern.findall(line):
+                checked.append((rel, line_no, int(found)))
+
+    wrong = [(r, n, c) for r, n, c in checked if c != actual]
+    assert not wrong, (
+        f"server.py exposes {actual} tools, but these say otherwise: "
+        + "; ".join(f"{r}:{n} says {c}" for r, n, c in wrong)
+    )
+    assert checked, "no file states a tool count any more; drop this test if that is intended"

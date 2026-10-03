@@ -104,14 +104,21 @@ Reproduce with `python -m tests.bridge_benchmark --sweep`. Evidence in
 
 Two things to read here. Nothing changes between 0.25 and 0.45, so 0.30 of the
 old setting did nothing: every candidate the bridge considers scores above
-0.45. And 0.55 is the first value that changes anything. It drops 4 appends and
-keeps the one append a label vouches for, which is why it is now the shipped
-value. 0.60 drops that append too.
+0.45. And 0.55 is the first value that changes anything. It keeps the one
+append a label vouches for, which is why it is now the shipped value. 0.60
+loses that append too.
 
-**The evidence is thin and the change is small.** The four appends that 0.55
-discards are unlabelled, not known-useless, so this buys a smaller context
-window without proving the four were worthless. The append it protects is one
-query. Every row is validated the same way as the on and off comparison: the
+**The count falls by 4, and the change is not a subset.** Comparing the two
+runs note by note, 0.55 removes 6 appends and admits 2 that 0.25 never showed,
+for a net of 26 against 30. A higher floor can add an append because the bridge
+takes only the top 3 members of a matched community: filtering out a low scorer
+lets the next candidate up move into that window. Published as "drops 4" at
+first, which was read off the net count rather than off the two sets.
+
+**The evidence is thin.** The 6 appends that 0.55 discards are unlabelled, not
+known-useless, so this buys a smaller context window without proving those 6
+were worthless, and the 2 it admits are unlabelled as well. The append it
+protects is one query. Every row is validated the same way as the on and off comparison: the
 searched results are identical at all seven thresholds, so the bridge is the
 only thing that differs, and the harness marks any row void where that fails.
 

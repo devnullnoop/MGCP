@@ -509,7 +509,8 @@ intent, and edge cases. The model was about 50 percent more accurate than the
 patterns, using half as much hook code. We also tested a third method that
 compared the message to summaries of note clusters. It did much worse, because
 those summaries describe subjects and not actions. The old pattern-matching hooks
-are kept in `examples/claude-hooks/legacy/`.
+are in git history. The directory that held them was deleted once nothing read
+it but the test asserting it existed.
 
 ### The intent list is data
 
@@ -603,6 +604,30 @@ needs the text and the text was thrown away. The refusal is the only place that
 text exists, so that is where it is now written. The counting still has to be
 done by a person, and the first measurement will cover the records written from
 v2.15 onward.
+
+**How the gate knows an apology was already paid for, and two ways it got that
+wrong.** The answer is now read from the session transcript: a call to
+`add_lesson` recorded later than the apology settles it, and nothing else does.
+
+The first version asked a state file instead. `workflow_state.json` holds a list
+of the tools called this turn, and a message you send while a turn is still
+running resets that list. So an apology that had already been answered looked
+unanswered, and the gate refused a second time for a lesson that was already
+written.
+
+The fix for that was to bound how far back the gate reads, using a timestamp
+from the same file. An adversarial review then showed the bound was worse than
+the problem. That file is shared by every project and every session running at
+once, and the model itself can write it. Any timestamp later than the model's
+own words stopped the search immediately, so the gate found no text, allowed
+the tool call, and wrote nothing to the audit log. Another session's activity, a
+made-up number, or a clock correction all reached that silent opening of the
+only hook that can refuse a tool call. The bound also left the opposite case
+unfixed: an apology that had NOT been answered, written before the mid-turn
+message, escaped the same way.
+
+The transcript has neither problem. It is per session and the model cannot
+write it, and one pass over it answers both questions at once. v2.16.
 
 This is the closest MGCP comes to improving itself, stated carefully. The system
 notices a learning moment in its own output and refuses to continue until the

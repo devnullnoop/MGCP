@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: the apology gate could be opened silently, and it read the wrong file
+- **An adversarial audit of 154 agents found a silent bypass in the only hook that can refuse a tool call.** The gate bounded its transcript search by `turn_started_at`, read from `workflow_state.json`. Any value later than the model's own words stopped the search at once, so the gate found no text, allowed the call, and wrote no row to `gate_audit.jsonl`. That file is shared by every project and every concurrent session, and the model can write it, so another session's turn, a forged number such as 1e18 or infinity, and a clock correction all reached the bypass. Driving the hook with another session's value allowed a Bash call that should have been refused.
+- The bound had been added one day earlier to fix a false refusal, and it left the mirror case open: an apology that had NOT been answered, written before a mid-turn message, escaped the same way.
+- **Both directions are now settled from the transcript.** A call to `add_lesson` recorded later than the apology answers it, and nothing else does. Walking backwards, an `add_lesson` seen before the apology is one that happened after it, so a single pass decides whether an apology exists and whether it was paid for. Blocks are walked in reverse inside each message too, because one assistant turn can apologize in a text block and call `add_lesson` in a later block of the same message.
+- `turn_tools_called` no longer answers the question either. Reading it is what produced the original false refusal, and it is as writable by the model as the timestamp was. The transcript is per session and the model cannot write it.
+- Verified against the live transcript that produced the real false refusal: the sentence behind it was already answered, and the new code allows. Then verified in the other direction by reintroducing the old shortcut and watching exactly one test fail.
+- `_entry_epoch`, the `datetime` import and the `_has_apology` wrapper are gone with the bound. 18 tests rewritten and 4 added, including one that puts every value an attacker could place in the shared file into it and requires a refusal anyway.
+
+### Fixed: a malformed shared state file crashed two hooks
+- **`workflow_state.json` holding `[]`, `42`, `"text"` or `null` crashed `user-prompt-dispatcher.py` and `post-tool-dispatcher.py` on every message and every tool call.** `pre-tool-dispatcher.py` has guarded that since v2.4, with a comment calling the check load-bearing, and the other two hooks never got it. Both parse the file and then assume a dictionary, neither has a top-level handler, and their `except` clauses do not catch the resulting `TypeError` or `AttributeError`.
+- The effect was worse than lost advisory text. PreToolUse survived and kept refusing git without `query_lessons`, while the hook that parses `MGCP_BYPASS` was dead, so the token could not be read and the gate could not be opened.
+- `post-tool-dispatcher.py` had two separate readers of the file and both needed the guard. A hand check found only the first, because the shell still had `HOME` set and the second reader fell back to the real file. The parametrized test found the second.
+- 31 tests: all five hooks against six malformed shapes, plus one that confirms the git gate still refuses while state is unusable. Degrading to "no state" must not degrade to "no enforcement".
+
+### Fixed: a test expired overnight and the suite was red on main
+- **`test_relative_age.py` pinned a frozen `NOW` and then called a function that reads the real clock.** A three day old timestamp rendered as "4d ago" once the date rolled over. It passed on the evening of 2026-10-02, when the suite was reported green, and went red at midnight.
+- That one test now measures against the real clock, because `to_context()` does. The other 25 in the file pass `NOW` in explicitly and stay frozen. Its two intervals sit in the middle of their buckets so neither can turn over mid-run.
+
+### Fixed: the Signal callout rendered a stored string as markup
+- The concentration callout wrote the most repeated query straight into `innerHTML`. That string comes from telemetry exactly as a caller passed it, and the same field is escaped everywhere else in the file. The dashboard has no authentication and its own origin can call the lesson edit and delete routes.
+
+### Changed: claims that could not fail now can
+- **C26 asserted a substring and two comments satisfied it.** `test_C26_lesson_usage_is_actually_recorded` checked that `record_usage` appeared in the source of `query_lessons`. The v2.13 bridge fix added two comments naming it, so deleting the only real call left the test green. It now walks the function's syntax tree and requires an actual call. Confirmed by deleting the call and watching it fail.
+- **New claim C33 compares every stated tool count against the server.** `static/architecture.html`, served to the operator by the dashboard, said 38 tools while the server exposes 50. Nothing checked it, because the number sits in prose rather than a version field. Ledger rows that pinned a count in passing had the number removed rather than updated, since a number in a sentence nobody checks rots again.
+- **`test_database_deleted_mid_session` could not fail.** Its only check after deleting the database was `assert True`, inside an `except` branch that never ran. The real behaviour, now measured and asserted: reads keep working on the open file handle, the file is not recreated, and the next write raises.
+- **The only test that reads the bridge sweep evidence skipped silently** when the file was missing, and resolved its path against the process directory rather than its own, so it also skipped when run from anywhere but the repository root. A missing evidence file now fails.
+
+### Fixed: the test suite wrote to the operator's log
+- `conftest.py` redirects `MGCP_DATA_DIR` to a sandbox and says the suite does not reach the operator's data. The log directory was hardcoded and read no environment variable, and `server.py` configures logging at import, so every test module that imported it attached a handler on the live log. Sandbox paths were written into real diagnostic history, which rotates at 10 MB keeping 5 backups. The log directory now follows `MGCP_DATA_DIR`, resolved per call so a test that sets it after import still lands in the sandbox. A full run now changes the live log by zero bytes.
+
+### Fixed: a second writer of workflow step IDs validated nothing
+- `update_workflow_state` gained store-backed validation yesterday, on the reasoning that the write is the only place an unresolvable ID can be caught. `schedule_reminder` writes the same field and checked nothing, so a reminder could tell the model to call `get_workflow_step` with an ID that resolves to nothing. It now validates the workflow, the step and every lesson ID before scheduling, and refuses with the list of real steps.
+- The refusal for a workflow with no steps read "Its steps are: ." It now says so in words.
+
+### Changed: measured numbers corrected
+- **Raising the bridge floor substitutes appends; it does not only discard them.** The published claim was "drops 4 appends", read off the totals 30 and 26. Comparing the two runs note by note, 0.55 removes 6 and admits 2 that 0.25 never produced. A higher floor can add a result because the bridge keeps only the top 3 members of a matched community, so filtering out a low scorer promotes the next candidate into that window. The claim that the one vouched-for append survives still holds.
+- CLAUDE.md said every count on the Signal view has a deduplicated twin. Only match quality does. It also stated the median change in a direction that read backwards, and quoted live-store figures with no date on them.
+- The claim ledger's C06 row listed `/ws/events` as a verified endpoint after the commit that deleted it. The row now records why the check accepted it: it confirms a route exists, not that anything uses it.
+- The backlog's entries for the missing bridge relevance floor and the undocumented apology gate are struck through, since both shipped.
+
+### Changed
+- `hook_templates/VERSION` moves to 2.16. Installed hooks upgrade on the next `mgcp-init` run, and the gate change is in the hook, so it takes effect only after that.
+
+
 ### Removed: a push channel nothing listened to
 - **Deleted the WebSocket subsystem from the web server.** `/ws/events`, `ConnectionManager`, and the background task that polled the telemetry database every 500 milliseconds to feed it. The instrument panel has no WebSocket client, and neither did the eight pages it replaced in v2.13.
 - The poll task ran for the life of every dashboard process. It woke twice a second, checked for connected clients, found none, and slept again.

@@ -36,7 +36,7 @@ async function signal(main) {
 
     ${q.top_query_share > 0.15 && topQ ? `<div class="callout">
       <b>${pct(q.top_query_share, 1)} of every recorded query is the same string:
-      <code>${topQ.query}</code>.</b>
+      <code>${esc(topQ.query)}</code>.</b>
       The hooks issue that one themselves. The git gate mandates
       <code>query_lessons('git commit')</code> before any commit, so it fires once per commit and
       lands here as ${num(topQ.count)} queries. It is a real question, really asked that often, so

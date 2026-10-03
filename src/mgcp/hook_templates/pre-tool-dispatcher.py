@@ -37,7 +37,6 @@ import re
 import shlex
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
 STATE_FILE = Path(
@@ -263,57 +262,51 @@ def _apology_match(text: str) -> tuple:
     return "", ""
 
 
-def _has_apology(text: str) -> bool:
-    return bool(_apology_match(text)[0])
+def _latest_apology(transcript_path: str) -> tuple:
+    """The most recent apology since the last user prompt, and whether it was answered.
 
+    Returns ``(pattern, sentence, answered)``. ``answered`` is True when an
+    ``add_lesson`` call appears LATER in the transcript than the apology, which
+    is the only thing the gate accepts as payment.
 
-def _entry_epoch(entry: dict) -> float:
-    """The entry's timestamp as unix seconds, or 0.0 if unreadable."""
-    ts = entry.get("timestamp")
-    if not isinstance(ts, str) or not ts:
-        return 0.0
-    try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-    except (ValueError, TypeError, OSError):
-        return 0.0
+    THE TRANSCRIPT IS THE ONLY SOURCE OF TRUTH HERE, on purpose. The gate used
+    to decide "already answered" from ``turn_tools_called`` in
+    ``workflow_state.json``, and that file is wrong for this question in two
+    ways. It is shared: one file serves every project and every concurrent
+    session, so one session's bookkeeping spoke for all of them. And it is
+    agent-writable, so the thing being gated could edit the record of whether
+    it had complied. A bound on ``turn_started_at`` read from the same file was
+    worse again: any value newer than this session's own text made the walk
+    stop immediately, the gate saw no text, and the tool call was allowed with
+    no row written to ``gate_audit.jsonl``. A forged or future number, another
+    session's turn, or a clock correction all reached that silent bypass of the
+    only hook that can refuse a tool call. An adversarial audit found it by
+    driving this hook with another session's bound and watching it allow.
 
+    The transcript cannot be reached that way, and it already holds the answer.
+    Walking backwards, an ``add_lesson`` seen before the apology is an
+    ``add_lesson`` that happened after it in time, so one pass decides both
+    questions. That also fixes the false deny the timestamp bound was added
+    for: a message sent mid-turn resets ``turn_tools_called`` but changes
+    nothing in the transcript, so an apology already paid for still reads as
+    answered.
 
-def _current_turn_assistant_text(
-    transcript_path: str, turn_started_at: float = 0.0
-) -> str:
-    """Concatenate assistant text blocks emitted since this turn began.
+    Blocks are walked in reverse within each entry as well as across entries,
+    because an assistant message can apologize in a text block and call
+    ``add_lesson`` in a later block of the same message.
 
-    Walks the transcript JSONL backwards, stopping at the first genuine user
-    entry or at anything written before ``turn_started_at``.
-
-    The timestamp bound exists because the two halves of this gate disagreed
-    about where a turn begins. UserPromptSubmit resets ``turn_tools_called``,
-    which is what records that ``add_lesson`` already satisfied the gate, and
-    it fires for a message the user sends while a turn is still running. That
-    message is written to the transcript as ``queue-operation`` and
-    ``attachment`` entries, never as ``type == "user"``, so this walk used to
-    sail straight past it and keep reading the previous turn's text. The state
-    then said "new turn, nothing called yet" while the transcript said "same
-    turn, apology still present", and an apology that had already been paid
-    for with a lesson re-armed the gate. Diagnosed from a live transcript: the
-    sentence behind two denials was "You're right, I narrated it instead of
-    doing it", written in the preceding turn and already answered there.
-
-    Both halves now key off the same event. ``turn_started_at`` is written by
-    the same hook call that clears ``turn_tools_called``, so they cannot
-    disagree. A missing or unreadable value means no bound, which is the old
-    behaviour, because this gate fails open rather than guessing.
-
-    Falls back to empty string on any read/parse error (fail open).
+    Falls back to no match on any read or parse error, which allows the call.
+    Enforcement here is a net rather than a tripwire.
     """
     if not transcript_path:
-        return ""
+        return "", "", False
     try:
         with open(transcript_path) as f:
             lines = f.readlines()
     except (OSError, IOError):
-        return ""
-    parts = []
+        return "", "", False
+
+    answered = False
     for line in reversed(lines):
         line = line.strip()
         if not line:
@@ -322,13 +315,8 @@ def _current_turn_assistant_text(
             entry = json.loads(line)
         except (json.JSONDecodeError, ValueError):
             continue
-        if turn_started_at:
-            stamped = _entry_epoch(entry)
-            # Only a readable timestamp can end the walk. An entry with none
-            # is passed over rather than treated as ancient, so a transcript
-            # format without timestamps behaves as it did before.
-            if stamped and stamped < turn_started_at:
-                break
+        if not isinstance(entry, dict):
+            continue
         etype = entry.get("type")
         if etype == "user":
             # Tool results are recorded as type=="user" entries whose content
@@ -349,15 +337,22 @@ def _current_turn_assistant_text(
             continue
         if etype != "assistant":
             continue
-        msg = entry.get("message") or {}
-        content = msg.get("content")
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    parts.append(block.get("text", ""))
-        elif isinstance(content, str):
-            parts.append(content)
-    return "\n".join(parts)
+        content = (entry.get("message") or {}).get("content")
+        if isinstance(content, str):
+            blocks = [{"type": "text", "text": content}]
+        elif isinstance(content, list):
+            blocks = [b for b in content if isinstance(b, dict)]
+        else:
+            continue
+        for block in reversed(blocks):
+            btype = block.get("type")
+            if btype == "tool_use" and block.get("name") == ADD_LESSON_TOOL:
+                answered = True
+            elif btype == "text":
+                pattern, sentence = _apology_match(block.get("text") or "")
+                if pattern:
+                    return pattern, sentence, answered
+    return "", "", False
 
 
 # ---------------------------------------------------------------------------
@@ -561,17 +556,14 @@ def main():
     # gate, not a data rule, because its trigger is assistant text not a
     # tool arg.
     session_id = hook_input.get("session_id", "")
-    # Written by the same UserPromptSubmit call that clears turn_tools_called,
-    # so the apology window and the "already complied" check agree on where
-    # this turn begins. A missing or non-numeric value means no bound.
-    turn_started_at = state.get("turn_started_at")
-    if not isinstance(turn_started_at, (int, float)) or isinstance(turn_started_at, bool):
-        turn_started_at = 0.0
+    # Whether an apology was already paid for is read from the transcript, not
+    # from turn_tools_called. That list lives in a shared, agent-writable file,
+    # so it answered for every concurrent session at once and the gated agent
+    # could edit it. _latest_apology decides it from the transcript instead.
     if (
         tool_name not in (ADD_LESSON_TOOL, ADJUDICATE_TOOL)
         and tool_name not in DISCOVERY_TOOLS
         and APOLOGY_BYPASS_SCOPE not in bypass_scopes
-        and ADD_LESSON_TOOL not in (state.get("turn_tools_called") or [])
     ):
         # An adjudication speaks only for the session that recorded it:
         # workflow_state.json is shared across concurrent sessions, so an
@@ -595,9 +587,8 @@ def main():
         )
         if not adj_applies:
             transcript_path = hook_input.get("transcript_path", "")
-            text = _current_turn_assistant_text(transcript_path, turn_started_at)
-            matched_pattern, flagged_sentence = _apology_match(text)
-            if matched_pattern:
+            matched_pattern, flagged_sentence, answered = _latest_apology(transcript_path)
+            if matched_pattern and not answered:
                 _deny([
                     "[apology-requires-add-lesson] You apologized in this "
                     "turn. Two exits: (1) COMPLY -- call "
@@ -617,10 +608,8 @@ def main():
         and ADD_LESSON_TOOL not in (state.get("turn_tools_called") or [])
     ):
         transcript_path = hook_input.get("transcript_path", "")
-        matched_pattern, flagged_sentence = _apology_match(
-            _current_turn_assistant_text(transcript_path, turn_started_at)
-        )
-        if matched_pattern:
+        matched_pattern, flagged_sentence, answered = _latest_apology(transcript_path)
+        if matched_pattern and not answered:
             # A compliance is a label too: it says this fire was accepted.
             # Without the sentence it is an unexaminable vote.
             _audit({"event": "comply", "gate": "apology",

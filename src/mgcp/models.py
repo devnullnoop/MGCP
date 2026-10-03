@@ -149,6 +149,61 @@ def _sanitize_value(value: Any) -> Any:
     return value
 
 
+def relative_age(moment: datetime | None, now: datetime | None = None) -> str:
+    """How long ago, in the fewest characters that still read clearly.
+
+    Returns "now", "3h", "5d", "7mo" or "2y". The agent reading injected text is
+    poor at date arithmetic, so the arithmetic is done here. An absolute
+    timestamp makes the reader work out the interval, and that is the part that
+    goes wrong.
+
+    A naive datetime is read as UTC. Imported notes and rows written before
+    timezones were stored carry no offset, and a crash in a formatting helper
+    would take out the whole injected block.
+    """
+    if moment is None:
+        return "unknown"
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    now = now or datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    seconds = (now - moment).total_seconds()
+    if seconds < 0:
+        # A clock change or a bad import. Saying "now" beats "-3d".
+        return "now"
+    if seconds < 3600:
+        return "now"
+    hours = seconds / 3600
+    if hours < 24:
+        return f"{int(hours)}h"
+    days = seconds / 86400
+    if days < 30:
+        return f"{int(days)}d"
+    if days < 365:
+        # Rounded like the years below, so 210 days reads as 7mo and not 6mo.
+        # Capped at 11, because this bucket must never claim a whole year: 364
+        # days rounds to 12 months, and the next line would call it 1y.
+        months = min(11, max(1, round(days / 30.44)))  # 30.44 is the mean month
+        return f"{months}mo"
+    # Rounded, not truncated. Truncation made one year read as "0y" and two
+    # years read as "1y", which is worse than giving no age at all.
+    return f"{max(1, round(days / 365.25))}y"
+
+
+def age_phrase(moment: datetime | None, suffix: str = "ago", now: datetime | None = None) -> str:
+    """`relative_age` with a word after it, where a word reads correctly.
+
+    "now" and "unknown" are already sentences. Appending a suffix to them
+    produced "now ago" and "now old", which is how this helper earned a separate
+    function.
+    """
+    value = relative_age(moment, now)
+    if value in ("now", "unknown"):
+        return value
+    return f"{value} {suffix}"
+
+
 class SanitizedModel(BaseModel):
     """BaseModel that strips tool-call XML from any string field on the model.
 
@@ -528,7 +583,9 @@ class ProjectContext(SanitizedModel):
         lines = [
             f"## Project: {self.project_name}",
             f"Path: {self.project_path}",
-            f"Sessions: {self.session_count} | Last: {self.last_accessed.strftime('%Y-%m-%d %H:%M')}",
+            f"Sessions: {self.session_count} | Last: "
+            f"{self.last_accessed.strftime('%Y-%m-%d %H:%M')} "
+            f"({age_phrase(self.last_accessed)})",
         ]
 
         # Catalogue summary
@@ -588,7 +645,9 @@ class ProjectContext(SanitizedModel):
                 lines.append("\n### Active Todos:")
                 for i, todo in pending[:5]:
                     status_icon = "🔄" if todo.status == "in_progress" else "⏳"
-                    lines.append(f"  {status_icon} [{i}] {todo.content}")
+                    lines.append(
+                        f"  {status_icon} [{i}] ({relative_age(todo.created_at)}) {todo.content}"
+                    )
 
         if self.active_files:
             lines.append(f"\n### Working on: {', '.join(self.active_files[:5])}")

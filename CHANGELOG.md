@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: injected text says how old it is
+- **Every result from `query_lessons` now shows the age of its wording**, as in `(relevance: 68%, 4h old)` or `(relevance: 67%, 8mo old)`. The age comes from `last_refined`, so a note rewritten last week reads as current whatever its creation date.
+- **Active todos show how long they have been pending**, as in `⏳ [5] (8mo) Add BGE instruction prefix to queries`. Three todos in the live store turned out to be 8 months old, and nothing in the injected text had ever said so.
+- The project header shows the interval since the project was last touched, and the journal header shows it beside the absolute timestamp it already printed.
+- **Relative, not absolute, and that is the point.** An absolute timestamp makes the reader work out the interval, and working out intervals is the part that goes wrong. `relative_age` returns "now", "5h", "3d", "7mo" or "2y", and `age_phrase` adds "ago" or "old" where a suffix reads correctly.
+- Measured cost: 116 characters, about 29 tokens, on a `query_lessons` response of 8,863 characters. Roughly one percent.
+- This is injected text only. A separate measurement found that putting a date into the text that gets *embedded* does not help retrieval and costs a little precision, so the index is unchanged.
+- **Three bugs, all in the arithmetic, all caught by checking the boundaries before shipping.** Truncation made 365 days read as "0y" and 730 days read as "1y". Appending a suffix to "now" produced "now ago" in the project header and "now old" on a note refined minutes earlier. Rounding the months then made 364 days read as "12mo", one line above the bucket that calls 365 days "1y", so the month value is capped at 11.
+- 26 tests in `tests/test_relative_age.py` cover the whole ladder from one minute to three years, each of those three bugs, a naive timestamp read as UTC, a missing timestamp, a future timestamp, and the age reaching the rendered project text.
+
+
 ### Changed: the timestamp result does not transfer, and the report said so wrongly
 - **Corrected a false statement in the report.** It said "MGCP does not record a timestamp on each note today". MGCP does. `created_at` and `last_refined` are set on all 305 notes in the live store, REM's stale-note scan reads both, and export and import carry them. The gap was only that the date is absent from the text that gets embedded and from the search payload.
 - **Measured whether the date belongs in the embedded text. It does not.** The LoCoMo result showed that adopting their timestamped record format raised search accuracy there by about 3 points, which looked like a free improvement. LoCoMo asks 321 of 1,536 questions about dates, so a date in the stored text is something a fifth of its questions can match. MGCP's live trace holds 562 distinct questions over nine months, of which 1 contains a time word, and that one is "when to stop reviewing", which asks about circumstances.

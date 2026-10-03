@@ -149,6 +149,17 @@ whatever was written while the index was locked. `delete_lesson` and `remove_cat
 still refuse, because a search entry that outlives its deleted record returns a result for
 something that no longer exists.
 
+**Injected text carries a relative age, not a date.** `relative_age` and `age_phrase` in
+`models.py` turn a timestamp into "now", "5h", "3d", "7mo" or "2y". Four surfaces use them:
+each result from `query_lessons` shows the age of its current wording from `last_refined`, the
+project header shows how long since the project was last touched, each active todo shows how
+long it has been pending, and the journal header shows the interval beside its absolute stamp.
+The reader is poor at date arithmetic, so the arithmetic happens before the text reaches it. The
+cost is about 29 tokens on a 2,200-token `query_lessons` response. A separate measurement
+([locomo-retrieval-eval.md](docs/locomo-retrieval-eval.md)) found that putting a date in the
+*embedded* text does not help retrieval, so this is injected text only and the index is
+unchanged.
+
 **Lessons** have hierarchical relationships (parent/child) and typed cross-links. Key fields:
 - `trigger`: When the lesson applies (keywords/patterns)
 - `action`: What to do (imperative)

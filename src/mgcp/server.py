@@ -38,6 +38,7 @@ from .models import (
     Workflow,
     WorkflowStep,
     WorkflowStepLesson,
+    age_phrase,
     sanitize_tool_call_xml,
 )
 from .persistence import LessonStore, StaleWriteError
@@ -471,7 +472,10 @@ async def query_lessons(task_description: str, limit: int = 5) -> str:
     lines = [f"Found {len(lessons)} relevant lessons:\n"]
     for lesson, score in zip(lessons, scores):
         lines.append(lesson.to_context())
-        lines.append(f"  (relevance: {score:.0%})\n")
+        # The age of the current wording, so the reader can weigh a note written
+        # last week against one untouched for nine months. Relative, because the
+        # reader is poor at date arithmetic and an absolute date makes it do some.
+        lines.append(f"  (relevance: {score:.0%}, {age_phrase(lesson.last_refined, 'old')})\n")
 
     if bridged_lessons:
         lines.append(f"\n**Also relevant** (via community: _{bridge_source}_):\n")
@@ -480,7 +484,10 @@ async def query_lessons(task_description: str, limit: int = 5) -> str:
             # Shown for the same reason the direct hits show it: a bridged
             # lesson used to arrive with no relevance at all, so the reader had
             # no way to weigh it against the matched ones.
-            lines.append(f"  (relevance: {score:.0%}, via community)\n")
+            lines.append(
+                f"  (relevance: {score:.0%}, via community, "
+                f"{age_phrase(lesson.last_refined, 'old')})\n"
+            )
 
     return "\n".join(lines)
 
@@ -2631,6 +2638,7 @@ async def read_soliloquy(
         lines = [
             f"## Letter to Self (entry #{entry.id}, {total} total){elsewhere}\n",
             f"*Written: {entry.timestamp.strftime('%Y-%m-%d %H:%M')} "
+            f"({age_phrase(entry.timestamp)}) "
             f"| Session {entry.session_number}*",
         ]
         if elsewhere:

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: a clock on every turn
+- **The first line of every turn is now the time**, as in `<time>⌚ 21:09 Fri 2 Oct · 6m since your last message · 48m into this session</time>`. A model reads a transcript with no sense of elapsed time, so a reply written three hours later reads the same as one written in ten seconds.
+- Three parts, each earning its characters. The local time, because nothing else in the turn carries it. The gap since the previous message, because that is what decides whether "we just did that" is still true. The session length, shown once the session is a minute old.
+- **Minute resolution here, unlike the age shown beside a note.** `relative_age` in the package calls anything under an hour "now", which is right for the age of a note and wrong for the gap between two messages. The hook carries its own formatter, and a test pins the two to the same output from one hour upward, so two formatters do not become two places for one bug.
+- The clock is built before anything else in the hook and wrapped so a failure cannot take the rest of the injected block with it. A corrupt state file, a missing timestamp, a string where a number belongs, and a clock change that makes the gap negative all still produce a clock.
+- A new session id discards the previous session's timings, because the state file survives a restart and those numbers would be wrong.
+- `test_neutral_message_zero_output` needed updating. It stripped the one unconditional block and asserted nothing remained; there are now two. The property it guards is unchanged: a neutral message triggers no gate, no reminder, and no workflow text.
+- `hook_templates/VERSION` moves to 2.14. Installed hooks upgrade on the next `mgcp-init` run, and until then the deployed copies keep their current behaviour.
+- 25 tests in `tests/test_user_prompt_clock.py`, three of which run the hook as a subprocess and check that the clock is the first line printed, that the turn time is recorded for the next turn, and that the next turn shows the gap.
+
+
 ### Added: injected text says how old it is
 - **Every result from `query_lessons` now shows the age of its wording**, as in `(relevance: 68%, 4h old)` or `(relevance: 67%, 8mo old)`. The age comes from `last_refined`, so a note rewritten last week reads as current whatever its creation date.
 - **Active todos show how long they have been pending**, as in `⏳ [5] (8mo) Add BGE instruction prefix to queries`. Three todos in the live store turned out to be 8 months old, and nothing in the injected text had ever said so.

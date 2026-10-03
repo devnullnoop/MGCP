@@ -96,6 +96,55 @@ def _load_intent_config():
     return fallback_gates, fallback_routing
 
 
+def _short_delta(seconds: float) -> str:
+    """Elapsed time in as few characters as read clearly, with minutes.
+
+    `relative_age` in the package calls anything under an hour "now". That is
+    right for the age of a note and wrong here, because the gap between two
+    messages is most useful at minute resolution: six minutes and three hours
+    mean different things about what the reader can assume. The two agree from
+    one hour upward, and tests/test_user_prompt_clock.py checks that they do.
+    """
+    if seconds < 0:
+        return "just now"
+    if seconds < 60:
+        return "just now"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"{minutes}m"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h"
+    return f"{int(seconds // 86400)}d"
+
+
+def _clock_line(state: dict, session_id: str, now: float | None = None) -> str:
+    """The current time, the gap since the last message, and the session length.
+
+    A model reads a transcript with no sense of elapsed time. Without this, a
+    reply written three hours later reads exactly like one written in ten
+    seconds, and "we just did X" stops being true without anything saying so.
+
+    Never raises. A clock that can fail is worse than no clock, because the
+    whole injected block travels with it.
+    """
+    now = now if now is not None else time.time()
+    local = time.strftime("%H:%M %a %-d %b", time.localtime(now))
+    parts = [f"⌚ {local}"]
+
+    previous = state.get("turn_started_at")
+    same_session = state.get("turn_session_id") == session_id
+    if isinstance(previous, (int, float)) and same_session:
+        parts.append(f"{_short_delta(now - previous)} since your last message")
+    else:
+        parts.append("first message of this session")
+
+    started = state.get("session_started_at")
+    if isinstance(started, (int, float)) and same_session and now - started >= 60:
+        parts.append(f"{_short_delta(now - started)} into this session")
+
+    return "<time>" + " · ".join(parts) + "</time>"
+
+
 def _load_state() -> dict:
     """Load workflow/reminder state from file."""
     defaults = {
@@ -141,6 +190,16 @@ def main():
 
     output_parts = []
     prompt = hook_input.get("prompt", "")
+    session_id = hook_input.get("session_id", "") or ""
+
+    # The clock is built before anything else and printed first. It must not be
+    # able to take the rest of the block down with it.
+    now = time.time()
+    clock_state = _load_state()
+    try:
+        output_parts.append(_clock_line(clock_state, session_id, now))
+    except Exception:
+        pass
 
     gates, routing_block = _load_intent_config()
 
@@ -188,7 +247,12 @@ def main():
     #   without the model having to know a value nothing ever tells it. The
     #   PreToolUse gate requires an exact match, so before this was written
     #   here the gate's contest exit could never open.
-    state["turn_session_id"] = hook_input.get("session_id", "") or ""
+    # Read before this line overwrites it, so the clock above saw the previous
+    # turn's value.
+    if state.get("turn_session_id") != session_id:
+        state["session_started_at"] = now
+    state["turn_started_at"] = now
+    state["turn_session_id"] = session_id
     bypass_scopes = []
     for match in re.finditer(
         r"MGCP_BYPASS(?::([A-Za-z0-9_-]+))?", prompt, re.IGNORECASE

@@ -174,7 +174,13 @@ class TestDispatcherSimplification:
             assert "<workflow-state>" not in stripped
 
     def test_neutral_message_zero_output(self):
-        """'ok' with no state should produce only the intent-routing block."""
+        """'ok' with no state produces only the two unconditional blocks.
+
+        Two blocks print on every message by design: the intent router, and the
+        clock added in hook version 2.14. Both are stripped here, because the
+        property this guards is that a neutral message triggers no gate, no
+        reminder, and no workflow text.
+        """
         with backup_and_restore_state():
             write_state({
                 "current_call_count": 0,
@@ -184,9 +190,11 @@ class TestDispatcherSimplification:
             })
             hook_input = json.dumps({"prompt": "ok"})
             output = run_hook(DISPATCHER, hook_input)
-            # Strip the always-present intent-routing block
             import re as re_mod
-            stripped = re_mod.sub(r"<intent-routing>.*?</intent-routing>", "", output, flags=re_mod.DOTALL).strip()
+            stripped = re_mod.sub(
+                r"<intent-routing>.*?</intent-routing>", "", output, flags=re_mod.DOTALL
+            )
+            stripped = re_mod.sub(r"<time>.*?</time>", "", stripped, flags=re_mod.DOTALL).strip()
             assert stripped == ""
 
     def test_workflow_state_injection(self):

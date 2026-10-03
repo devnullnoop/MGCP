@@ -458,13 +458,32 @@ rule in MGCP that holds is a tool refusal. The rest is advice.
 | Hook | Event | Type | What it does |
 |------|-------|------|--------------|
 | `session-init.py` | SessionStart | advisory | Adds the start-of-session checklist (`read_soliloquy`, `get_project_context`, `query_lessons`) and the rules for running a workflow. Reports three problems if it finds them: hook files named in `settings.json` that no longer exist, maintenance jobs past their due session, and a high rate of contested apology-gate blocks. |
-| `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Applies the keyword rules from `intent_config.json`, repeats the short routing block every message, delivers scheduled reminders, and resets the per-message state that the enforcing hook reads. |
+| `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Puts a clock on the first line of every turn, applies the keyword rules from `intent_config.json`, repeats the short routing block, delivers scheduled reminders, and resets the per-message state that the enforcing hook reads. |
 | `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | The only hook that can refuse a tool call. It reads the rules in `~/.mgcp/enforcement_rules.json` and also carries the apology gate. Any error in reading a rule allows the call, because this is a net and not a tripwire. |
 | `post-tool-dispatcher.py` | PostToolUse | advisory | Records every tool name for the enforcing hook to read. Edit and Write start a knowledge-capture prompt. Bash output is checked for known error patterns. |
 | `mgcp-precompact.py` | PreCompact | advisory | Reminds the model to save context and write a journal entry before the conversation is compressed. |
 
 [docs/mgcp-interception-flow.html](docs/mgcp-interception-flow.html) is the
 diagram for all five.
+
+### A clock on every turn
+
+The first line of every turn is the time:
+
+```
+<time>⌚ 21:09 Fri 2 Oct · 6m since your last message · 48m into this session</time>
+```
+
+A model reads a transcript with no sense of elapsed time. A reply written three
+hours later reads the same as one written in ten seconds, so "we just did that"
+stops being true with nothing to say so. The gap and the session length are
+worked out before the text arrives, because working an interval out from two
+timestamps is the part that goes wrong.
+
+The first message of a session says so instead of showing a gap, and the session
+length appears once the session is a minute old. The clock is built before
+anything else in the hook, and a failure in it cannot take the rest of the block
+with it.
 
 ### The model decides what a message means, not a regular expression
 

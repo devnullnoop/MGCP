@@ -38,6 +38,12 @@ The operator's store is copied and never opened.
 
 ## Result
 
+Measured at a floor of 0.25, which was the shipped value at the time. The floor
+is now 0.55, for the reason in "Choosing the floor" below, and at 0.55 the
+appended count is 26 rather than 30. `bridge-on.json` holds the 0.25 run and
+`bridge-off.json` holds the run with the bridge disabled, so "on" in those two
+filenames means the floor this section measured and not the floor now shipped.
+
 | Measure | Count |
 |---|---|
 | Positive queries that received appends | 14 of 26 |
@@ -77,6 +83,41 @@ appends, would settle that.
 
 **This is one corpus.** The notes, the queries, and the labels all come from one
 person's store.
+
+## Choosing the floor
+
+`BRIDGE_MIN_SCORE` is the score a community member must reach against the query
+to be appended at all. It was 0.25 and had never been tuned. Sweeping it over
+the same 34 queries gives this, measured 2026-10-02:
+
+| Floor | Appends | Useful | Unvouched | Queries hit | In top 3 |
+|---|---|---|---|---|---|
+| 0.25 (was shipped) | 30 | 1 | 29 | 14 | 0 |
+| 0.35 | 30 | 1 | 29 | 14 | 0 |
+| 0.45 | 30 | 1 | 29 | 14 | 0 |
+| **0.55 (now shipped)** | **26** | **1** | **25** | **12** | **0** |
+| 0.60 | 7 | 0 | 7 | 6 | 0 |
+| 0.65 | 0 | 0 | 0 | 0 | 0 |
+
+Reproduce with `python -m tests.bridge_benchmark --sweep`. Evidence in
+`docs/bridge-results/bridge-sweep.json`.
+
+Two things to read here. Nothing changes between 0.25 and 0.45, so 0.30 of the
+old setting did nothing: every candidate the bridge considers scores above
+0.45. And 0.55 is the first value that changes anything. It drops 4 appends and
+keeps the one append a label vouches for, which is why it is now the shipped
+value. 0.60 drops that append too.
+
+**The evidence is thin and the change is small.** The four appends that 0.55
+discards are unlabelled, not known-useless, so this buys a smaller context
+window without proving the four were worthless. The append it protects is one
+query. Every row is validated the same way as the on and off comparison: the
+searched results are identical at all seven thresholds, so the bridge is the
+only thing that differs, and the harness marks any row void where that fails.
+
+This tunes the cost. It does not change the finding above: an appended note
+still cannot reach the top three, and 1 vouched append in 26 is still the
+measured rate.
 
 ## What would settle it
 

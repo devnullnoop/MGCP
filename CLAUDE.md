@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **MGCP** (Memory Graph Core Primitives) is a Python MCP server providing persistent, graph-based memory for LLM interactions. The system stores lessons learned during LLM sessions in a graph structure, allowing semantic querying without loading full context histories.
 
-**Status**: Alpha/Research project. Package version 3.0.0 (`pyproject.toml`, `mgcp.__version__`); the hook/feature line is versioned separately and sits at v2.13 (`src/mgcp/hook_templates/VERSION`, which is authoritative; this line has twice been written stale in the same commit that bumped it), and v2.2 through v3.0 is released under CHANGELOG `[3.0.0]`. Phases 1-7 complete plus v3 multi-session (Qdrant server mode, compare-and-swap writes, shared embedding daemon). Embedded single-session remains the default and MGCP needs no server, daemon or container. Actively dogfooding. Phase 8's plan of moving lessons out of `query_lessons` into compiled skill prompts was dropped, because it made retrieval less reliable. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
+**Status**: Alpha/Research project. Package version 3.0.0 (`pyproject.toml`, `mgcp.__version__`); the hook/feature line is versioned separately and sits at v2.15 (`src/mgcp/hook_templates/VERSION`, which is authoritative; this line has three times been written stale in the same commit that bumped it), and v2.2 through v3.0 is released under CHANGELOG `[3.0.0]`. Phases 1-7 complete plus v3 multi-session (Qdrant server mode, compare-and-swap writes, shared embedding daemon). Embedded single-session remains the default and MGCP needs no server, daemon or container. Actively dogfooding. Phase 8's plan of moving lessons out of `query_lessons` into compiled skill prompts was dropped, because it made retrieval less reliable. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
 
 ## Documentation Preferences
 
@@ -263,7 +263,7 @@ otherwise report overdue by name, are repaired on every store open
 (`persistence.repair_rem_state`).
 
 **Workflow State (1):**
-- `update_workflow_state` - Update active workflow, current step, and completion status
+- `update_workflow_state` - Update active workflow, current step, and completion status. Workflow and step IDs are checked against the stored workflow first, because the hook replays `current_step` every turn as "EXECUTE step '<id>' now": an ID no workflow contains repeats an instruction `get_workflow_step` can only answer "not found" to, for as long as the state says so. The write is the only place that can be caught. A call whose every argument is empty or false now reports that it changed nothing, rather than answering "updated" after writing nothing.
 
 **Reminder Control (2):**
 - `schedule_reminder` - Schedule self-directed reminders for workflow continuity
@@ -319,9 +319,21 @@ stored" and covered none of enforcement, REM, the gate audit or the journal.
 
 Backed by eight read-only analytics endpoints in `web_server.py` (`/api/signal`,
 `/api/retrieval/*`, `/api/effectiveness`, `/api/gate-audit`, `/api/enforcement/rules`,
-`/api/rem/state`, `/api/soliloquies`). The views follow two rules, and both change what you see: a slot logged with score `0.0` was **appended by the community bridge, not matched**,
-and averaging the two together is what made a good lesson read as 2% relevant; and status is shown
-as a glyph plus a word, never hue alone, because `good` and `critical` measure a CVD ΔE of 4.1.
+`/api/rem/state`, `/api/soliloquies`). The views follow three rules, and all three change what you
+see: a slot logged with score `0.0` was **appended by the community bridge, not matched**,
+and averaging the two together is what made a good lesson read as 2% relevant; status is shown
+as a glyph plus a word, never hue alone, because `good` and `critical` measure a CVD ΔE of 4.1;
+and **every count has a per-distinct-question twin**, because the hooks issue some of the queries
+they are being measured by.
+
+`/api/signal` returns a `concentration` block beside `retrieval`, and the Signal view leads with
+the deduplicated figure while keeping the raw one as its sub-label. The git gate mandates
+`query_lessons('git commit')` before any commit, so that one string is 521 of 1,161 recorded
+queries in the operator's own store and one lesson wins 517 of them at a nearly constant score.
+Read as a raw count that is nine months of varied recall; it is one reflex. It moved the published
+median match from 0.608 to 0.691. Neither number is suppressed, because the repeated query really
+is asked that often and really does matter each time. The gap between them is the share of the
+evidence the system generated for itself, and no single number shows it.
 
 Buildless: Tailwind-free CSS, d3 from a CDN, no npm and no build step. Assets live in
 `src/mgcp/static/app/`.
@@ -351,7 +363,7 @@ MGCP v2.2 makes the routing prompt **data, not code**. The intent classification
 |------|-------|------|---------|
 | `session-init.py` | SessionStart | advisory | Injects the bootstrap checklist (`read_soliloquy` / `get_project_context` / `query_lessons`) and workflow execution discipline. Detects three things and reports them: stale `.py` hook references in settings.json, REM operations past their `next_due_session`, and a high apology-gate contest rate counted from `gate_audit.jsonl`. |
 | `user-prompt-dispatcher.py` | UserPromptSubmit | advisory | Puts a clock on the first line of every turn (`<time>⌚ 21:09 Fri 2 Oct · 6m since your last message · 48m into this session</time>`), built before anything else and unable to fail the rest of the block. Then applies hard keyword gates loaded from `intent_config.json` (git and session_end fire from one loop), re-injects the terse routing block, and delivers scheduled reminders. Resets per-turn state: clears `turn_tools_called` and any prior adjudication, records `turn_session_id`, and parses `MGCP_BYPASS[:scope]` into `turn_bypass_scopes`. |
-| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | The only hook that can refuse a tool call. Two mechanisms: a generic evaluator over `~/.mgcp/enforcement_rules.json`, and a built-in apology gate whose trigger is assistant text rather than a tool argument. While the gate is armed only `add_lesson`, `adjudicate_apology_gate` and the three discovery tools are permitted. Gating discovery would gate the exits themselves. Fails open on any parse error. Bash commands are tokenised per line with `shlex(punctuation_chars=True)`, git's global flags are skipped so `git -C /path commit` is still a commit. An untokenisable line falls back to a raw boundary scan that **fails closed for git only**. Scoped bypass: `MGCP_BYPASS:<scope>` disables one scope, bare `MGCP_BYPASS` disables all. See `docs/mgcp-interception-flow.html` for the decision diagram. |
+| `pre-tool-dispatcher.py` | PreToolUse | **enforcing** | The only hook that can refuse a tool call. Two mechanisms: a generic evaluator over `~/.mgcp/enforcement_rules.json`, and a built-in apology gate whose trigger is assistant text rather than a tool argument. While the gate is armed only `add_lesson`, `adjudicate_apology_gate` and the three discovery tools are permitted. Gating discovery would gate the exits themselves. Fails open on any parse error. Bash commands are tokenised per line with `shlex(punctuation_chars=True)`, git's global flags are skipped so `git -C /path commit` is still a commit. An untokenisable line falls back to a raw boundary scan that **fails closed for git only**. Scoped bypass: `MGCP_BYPASS:<scope>` disables one scope, bare `MGCP_BYPASS` disables all. Every apology-gate refusal and compliance records the matched pattern and the flagged sentence (v2.15); until then only a contested fire carried the sentence, so the agent chose the evidence for every record that had any. The apology window stops at `turn_started_at` as well as at a user entry, because a message sent mid-turn fires UserPromptSubmit (which clears `turn_tools_called`) but reaches the transcript as `queue-operation` and `attachment` entries, never as `type == "user"`. The walk sailed past it and kept reading the previous turn, so an apology already answered with a lesson re-armed the gate. See `docs/mgcp-interception-flow.html` for the decision diagram. |
 | `post-tool-dispatcher.py` | PostToolUse | advisory | Appends every tool name to `turn_tools_called`, which PreToolUse preconditions read. Edit/Write triggers a knowledge-capture checkpoint; Bash output is scanned for error patterns with a cooldown, over the whole serialised `tool_response` so stderr is included. |
 | `mgcp-precompact.py` | PreCompact | advisory | Critical reminder to save context (and write_soliloquy) before context compression |
 

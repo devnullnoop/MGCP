@@ -702,7 +702,13 @@ class TestServerSurvivesLockedVectorStore:
         """query_lessons cannot work, but it must say what to do about it."""
         result = await server.query_lessons("anything at all")
 
-        assert "MGCP_QDRANT_URL" in result, result
+        # The remedy is the CLI entry point, not an environment variable. An
+        # MCP server's environment comes from the LLM client, so `export
+        # MGCP_QDRANT_URL=...` in a shell never reaches it; `mgcp-qdrant setup`
+        # writes the URL to ~/.mgcp/config.json, which does. This assertion
+        # named the variable until faa15c7 replaced it in the message and left
+        # the test behind, so anchor it on the command a reader can run.
+        assert "mgcp-qdrant setup" in result, result
         assert "PID" in result, f"the holding process was not named: {result}"
         # Not a crash, and not an empty result set that reads as "no lessons".
         assert "unavailable" in result.lower()

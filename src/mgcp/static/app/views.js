@@ -22,14 +22,29 @@ async function signal(main) {
   const [sig, ts] = await Promise.all([api('/api/signal'), api('/api/retrieval/timeseries?bucket=month')]);
   const r = sig.retrieval;
   const c = sig.corpus;
+  const q = sig.concentration;
 
   const bridgedPct = pct(r.bridged_share, 1);
   const deadPct = c.lessons ? pct(c.never_retrieved / c.lessons, 0) : '—';
+  const topQ = q.most_repeated[0];
 
   main.innerHTML = `
     ${head('Signal', `Whether the memory is working: what it returns, how well it matches, and what
       it never surfaces. ${num(r.queries)} queries and ${num(r.slots)} returned results, all of it
-      measured — nothing here is sampled.`)}
+      measured — nothing here is sampled. ${num(q.distinct_queries)} of those queries are
+      different questions.`)}
+
+    ${q.top_query_share > 0.15 && topQ ? `<div class="callout">
+      <b>${pct(q.top_query_share, 1)} of every recorded query is the same string:
+      <code>${topQ.query}</code>.</b>
+      The hooks issue that one themselves. The git gate mandates
+      <code>query_lessons('git commit')</code> before any commit, so it fires once per commit and
+      lands here as ${num(topQ.count)} queries. It is a real question, really asked that often, so
+      it is not noise and it is not removed. But it is one question, and counting it
+      ${num(topQ.count)} times moves every average on this page. So match quality is given twice
+      below: once per query, and once per different question counted a single time. Where the two
+      disagree, the gap is the share of the evidence the system generated for itself.
+    </div>` : ''}
 
     ${r.bridged_share > 0.15 ? `<div class="callout">
       <b>${bridgedPct} of everything returned arrived without a relevance score.</b>
@@ -42,8 +57,9 @@ async function signal(main) {
     <div class="grid cols-4">
       ${tile({ label: 'Lessons', value: num(c.lessons),
                sub: `${num(c.never_retrieved)} never surfaced (${deadPct})` })}
-      ${tile({ label: 'Median match', value: pct(r.top1_median, 0),
-               sub: 'top scored result per query', meter: r.top1_median })}
+      ${tile({ label: 'Median match', value: pct(q.top1_median_per_question, 0),
+               sub: `per distinct question — ${pct(r.top1_median, 0)} counting repeats`,
+               meter: q.top1_median_per_question })}
       ${tile({ label: 'Unscored share', value: bridgedPct,
                sub: `${num(r.slots_bridged)} of ${num(r.slots)} slots`, meter: r.bridged_share })}
       ${tile({ label: 'Misses', value: num(r.misses),

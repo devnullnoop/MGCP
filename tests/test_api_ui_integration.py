@@ -225,3 +225,89 @@ class TestVectorStoreIsLazy:
         response = client.get(path)
         assert response.status_code == 200
         assert ws.vector_store is None, f"{path} opened Qdrant; it reads SQLite only"
+
+
+class TestQueryConcentration:
+    """The raw query count and the per-question count must be able to disagree.
+
+    Every figure under `retrieval` counts events, and the hooks issue some of
+    those events. In the operator's own store the git gate's mandated
+    `query_lessons('git commit')` is 521 of 1,161 recorded queries, and one
+    lesson wins 517 of them at a nearly constant score, which pulled the
+    published median from 0.608 to 0.691. These tests hold the deflating twin
+    in place, because a metric that cannot disagree with the raw figure is
+    decoration.
+    """
+
+    @staticmethod
+    def _pairs(rows):
+        """Minimal pair records: (query text, best matched score)."""
+        return [{"query": q, "top": s} for q, s in rows]
+
+    def test_one_repeated_query_does_not_decide_the_per_question_median(self):
+        from mgcp.web_server import _query_concentration
+
+        # 20 copies of a high-scoring reflex, 5 distinct lower-scoring questions.
+        rows = [("git commit", 0.69)] * 20 + [
+            ("why did the cache miss", 0.50),
+            ("how do I rotate the key", 0.52),
+            ("where is the retry budget set", 0.48),
+            ("what owns the lock file", 0.51),
+            ("which step writes the index", 0.49),
+        ]
+        c = _query_concentration(self._pairs(rows))
+
+        assert c["queries"] == 25
+        assert c["distinct_queries"] == 6
+        assert c["asked_once"] == 5
+        assert c["top_query_share"] == pytest.approx(20 / 25)
+        # The raw median is the reflex's score. The per-question median is not.
+        assert c["top1_median_per_question"] < 0.60, (
+            "the repeated query still dominates the deduplicated figure"
+        )
+
+    def test_the_two_figures_agree_when_nothing_repeats(self):
+        from mgcp.web_server import _query_concentration
+
+        rows = [(f"question {i}", 0.60) for i in range(8)]
+        c = _query_concentration(self._pairs(rows))
+
+        assert c["distinct_queries"] == c["queries"] == 8
+        assert c["repeat_share"] == 0.0
+        assert c["most_repeated"] == []  # nothing to report, so nothing claimed
+        assert c["top1_mean_per_question"] == pytest.approx(0.60)
+
+    def test_a_repeated_query_asked_at_different_scores_averages_once(self):
+        """A question asked twice gets one vote, not two."""
+        from mgcp.web_server import _query_concentration
+
+        c = _query_concentration(
+            self._pairs([("same question", 0.40), ("same question", 0.80)])
+        )
+
+        assert c["distinct_queries"] == 1
+        assert c["scored_questions"] == 1
+        assert c["top1_mean_per_question"] == pytest.approx(0.60)
+
+    def test_unscored_queries_do_not_count_as_zero(self):
+        """A query that matched nothing has no score, which is not a score of 0."""
+        from mgcp.web_server import _query_concentration
+
+        c = _query_concentration(
+            self._pairs([("found nothing", None), ("found something", 0.70)])
+        )
+
+        assert c["queries"] == 2
+        assert c["distinct_queries"] == 2
+        assert c["scored_questions"] == 1
+        assert c["top1_mean_per_question"] == pytest.approx(0.70)
+
+    def test_empty_history_reports_nothing_rather_than_dividing_by_zero(self):
+        from mgcp.web_server import _query_concentration
+
+        c = _query_concentration([])
+
+        assert c["queries"] == 0
+        assert c["distinct_queries"] == 0
+        assert c["top_query_share"] == 0.0
+        assert c["top1_median_per_question"] is None

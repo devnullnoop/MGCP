@@ -268,6 +268,15 @@ append scores as useless. See
 [docs/bridge-measurement.md](docs/bridge-measurement.md), and reproduce with
 `python -m tests.bridge_benchmark`.
 
+Sweeping the score a note must reach to be appended at all found the setting
+was lower than it needed to be. Every value from 0.25 to 0.45 gave the same 30
+appends, so 0.30 of the old range did nothing. The floor is now 0.55, the first
+value that changes anything: it drops 4 appends and keeps the one an annotator
+vouched for, where 0.60 drops that one too. The four it discards are unlabelled
+rather than known useless, so this is a smaller context window on thin
+evidence, not proof those four were worthless. Reproduce with
+`python -m tests.bridge_benchmark --sweep`.
+
 ### What this does not measure
 
 - **Answer quality.** No language model reads the results and replies, so there is
@@ -582,6 +591,18 @@ Every refusal, compliance, verdict, and human bypass is appended to
 `~/.mgcp/gate_audit.jsonl`. Claims about enforcement can then be checked against
 a record instead of trusted. REM summarises the file, and the session-start hook
 warns when the rate of disagreement rises.
+
+Each record now carries the sentence that triggered it and the pattern that
+matched, on refusals and compliances as well as on verdicts. Until v2.15 only a
+verdict carried the sentence, because the model supplied it when disagreeing.
+That left the model choosing the evidence for every record that had any. The
+first nine weeks of the log hold 39 refusals with no sentence and 16 verdicts
+with one, and all 16 verdicts were the model ruling in its own favour. Whether
+the gate is right cannot be answered from a log like that, because answering it
+needs the text and the text was thrown away. The refusal is the only place that
+text exists, so that is where it is now written. The counting still has to be
+done by a person, and the first measurement will cover the records written from
+v2.15 onward.
 
 This is the closest MGCP comes to improving itself, stated carefully. The system
 notices a learning moment in its own output and refuses to continue until the

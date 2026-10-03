@@ -1191,6 +1191,62 @@ async def get_signal(miss_threshold: float = DEFAULT_MISS_THRESHOLD) -> dict[str
             "miss_threshold": miss_threshold,
             "zero_result_queries": sum(1 for p in pairs if not p["lesson_ids"]),
         },
+        "concentration": _query_concentration(pairs),
+    }
+
+
+def _query_concentration(pairs: list[dict[str, Any]]) -> dict[str, Any]:
+    """How many different questions are behind the query count.
+
+    Every figure in `retrieval` counts events, and the hooks issue some of
+    those events themselves. The git gate mandates `query_lessons('git
+    commit')`, so that one string accounts for 521 of 1,161 recorded queries
+    in the operator's own store, and one lesson wins 517 of them at a nearly
+    constant score. Reported as a raw count, that reads as nine months of
+    varied recall. It is one reflex firing.
+
+    So every count here has a per-distinct-question twin, which weights each
+    different question once however often it was asked. Neither number is the
+    true one: the repeated query really is asked, and really does matter each
+    time, which is what the raw figures measure. The pair is the point. A gap
+    between them is the share of the evidence that the system generated for
+    itself, and it cannot be read off a single number.
+    """
+    by_text: dict[str, list[float]] = {}
+    for p in pairs:
+        by_text.setdefault(p["query"], []).append(p["top"])
+
+    counts = sorted(((t, len(v)) for t, v in by_text.items()), key=lambda r: -r[1])
+    total = len(pairs)
+
+    # One vote per distinct question: average that question's best score over
+    # however many times it was asked, then aggregate those averages.
+    per_question = sorted(
+        sum(s for s in v if s is not None) / len([s for s in v if s is not None])
+        for v in by_text.values()
+        if any(s is not None for s in v)
+    )
+
+    return {
+        "queries": total,
+        "distinct_queries": len(by_text),
+        "asked_once": sum(1 for _, n in counts if n == 1),
+        "repeat_share": (
+            sum(n for _, n in counts if n > 1) / total if total else 0.0
+        ),
+        "top_query_share": (counts[0][1] / total) if counts and total else 0.0,
+        "most_repeated": [
+            {"query": t, "count": n, "share": n / total}
+            for t, n in counts[:5]
+            if n > 1
+        ],
+        "top1_median_per_question": (
+            per_question[len(per_question) // 2] if per_question else None
+        ),
+        "top1_mean_per_question": (
+            sum(per_question) / len(per_question) if per_question else None
+        ),
+        "scored_questions": len(per_question),
     }
 
 

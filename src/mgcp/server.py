@@ -77,7 +77,16 @@ VALID_RELATIONSHIP_TYPES = frozenset(get_args(RelationshipType))
 # intersected with the matched community's members; the floor is what a bridged
 # lesson must score against the query to be worth injecting at all.
 BRIDGE_POOL_SIZE = 60
-BRIDGE_MIN_SCORE = 0.25
+# 0.55, from a sweep over the 34 labelled queries (docs/bridge-measurement.md,
+# reproduce with `python -m tests.bridge_benchmark --sweep`). The floor was
+# 0.25, and every value from 0.25 to 0.45 produced an identical 30 appends, so
+# 0.30 of that range did nothing at all: the bridge's candidates all score
+# above 0.45. 0.55 is the first value that changes anything, and it drops 4
+# appends while keeping the one append a label vouches for. 0.60 drops that
+# one too. The four it discards are unlabelled rather than known-useless, so
+# this buys a smaller context window on thin evidence; it is not a claim that
+# they were worthless.
+BRIDGE_MIN_SCORE = 0.55
 LESSON_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9\-]*[a-z0-9]$|^[a-z0-9]$")
 MAX_LESSON_ID_LENGTH = 100
 
@@ -2299,13 +2308,60 @@ async def update_workflow_state(
     Call this when activating, progressing through, or completing a workflow.
     The hook reads this state to inject workflow context on subsequent messages.
 
+    Workflow and step IDs are checked against the stored workflow before
+    anything is written. The hook injects "EXECUTE step '<id>' now" from this
+    state every turn, so an ID that no workflow contains produces an advisory
+    loop with no exit: the instruction repeats and get_workflow_step answers
+    "not found" forever. Rejecting the write is the only point at which that
+    can be caught, because nothing downstream reads the step ID as data.
+
     Args:
         active_workflow: Set the active workflow ID (e.g., "feature-development")
         current_step: Set the current step ID (e.g., "research")
         step_completed: Mark a step as completed (appends to completed list)
         workflow_complete: Mark the entire workflow as complete
     """
+    from .reminder_state import load_state
     from .reminder_state import update_workflow_state as do_update
+
+    if not any([active_workflow, current_step, step_completed, workflow_complete]):
+        return (
+            "Nothing was updated: every argument was empty or false. An empty "
+            "string means 'leave this field alone', so there is no value that "
+            "clears a field. Pass workflow_complete=true to stand a workflow "
+            "down, or active_workflow to switch to a different one."
+        )
+
+    if active_workflow or current_step or step_completed:
+        store, _, _ = await _ensure_initialized()
+        # Which workflow do the step IDs belong to? The one being activated in
+        # this call, else the one already active.
+        target_id = active_workflow or (load_state().get("active_workflow") or "")
+        if not target_id:
+            return (
+                f"Cannot set a step on no workflow. current_step="
+                f"'{current_step or step_completed}' was given with no active "
+                "workflow and no active_workflow argument. Pass active_workflow too."
+            )
+
+        workflow = await store.get_workflow(target_id)
+        if not workflow:
+            known = ", ".join(sorted(w.id for w in await store.get_all_workflows())) or "none"
+            return (
+                f"Workflow not found: '{target_id}'. Nothing was written.\n"
+                f"Known workflows: {known}"
+            )
+
+        valid = [s.id for s in workflow.steps]
+        bad = [s for s in (current_step, step_completed) if s and s not in valid]
+        if bad:
+            return (
+                f"Step not found in workflow '{target_id}': "
+                f"{', '.join(repr(b) for b in bad)}. Nothing was written.\n"
+                f"Its steps are: {', '.join(valid)}.\n"
+                "The hook replays current_step every turn, so an unknown ID "
+                "would repeat an instruction that cannot be followed."
+            )
 
     result = do_update(
         active_workflow=active_workflow,

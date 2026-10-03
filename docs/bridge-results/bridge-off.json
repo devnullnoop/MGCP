@@ -1,5 +1,6 @@
 {
  "condition": "off",
+ "min_score": 1.1,
  "rows": [
   {
    "id": "diff-size-discipline",
@@ -190,9 +191,9 @@
    "direct": [
     "no-reflexive-apology",
     "apology-triggers-knowledge-write",
+    "never-end-a-turn-announcing-the-next-action",
     "mgcp-record-error-patterns",
-    "query-lessons-while-planning",
-    "mgcp-learn-from-mistakes"
+    "query-lessons-while-planning"
    ],
    "bridged": []
   },
@@ -308,10 +309,10 @@
    ],
    "direct": [
     "llm-not-regex-for-semantic-judgment",
+    "write-assertions-from-the-observed-string",
     "brief-user-assertion-is-reframe-not-vote",
     "invoke-tools-do-not-narrate-them",
-    "no-reflexive-apology",
-    "detectors-fail-closed-on-unparseable-input"
+    "no-reflexive-apology"
    ],
    "bridged": []
   },
@@ -414,9 +415,9 @@
    "direct": [
     "capture-everything-opinionate-display",
     "no-surface-truth-quality-over-time",
+    "count-distinct-inputs-behind-a-usage-number",
     "reference-class-must-match-the-scene",
-    "run-the-baseline-dont-quote-it",
-    "measure-the-artifact-that-ships"
+    "run-the-baseline-dont-quote-it"
    ],
    "bridged": []
   },
@@ -494,8 +495,8 @@
     "pgx-tx-gqlgen-concurrency",
     "sqlalchemy-create-tables-all-dbs",
     "tests-can-write-the-real-data-dir",
-    "degrade-per-store-not-per-server",
-    "fleet-verify-then-hand-fix"
+    "check-the-query-distribution-before-porting-a-result",
+    "degrade-per-store-not-per-server"
    ],
    "bridged": []
   },
@@ -508,8 +509,8 @@
     "crash-safe-long-runs-detach-heavy-processes",
     "instrument-before-guessing-perf",
     "one-background-task-per-job",
-    "validate-one-item-before-batch",
-    "cleanup-background-tasks"
+    "check-the-query-distribution-before-porting-a-result",
+    "validate-one-item-before-batch"
    ],
    "bridged": []
   },
@@ -534,10 +535,10 @@
    "relevant": [],
    "direct": [
     "no-reflexive-apology",
-    "a-skipped-run-is-not-a-passing-run",
     "proof-not-polish-refine-not-add",
     "brief-user-assertion-is-reframe-not-vote",
-    "metric-satisfiable-by-noop-is-an-identity"
+    "metric-satisfiable-by-noop-is-an-identity",
+    "enforce-via-proof-not-instruction"
    ],
    "bridged": []
   },

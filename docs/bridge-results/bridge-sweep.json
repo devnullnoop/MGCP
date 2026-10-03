@@ -1,0 +1,117 @@
+{
+  "baseline_queries": 34,
+  "thresholds": [
+    {
+      "appended_slots": 30,
+      "positives_with_appends": 14,
+      "useful_appends": 1,
+      "useful_detail": [
+        {
+          "query": "before-push",
+          "added": [
+            "query-before-git-operations"
+          ]
+        }
+      ],
+      "unvouched_appends": 29,
+      "appends_reaching_top_3": [],
+      "negatives_with_appends": [],
+      "searched_results_differ": [],
+      "condition": "on",
+      "min_score": 0.25
+    },
+    {
+      "appended_slots": 30,
+      "positives_with_appends": 14,
+      "useful_appends": 1,
+      "useful_detail": [
+        {
+          "query": "before-push",
+          "added": [
+            "query-before-git-operations"
+          ]
+        }
+      ],
+      "unvouched_appends": 29,
+      "appends_reaching_top_3": [],
+      "negatives_with_appends": [],
+      "searched_results_differ": [],
+      "condition": "min035",
+      "min_score": 0.35
+    },
+    {
+      "appended_slots": 30,
+      "positives_with_appends": 14,
+      "useful_appends": 1,
+      "useful_detail": [
+        {
+          "query": "before-push",
+          "added": [
+            "query-before-git-operations"
+          ]
+        }
+      ],
+      "unvouched_appends": 29,
+      "appends_reaching_top_3": [],
+      "negatives_with_appends": [],
+      "searched_results_differ": [],
+      "condition": "min045",
+      "min_score": 0.45
+    },
+    {
+      "appended_slots": 26,
+      "positives_with_appends": 12,
+      "useful_appends": 1,
+      "useful_detail": [
+        {
+          "query": "before-push",
+          "added": [
+            "query-before-git-operations"
+          ]
+        }
+      ],
+      "unvouched_appends": 25,
+      "appends_reaching_top_3": [],
+      "negatives_with_appends": [],
+      "searched_results_differ": [],
+      "condition": "min055",
+      "min_score": 0.55
+    },
+    {
+      "appended_slots": 7,
+      "positives_with_appends": 6,
+      "useful_appends": 0,
+      "useful_detail": [],
+      "unvouched_appends": 7,
+      "appends_reaching_top_3": [],
+      "negatives_with_appends": [],
+      "searched_results_differ": [],
+      "condition": "min060",
+      "min_score": 0.6
+    },
+    {
+      "appended_slots": 0,
+      "positives_with_appends": 0,
+      "useful_appends": 0,
+      "useful_detail": [],
+      "unvouched_appends": 0,
+      "appends_reaching_top_3": [],
+      "negatives_with_appends": [],
+      "searched_results_differ": [],
+      "condition": "min065",
+      "min_score": 0.65
+    },
+    {
+      "appended_slots": 0,
+      "positives_with_appends": 0,
+      "useful_appends": 0,
+      "useful_detail": [],
+      "unvouched_appends": 0,
+      "appends_reaching_top_3": [],
+      "negatives_with_appends": [],
+      "searched_results_differ": [],
+      "condition": "off",
+      "min_score": 1.1
+    }
+  ]
+}

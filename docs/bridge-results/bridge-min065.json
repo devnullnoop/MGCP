@@ -1,6 +1,6 @@
 {
- "condition": "on",
- "min_score": 0.25,
+ "condition": "min065",
+ "min_score": 0.65,
  "rows": [
   {
    "id": "diff-size-discipline",
@@ -16,9 +16,7 @@
     "follow-doc-update-workflow",
     "verify-documentation-holistically"
    ],
-   "bridged": [
-    "check-file-references-in-docs"
-   ]
+   "bridged": []
   },
   {
    "id": "when-to-stop-reviewing",
@@ -34,9 +32,7 @@
     "mgcp-verify-storage",
     "owasp-code-review-crypto"
    ],
-   "bridged": [
-    "fix-all-similar-occurrences"
-   ]
+   "bridged": []
   },
   {
    "id": "port-in-use",
@@ -108,11 +104,7 @@
     "owasp-auth-fail-securely",
     "owasp-sql-injection"
    ],
-   "bridged": [
-    "owasp-key-management",
-    "owasp-encode-all-untrusted",
-    "validate-input"
-   ]
+   "bridged": []
   },
   {
    "id": "idor",
@@ -151,11 +143,7 @@
     "git-practices",
     "git-push-requires-proof"
    ],
-   "bridged": [
-    "mgcp-save-before-commit",
-    "hooks-are-authoritative",
-    "query-before-git-operations"
-   ]
+   "bridged": []
   },
   {
    "id": "commit-message-attribution",
@@ -174,10 +162,7 @@
     "mgcp-save-before-commit",
     "version-bump-requires-readme-parity"
    ],
-   "bridged": [
-    "follow-doc-update-workflow",
-    "fix-all-similar-occurrences"
-   ]
+   "bridged": []
   },
   {
    "id": "explain-register",
@@ -227,11 +212,7 @@
     "retrospective-on-user-confirmation",
     "big-feature-workflow-mandatory"
    ],
-   "bridged": [
-    "mgcp-create-custom-workflows",
-    "mgcp-workflow-feedback",
-    "workflow-links-for-process-guidance"
-   ]
+   "bridged": []
   },
   {
    "id": "sidebar-scroll",
@@ -265,11 +246,7 @@
     "check-library-api-before-coding",
     "no-silent-ui-failures"
    ],
-   "bridged": [
-    "verification",
-    "check-api-versions",
-    "verify-api-response"
-   ]
+   "bridged": []
   },
   {
    "id": "read-a-pdf",
@@ -304,9 +281,7 @@
     "bump-hook-version-on-template-change",
     "follow-doc-update-workflow"
    ],
-   "bridged": [
-    "fix-all-similar-occurrences"
-   ]
+   "bridged": []
   },
   {
    "id": "hook-template-edit",
@@ -322,9 +297,7 @@
     "changelog-conventions",
     "follow-doc-update-workflow"
    ],
-   "bridged": [
-    "fix-all-similar-occurrences"
-   ]
+   "bridged": []
   },
   {
    "id": "regex-vs-llm",
@@ -341,11 +314,7 @@
     "invoke-tools-do-not-narrate-them",
     "no-reflexive-apology"
    ],
-   "bridged": [
-    "escape-output",
-    "owasp-canonicalize-before-validate",
-    "owasp-contextual-output-encoding"
-   ]
+   "bridged": []
   },
   {
    "id": "retry-loop",
@@ -361,10 +330,7 @@
     "invoke-tools-do-not-narrate-them",
     "degrade-per-store-not-per-server"
    ],
-   "bridged": [
-    "mgcp-workflow-management",
-    "mgcp-create-custom-workflows"
-   ]
+   "bridged": []
   },
   {
    "id": "ui-claim-works",
@@ -382,9 +348,7 @@
     "manual-ui-test-required",
     "api-response-contract"
    ],
-   "bridged": [
-    "no-silent-ui-failures"
-   ]
+   "bridged": []
   },
   {
    "id": "enforcement-blocked",
@@ -400,11 +364,7 @@
     "apology-gate-contest-does-not-unblock",
     "tests-must-not-open-the-default-data-path"
    ],
-   "bridged": [
-    "hooks-are-authoritative",
-    "query-before-git-operations",
-    "mgcp-save-on-shutdown"
-   ]
+   "bridged": []
   },
   {
    "id": "big-feature-start",
@@ -478,11 +438,7 @@
     "mgcp-query-workflows-first",
     "query-lessons-while-planning"
    ],
-   "bridged": [
-    "least-privilege",
-    "owasp-database-least-privilege",
-    "secure-error-messages"
-   ]
+   "bridged": []
   },
   {
    "id": "log-rotation",

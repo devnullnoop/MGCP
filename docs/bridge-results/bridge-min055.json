@@ -1,6 +1,6 @@
 {
- "condition": "on",
- "min_score": 0.25,
+ "condition": "min055",
+ "min_score": 0.55,
  "rows": [
   {
    "id": "diff-size-discipline",
@@ -16,9 +16,7 @@
     "follow-doc-update-workflow",
     "verify-documentation-holistically"
    ],
-   "bridged": [
-    "check-file-references-in-docs"
-   ]
+   "bridged": []
   },
   {
    "id": "when-to-stop-reviewing",
@@ -110,8 +108,7 @@
    ],
    "bridged": [
     "owasp-key-management",
-    "owasp-encode-all-untrusted",
-    "validate-input"
+    "owasp-encode-all-untrusted"
    ]
   },
   {
@@ -267,8 +264,7 @@
    ],
    "bridged": [
     "verification",
-    "check-api-versions",
-    "verify-api-response"
+    "check-api-versions"
    ]
   },
   {
@@ -305,7 +301,8 @@
     "follow-doc-update-workflow"
    ],
    "bridged": [
-    "fix-all-similar-occurrences"
+    "docs-sync-with-code",
+    "verify-documentation-holistically"
    ]
   },
   {
@@ -361,10 +358,7 @@
     "invoke-tools-do-not-narrate-them",
     "degrade-per-store-not-per-server"
    ],
-   "bridged": [
-    "mgcp-workflow-management",
-    "mgcp-create-custom-workflows"
-   ]
+   "bridged": []
   },
   {
    "id": "ui-claim-works",

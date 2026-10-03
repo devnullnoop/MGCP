@@ -1504,26 +1504,46 @@ class TestResetReminderState:
         assert "reset" in result.lower()
 
 
+@pytest.fixture
+async def real_workflow(server_stores):
+    """A stored workflow with two real steps, for state updates to refer to."""
+    await create_workflow(
+        workflow_id="demo-wf",
+        name="Demo",
+        description="Two steps that actually exist.",
+        trigger="demo",
+    )
+    await add_workflow_step(
+        workflow_id="demo-wf", step_id="step-1", name="One",
+        description="First", order=1,
+    )
+    await add_workflow_step(
+        workflow_id="demo-wf", step_id="step-2", name="Two",
+        description="Second", order=2,
+    )
+    return "demo-wf"
+
+
 class TestUpdateWorkflowState:
     @pytest.mark.asyncio
-    async def test_activate(self, server_stores, monkeypatch, tmp_path):
+    async def test_activate(self, real_workflow, monkeypatch, tmp_path):
         monkeypatch.setattr("mgcp.reminder_state.STATE_FILE", tmp_path / "state.json")
         monkeypatch.setattr("mgcp.reminder_state.STATE_DIR", tmp_path)
 
         result = await update_workflow_state(
-            active_workflow="feature-development",
-            current_step="research",
+            active_workflow="demo-wf",
+            current_step="step-1",
         )
         assert "updated" in result.lower()
-        assert "feature-development" in result
+        assert "demo-wf" in result
 
     @pytest.mark.asyncio
-    async def test_step_completed(self, server_stores, monkeypatch, tmp_path):
+    async def test_step_completed(self, real_workflow, monkeypatch, tmp_path):
         monkeypatch.setattr("mgcp.reminder_state.STATE_FILE", tmp_path / "state.json")
         monkeypatch.setattr("mgcp.reminder_state.STATE_DIR", tmp_path)
 
         await update_workflow_state(
-            active_workflow="test-wf",
+            active_workflow="demo-wf",
             current_step="step-1",
         )
         result = await update_workflow_state(
@@ -1531,6 +1551,117 @@ class TestUpdateWorkflowState:
             current_step="step-2",
         )
         assert "step-1" in result
+
+
+class TestWorkflowStateRejectsIdsNoWorkflowHas:
+    """The hook replays current_step every turn as "EXECUTE step '<id>' now".
+
+    An ID no workflow contains therefore repeats an instruction that
+    get_workflow_step can only answer "not found" to, for as long as the state
+    says so. The write is the one place that can be caught, so it refuses.
+    """
+
+    @pytest.mark.asyncio
+    async def test_unknown_step_is_refused_and_nothing_is_written(
+        self, real_workflow, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr("mgcp.reminder_state.STATE_FILE", tmp_path / "state.json")
+        monkeypatch.setattr("mgcp.reminder_state.STATE_DIR", tmp_path)
+        from mgcp.reminder_state import load_state
+
+        result = await update_workflow_state(
+            active_workflow="demo-wf", current_step="implement-fix"
+        )
+
+        assert "not found" in result.lower()
+        assert "implement-fix" in result
+        # The real steps are offered, so the caller can correct itself.
+        assert "step-1" in result and "step-2" in result
+        # And the refusal is total: no half-written state.
+        assert load_state().get("current_step") in (None, "")
+        assert load_state().get("active_workflow") in (None, "")
+
+    @pytest.mark.asyncio
+    async def test_unknown_workflow_is_refused(
+        self, real_workflow, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr("mgcp.reminder_state.STATE_FILE", tmp_path / "state.json")
+        monkeypatch.setattr("mgcp.reminder_state.STATE_DIR", tmp_path)
+        from mgcp.reminder_state import load_state
+
+        result = await update_workflow_state(
+            active_workflow="no-such-wf", current_step="step-1"
+        )
+
+        assert "not found" in result.lower()
+        assert "no-such-wf" in result
+        assert "demo-wf" in result  # the known list is shown
+        assert load_state().get("active_workflow") in (None, "")
+
+    @pytest.mark.asyncio
+    async def test_unknown_completed_step_is_refused(
+        self, real_workflow, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr("mgcp.reminder_state.STATE_FILE", tmp_path / "state.json")
+        monkeypatch.setattr("mgcp.reminder_state.STATE_DIR", tmp_path)
+        from mgcp.reminder_state import load_state
+
+        await update_workflow_state(active_workflow="demo-wf", current_step="step-1")
+        result = await update_workflow_state(step_completed="root-cause")
+
+        assert "not found" in result.lower()
+        assert "root-cause" in result
+        assert load_state().get("steps_completed", []) == []
+
+    @pytest.mark.asyncio
+    async def test_step_without_any_workflow_is_refused(
+        self, real_workflow, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr("mgcp.reminder_state.STATE_FILE", tmp_path / "state.json")
+        monkeypatch.setattr("mgcp.reminder_state.STATE_DIR", tmp_path)
+
+        result = await update_workflow_state(current_step="step-1")
+
+        assert "no active workflow" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_completing_a_workflow_needs_no_validation(
+        self, real_workflow, monkeypatch, tmp_path
+    ):
+        """Standing a workflow down must work even if its steps are unknown.
+
+        This is the exit, so it cannot depend on the store agreeing.
+        """
+        monkeypatch.setattr("mgcp.reminder_state.STATE_FILE", tmp_path / "state.json")
+        monkeypatch.setattr("mgcp.reminder_state.STATE_DIR", tmp_path)
+        from mgcp.reminder_state import load_state, save_state
+
+        save_state({"active_workflow": "gone-wf", "current_step": "gone-step"})
+        result = await update_workflow_state(workflow_complete=True)
+
+        assert "COMPLETE" in result
+        assert load_state().get("current_step") in (None, "")
+
+
+class TestWorkflowStateReportsANoOp:
+    @pytest.mark.asyncio
+    async def test_all_arguments_empty_says_nothing_changed(
+        self, server_stores, monkeypatch, tmp_path
+    ):
+        """A call that changes nothing must not report success.
+
+        Passing a misspelled argument name is silently dropped before it
+        reaches this function, so every field arrives at its default and the
+        old code answered "Workflow state updated" having written nothing.
+        """
+        monkeypatch.setattr("mgcp.reminder_state.STATE_FILE", tmp_path / "state.json")
+        monkeypatch.setattr("mgcp.reminder_state.STATE_DIR", tmp_path)
+
+        result = await update_workflow_state()
+
+        assert "nothing was updated" in result.lower()
+        assert "workflow state updated" not in result.lower()  # not the success header
+        assert "workflow_complete" in result  # names the argument that works
 
 
 # ============================================================================

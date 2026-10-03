@@ -607,6 +607,74 @@ class TestApologyGateExitsAndAudit:
         e = self._audit(tmp_path)[-1]
         assert e["event"] == "comply" and e["lesson_id"] == "captured"
 
+    def test_a_denial_records_what_it_fired_on(self, tmp_path):
+        """Without this the gate's precision cannot be computed from its log.
+
+        A denial used to record only that the gate fired. The flagged sentence
+        reached the audit record solely when the agent contested, so the agent
+        chose the evidence for every record that had any: 39 denials with no
+        sentence, 16 contests with one, all 16 self-ruled not_apology. Judging
+        the gate needs the text it matched, and only the deny path has it.
+        """
+        transcript = self._make_transcript(
+            tmp_path,
+            "The suite is green. Sorry, that table was wrong. Moving on now.",
+        )
+        r = self._run(
+            {"tool_name": "Bash", "tool_input": {"command": "echo hi"},
+             "transcript_path": str(transcript), "session_id": "S1"},
+            {"turn_tools_called": [], "turn_bypass_scopes": []}, tmp_path, rules=[])
+        assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+        e = self._audit(tmp_path)[-1]
+        assert e["pattern"] == r"\bsorry\b"
+        # The offending sentence, not the whole turn: a reader can judge this
+        # fire without going back to the transcript.
+        assert e["flagged_sentence"] == "Sorry, that table was wrong."
+        assert "The suite is green" not in e["flagged_sentence"]
+
+    def test_a_compliance_records_what_it_accepted(self, tmp_path):
+        """A compliance is a label too, so it needs the same evidence."""
+        transcript = self._make_transcript(tmp_path, "You're right, I missed it.")
+        self._run(
+            {"tool_name": "mcp__mgcp__add_lesson", "tool_input": {"id": "x"},
+             "transcript_path": str(transcript)},
+            {"turn_tools_called": [], "turn_bypass_scopes": []}, tmp_path, rules=[])
+        e = self._audit(tmp_path)[-1]
+        assert e["event"] == "comply"
+        assert e["pattern"] == r"\byou'?re right\b"
+        assert e["flagged_sentence"] == "You're right, I missed it."
+
+    def test_the_recorded_sentence_is_bounded(self, tmp_path):
+        """The audit log is append-only, so one record cannot be unbounded."""
+        transcript = self._make_transcript(tmp_path, "sorry " + "x" * 5000)
+        self._run(
+            {"tool_name": "Bash", "tool_input": {"command": "echo hi"},
+             "transcript_path": str(transcript)},
+            {"turn_tools_called": [], "turn_bypass_scopes": []}, tmp_path, rules=[])
+        e = self._audit(tmp_path)[-1]
+        assert len(e["flagged_sentence"]) <= 300
+
+    def test_quoting_an_apology_is_recorded_as_such(self, tmp_path):
+        """A known false-positive class, now visible instead of invisible.
+
+        The gate matches on word boundaries, so discussing an apology reads as
+        making one. This test does not assert the gate should allow it: the
+        patterns are deliberately simple, and a cleverer matcher was built and
+        removed before because it broke the canonical trigger. It asserts the
+        record says what happened, so the rate can be counted.
+        """
+        transcript = self._make_transcript(
+            tmp_path, 'The user replied "my bad" and I logged it.')
+        r = self._run(
+            {"tool_name": "Bash", "tool_input": {"command": "echo hi"},
+             "transcript_path": str(transcript)},
+            {"turn_tools_called": [], "turn_bypass_scopes": []}, tmp_path, rules=[])
+        assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+        e = self._audit(tmp_path)[-1]
+        assert e["pattern"] == r"\bmy bad\b"
+        assert "my bad" in e["flagged_sentence"]
+
     def test_rule_denials_are_audited_too(self, tmp_path):
         r = self._run(
             {"tool_name": "Bash", "tool_input": {"command": "git commit -m x"}},
@@ -966,3 +1034,159 @@ class TestCommitMessageProseStyle:
             bypass=["prose"],
         )
         assert r.stdout.strip() == "", r.stdout
+
+
+class TestApologyWindowStopsAtTheTurnBoundary:
+    """A paid-for apology must not re-arm the gate on a mid-turn message.
+
+    Diagnosed from a live transcript. UserPromptSubmit fires for a message the
+    user sends while a turn is still running, and it clears
+    `turn_tools_called`, which is the record that `add_lesson` already
+    satisfied the gate. That message is written to the transcript as
+    `queue-operation` and `attachment` entries and never as `type == "user"`,
+    so the backwards walk sailed past it and kept reading the previous turn.
+    State said "new turn, nothing called yet" while the transcript said "same
+    turn, apology still present", so the gate denied again for an apology that
+    had already been answered with a lesson. The sentence behind two real
+    denials was "You're right, I narrated it instead of doing it", written and
+    answered in the preceding turn.
+
+    Both halves now key off `turn_started_at`, written by the same hook call
+    that clears `turn_tools_called`.
+    """
+
+    _run = TestEnforcement._run
+
+    @staticmethod
+    def _two_turn_transcript(tmp_path, old_text, new_text, boundary):
+        """A resolved apology before the boundary, plain text after it.
+
+        The mid-turn message is written the way the harness really writes one:
+        as queue-operation and attachment entries, with no user entry.
+        """
+        from datetime import UTC, datetime
+
+        def stamp(offset):
+            return datetime.fromtimestamp(boundary + offset, UTC).isoformat()
+
+        def assistant(text, offset):
+            return {"type": "assistant", "timestamp": stamp(offset),
+                    "message": {"role": "assistant",
+                                "content": [{"type": "text", "text": text}]}}
+
+        path = tmp_path / "transcript.jsonl"
+        lines = [
+            {"type": "user", "timestamp": stamp(-120),
+             "message": {"role": "user", "content": "do the thing"}},
+            assistant(old_text, -100),
+            # The apology was answered here, in the turn that made it.
+            {"type": "assistant", "timestamp": stamp(-90),
+             "message": {"role": "assistant", "content": [
+                 {"type": "tool_use", "name": "mcp__mgcp__add_lesson", "input": {}}]}},
+            # The mid-turn message: no user entry is ever written for it.
+            {"type": "queue-operation", "timestamp": stamp(0)},
+            {"type": "attachment", "timestamp": stamp(0)},
+            assistant(new_text, 10),
+        ]
+        path.write_text("\n".join(json.dumps(x) for x in lines))
+        return path
+
+    def test_an_answered_apology_does_not_re_arm_after_a_mid_turn_message(
+        self, tmp_path
+    ):
+        import time
+
+        boundary = time.time() - 60
+        transcript = self._two_turn_transcript(
+            tmp_path,
+            "You're right, I narrated it instead of doing it.",
+            "Checking the suite now.",
+            boundary,
+        )
+        r = self._run(
+            {"tool_name": "Bash", "tool_input": {"command": "echo hi"},
+             "transcript_path": str(transcript)},
+            # Exactly the state UserPromptSubmit leaves behind: the tool list
+            # is cleared, and turn_started_at marks when it cleared it.
+            {"turn_tools_called": [], "turn_bypass_scopes": [],
+             "turn_started_at": boundary},
+            tmp_path, rules=[])
+        assert r.stdout.strip() == "", (
+            "the gate re-fired on an apology from before this turn: " + r.stdout
+        )
+
+    def test_without_the_bound_the_old_bug_still_reproduces(self, tmp_path):
+        """Proves the bound is what fixes it, not something else in the state."""
+        import time
+
+        boundary = time.time() - 60
+        transcript = self._two_turn_transcript(
+            tmp_path,
+            "You're right, I narrated it instead of doing it.",
+            "Checking the suite now.",
+            boundary,
+        )
+        r = self._run(
+            {"tool_name": "Bash", "tool_input": {"command": "echo hi"},
+             "transcript_path": str(transcript)},
+            {"turn_tools_called": [], "turn_bypass_scopes": []},  # no bound
+            tmp_path, rules=[])
+        assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_an_apology_inside_this_turn_still_arms_the_gate(self, tmp_path):
+        """The bound must not become a way to escape the gate."""
+        import time
+
+        boundary = time.time() - 60
+        transcript = self._two_turn_transcript(
+            tmp_path,
+            "Everything was fine before.",
+            "Sorry, that number was wrong.",
+            boundary,
+        )
+        r = self._run(
+            {"tool_name": "Bash", "tool_input": {"command": "echo hi"},
+             "transcript_path": str(transcript)},
+            {"turn_tools_called": [], "turn_bypass_scopes": [],
+             "turn_started_at": boundary},
+            tmp_path, rules=[])
+        assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+        e = [json.loads(x) for x in
+             (tmp_path / "gate_audit.jsonl").read_text().splitlines()][-1]
+        assert e["flagged_sentence"] == "Sorry, that number was wrong."
+
+    def test_a_malformed_turn_started_at_means_no_bound(self, tmp_path):
+        """Fail open to the old behaviour, never crash and never allow blindly."""
+        import time
+
+        boundary = time.time() - 60
+        transcript = self._two_turn_transcript(
+            tmp_path, "Sorry, that was wrong.", "Carrying on.", boundary)
+        for bad in ("not-a-number", None, True, {"a": 1}):
+            r = self._run(
+                {"tool_name": "Bash", "tool_input": {"command": "echo hi"},
+                 "transcript_path": str(transcript)},
+                {"turn_tools_called": [], "turn_bypass_scopes": [],
+                 "turn_started_at": bad},
+                tmp_path, rules=[])
+            assert r.returncode == 0, r.stderr
+            decision = json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"]
+            assert decision == "deny", f"{bad!r} must fall back to denying, not allowing"
+
+    def test_entries_without_a_timestamp_are_not_treated_as_ancient(self, tmp_path):
+        """A transcript format with no timestamps behaves as it did before."""
+        import time
+
+        path = tmp_path / "transcript.jsonl"
+        path.write_text("\n".join(json.dumps(x) for x in [
+            {"type": "user", "message": {"role": "user", "content": "go"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "Sorry, that was wrong."}]}},
+        ]))
+        r = self._run(
+            {"tool_name": "Bash", "tool_input": {"command": "echo hi"},
+             "transcript_path": str(path)},
+            {"turn_tools_called": [], "turn_bypass_scopes": [],
+             "turn_started_at": time.time()},
+            tmp_path, rules=[])
+        assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"

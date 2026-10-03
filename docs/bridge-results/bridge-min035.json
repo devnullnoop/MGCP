@@ -1,6 +1,6 @@
 {
- "condition": "on",
- "min_score": 0.25,
+ "condition": "min035",
+ "min_score": 0.35,
  "rows": [
   {
    "id": "diff-size-discipline",

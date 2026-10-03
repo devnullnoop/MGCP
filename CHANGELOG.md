@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: an apology already paid for could re-arm the gate
+- **A message you send while a turn is still running used to re-fire the apology gate on an apology that had already been answered with a lesson.** Diagnosed from a live transcript: the sentence behind two real refusals was "You're right, I narrated it instead of doing it", written and answered in the preceding turn.
+- Two mechanisms disagreed about where a turn begins. `UserPromptSubmit` fires for a mid-turn message and clears `turn_tools_called`, which is the only record that `add_lesson` already satisfied the gate. The gate's own backwards walk through the transcript breaks on a user entry, and a mid-turn message is written as `queue-operation` and `attachment` entries, never as `type == "user"`. So the state said "new turn, nothing called yet" while the transcript said "same turn, apology still present".
+- Both halves now key off `turn_started_at`, written by the same hook call that clears the tool list, so they cannot disagree. An entry with no readable timestamp is passed over rather than treated as old, so a transcript format without timestamps behaves as before, and a missing or malformed value means no bound at all. The gate keeps refusing in every one of those cases, because its fallback has to be the strict direction.
+- 6 tests, one of which removes the bound and checks the old bug still reproduces, so the fix is attributed to the bound and not to something else in the state.
+
+### Added: the gate records what it fired on
+- **Every refusal and compliance now records the matched pattern and the flagged sentence.** Until now only a contested fire carried the sentence, because the model supplies it when disagreeing, which left the model choosing the evidence for every record that had any.
+- The first nine weeks of the log hold 39 refusals with no sentence and 16 verdicts with one, and all 16 verdicts were the model ruling in its own favour. Whether the gate is right could not be answered from a log like that, because answering it needs the text and the text was discarded. The refusal is the only place that text exists.
+- The sentence is capped at 300 characters, since the log is append-only. A known false-positive class is now visible rather than invisible: the patterns match on word boundaries with no idea who is speaking, so quoting someone else's apology reads as making one. A test records that behaviour instead of asserting it away. A matcher that judged meaning was built and removed before for scoring worse in both directions.
+- Counting still has to be done by a person, and the first measurement will cover records written from v2.15 onward.
+
+### Changed: the bridge appends less for the same benefit
+- **`BRIDGE_MIN_SCORE` moves from 0.25 to 0.55**, after the first sweep it has ever had. Appends fall from 30 to 26 on the labelled query set with no change to the one append an annotator vouched for, and no change to the top three or to the hard negatives.
+- Every value from 0.25 to 0.45 produced an identical 30 appends, so 0.30 of the old range did nothing at all: the candidates the bridge considers all score above 0.45. 0.55 is the first value that changes anything, and 0.60 drops the useful append too.
+- **Stated plainly: the four appends this discards are unlabelled, not known useless.** The labels were pooled from a 238-note snapshot and the store has grown since, so this buys a smaller context window on thin evidence. It does not claim those four were worthless, and it does not change the finding that an appended note cannot reach the top three.
+- `tests/bridge_benchmark.py` takes `--sweep`. Each threshold runs in its own process against its own copy of the store, because the bridge ranks by use count and `query_lessons` writes use count, so one copy cannot host two conditions. Every row is checked against the off run: the searched results must be identical at every threshold, and the harness voids any row where they are not. Three tests read the recorded sweep rather than restating its numbers, so changing the shipped value without re-running the sweep fails.
+
+### Changed: usage figures are reported twice, and the two disagree
+- **The published median match was 0.691 and is 0.608.** The first counts queries, and the hooks issue some of the queries they are being measured by. The git gate mandates `query_lessons('git commit')` before any commit, so that one string is 521 of 1,161 recorded queries in the live store, and one note wins 517 of them at a nearly constant score, which is also the median of the whole corpus.
+- `/api/signal` returns a `concentration` block: distinct questions, how many were asked exactly once, the most repeated strings with their share, and match quality recomputed with each different question counted a single time.
+- The Signal view leads with the deduplicated figure and keeps the raw one as its sub-label, with a callout naming the repeated string and its count. **Neither number is suppressed.** The repeated query really is asked that often and really does matter each time, which is what the raw figures measure. The gap between the two is the share of the evidence the system generated for itself, and no single number shows it.
+- 5 tests, including one that holds the two figures apart: a metric that cannot disagree with the raw count is decoration.
+
+### Fixed: workflow state accepted step IDs no workflow contains
+- **The hook spent this whole session injecting "EXECUTE step 'implement-fix' now" for a step that does not exist.** The `bug-fix` workflow's steps are reproduce, investigate, fix and verify. `get_workflow_step` answered "not found" every turn, and nothing could end it, because the state is what the hook replays and nothing validated the state.
+- `update_workflow_state` now checks the workflow and both step IDs against the store before writing anything, and a refusal lists the steps that workflow does have. Standing a workflow down with `workflow_complete` deliberately skips validation, since that is the exit and it cannot depend on the store agreeing.
+- **A call that changes nothing now says so.** Every argument has a default, and a misspelled argument name is dropped before it reaches the function, so the old code answered "Workflow state updated" having written nothing. That is how this session convinced itself the tool had no exit when it did.
+- 6 tests.
+
+### Fixed: a test had been red on main
+- `test_semantic_search_names_the_holder_and_the_remedy` asserted the unavailable-store message would name `MGCP_QDRANT_URL`. The multi-session commit replaced that with `mgcp-qdrant setup`, which is the better remedy, and left the test behind. Three further commits were pushed over the top of it, and the session reported the suite as green with a test count read from memory rather than from the run.
+- The assertion now anchors on the command a reader can actually run. The lesson `a-skipped-run-is-not-a-passing-run` was widened to cover it: a check that did not run and a run whose output you did not read are both indistinguishable from a failure.
+
+### Changed
+- `hook_templates/VERSION` moves to 2.15. Installed hooks upgrade on the next `mgcp-init` run.
+
+
 ### Added: a clock on every turn
 - **The first line of every turn is now the time**, as in `<time>⌚ 21:09 Fri 2 Oct · 6m since your last message · 48m into this session</time>`. A model reads a transcript with no sense of elapsed time, so a reply written three hours later reads the same as one written in ten seconds.
 - Three parts, each earning its characters. The local time, because nothing else in the turn carries it. The gap since the previous message, because that is what decides whether "we just did that" is still true. The session length, shown once the session is a minute old.

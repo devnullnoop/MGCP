@@ -115,3 +115,57 @@ class TestAnalysis:
             self._write(tmp_path, "off.json", rows_off),
         )
         assert result["direct_results_differ"] == ["q1"]
+
+
+class TestShippedThresholdMatchesTheSweep:
+    """The shipped floor must be the one the sweep chose, with its evidence.
+
+    docs/bridge-results/bridge-sweep.json is the record. If someone changes
+    BRIDGE_MIN_SCORE without re-running the sweep, these fail and say so.
+    """
+
+    def test_server_uses_the_measured_floor(self):
+        import mgcp.server as srv
+
+        assert srv.BRIDGE_MIN_SCORE == 0.55, (
+            "BRIDGE_MIN_SCORE changed without the sweep. Re-run "
+            "`python -m tests.bridge_benchmark --sweep` and update "
+            "docs/bridge-measurement.md with the new table."
+        )
+
+    def test_the_harness_sweeps_through_the_shipped_value(self):
+        from tests.bridge_benchmark import SHIPPED_MIN_SCORE, SWEEP
+
+        assert SHIPPED_MIN_SCORE in SWEEP, (
+            "the sweep must include the shipped value, or the table has no baseline"
+        )
+
+    def test_recorded_sweep_supports_the_chosen_value(self):
+        """Read the evidence file, do not restate its numbers from memory."""
+        import json
+        from pathlib import Path
+
+        path = Path("docs/bridge-results/bridge-sweep.json")
+        if not path.exists():
+            import pytest
+
+            pytest.skip("sweep evidence not present in this checkout")
+
+        rows = {r["min_score"]: r for r in json.loads(path.read_text())["thresholds"]}
+        assert 0.55 in rows and 0.25 in rows and 0.60 in rows
+
+        # No row may be void: the bridge only appends, so the searched results
+        # must be identical at every threshold.
+        for score, row in rows.items():
+            assert not row["searched_results_differ"], f"threshold {score} is void"
+
+        # The claim the shipped value rests on, checked against the file.
+        assert rows[0.55]["useful_appends"] == rows[0.25]["useful_appends"], (
+            "0.55 was chosen because it loses no labelled-useful append"
+        )
+        assert rows[0.55]["appended_slots"] < rows[0.25]["appended_slots"], (
+            "0.55 was chosen because it appends strictly less"
+        )
+        assert rows[0.60]["useful_appends"] < rows[0.55]["useful_appends"], (
+            "0.60 was rejected because it drops the useful append"
+        )

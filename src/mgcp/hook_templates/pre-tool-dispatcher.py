@@ -37,6 +37,7 @@ import re
 import shlex
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 STATE_FILE = Path(
@@ -237,14 +238,72 @@ def _trigger_matches(trigger: dict, tool_name: str, tool_input: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _apology_match(text: str) -> tuple:
+    """First matching pattern and the sentence it matched, or ("", "").
+
+    A denial used to record only that the gate fired. The flagged sentence
+    reached the audit log solely when the agent contested, which means the
+    agent chose the evidence for every record that has any. Over 39 denials
+    none carried a sentence and all 16 contests did, so the gate's precision
+    could not be computed from its own log: the question "was that an
+    apology" needs the text, and the text was never kept. Recording it here
+    is the only point where it exists.
+    """
+    for pattern in APOLOGY_PATTERNS:
+        m = pattern.search(text)
+        if not m:
+            continue
+        # The surrounding sentence, so a reader can judge the fire without
+        # the transcript. Bounded both ways: the log is append-only.
+        starts = [text.rfind(ch, 0, m.start()) for ch in ".!?\n"]
+        start = max(starts) + 1 if max(starts) >= 0 else 0
+        ends = [i for i in (text.find(ch, m.end()) for ch in ".!?\n") if i != -1]
+        end = min(ends) + 1 if ends else len(text)
+        return pattern.pattern, text[start:end].strip()[:300]
+    return "", ""
+
+
 def _has_apology(text: str) -> bool:
-    return any(p.search(text) for p in APOLOGY_PATTERNS)
+    return bool(_apology_match(text)[0])
 
 
-def _current_turn_assistant_text(transcript_path: str) -> str:
-    """Concatenate assistant text blocks emitted since the most recent user turn.
+def _entry_epoch(entry: dict) -> float:
+    """The entry's timestamp as unix seconds, or 0.0 if unreadable."""
+    ts = entry.get("timestamp")
+    if not isinstance(ts, str) or not ts:
+        return 0.0
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError, OSError):
+        return 0.0
 
-    Walks the transcript JSONL backwards stopping at the first user entry.
+
+def _current_turn_assistant_text(
+    transcript_path: str, turn_started_at: float = 0.0
+) -> str:
+    """Concatenate assistant text blocks emitted since this turn began.
+
+    Walks the transcript JSONL backwards, stopping at the first genuine user
+    entry or at anything written before ``turn_started_at``.
+
+    The timestamp bound exists because the two halves of this gate disagreed
+    about where a turn begins. UserPromptSubmit resets ``turn_tools_called``,
+    which is what records that ``add_lesson`` already satisfied the gate, and
+    it fires for a message the user sends while a turn is still running. That
+    message is written to the transcript as ``queue-operation`` and
+    ``attachment`` entries, never as ``type == "user"``, so this walk used to
+    sail straight past it and keep reading the previous turn's text. The state
+    then said "new turn, nothing called yet" while the transcript said "same
+    turn, apology still present", and an apology that had already been paid
+    for with a lesson re-armed the gate. Diagnosed from a live transcript: the
+    sentence behind two denials was "You're right, I narrated it instead of
+    doing it", written in the preceding turn and already answered there.
+
+    Both halves now key off the same event. ``turn_started_at`` is written by
+    the same hook call that clears ``turn_tools_called``, so they cannot
+    disagree. A missing or unreadable value means no bound, which is the old
+    behaviour, because this gate fails open rather than guessing.
+
     Falls back to empty string on any read/parse error (fail open).
     """
     if not transcript_path:
@@ -263,6 +322,13 @@ def _current_turn_assistant_text(transcript_path: str) -> str:
             entry = json.loads(line)
         except (json.JSONDecodeError, ValueError):
             continue
+        if turn_started_at:
+            stamped = _entry_epoch(entry)
+            # Only a readable timestamp can end the walk. An entry with none
+            # is passed over rather than treated as ancient, so a transcript
+            # format without timestamps behaves as it did before.
+            if stamped and stamped < turn_started_at:
+                break
         etype = entry.get("type")
         if etype == "user":
             # Tool results are recorded as type=="user" entries whose content
@@ -495,6 +561,12 @@ def main():
     # gate, not a data rule, because its trigger is assistant text not a
     # tool arg.
     session_id = hook_input.get("session_id", "")
+    # Written by the same UserPromptSubmit call that clears turn_tools_called,
+    # so the apology window and the "already complied" check agree on where
+    # this turn begins. A missing or non-numeric value means no bound.
+    turn_started_at = state.get("turn_started_at")
+    if not isinstance(turn_started_at, (int, float)) or isinstance(turn_started_at, bool):
+        turn_started_at = 0.0
     if (
         tool_name not in (ADD_LESSON_TOOL, ADJUDICATE_TOOL)
         and tool_name not in DISCOVERY_TOOLS
@@ -523,8 +595,9 @@ def main():
         )
         if not adj_applies:
             transcript_path = hook_input.get("transcript_path", "")
-            text = _current_turn_assistant_text(transcript_path)
-            if _has_apology(text):
+            text = _current_turn_assistant_text(transcript_path, turn_started_at)
+            matched_pattern, flagged_sentence = _apology_match(text)
+            if matched_pattern:
                 _deny([
                     "[apology-requires-add-lesson] You apologized in this "
                     "turn. Two exits: (1) COMPLY -- call "
@@ -535,16 +608,25 @@ def main():
                     "audit record. Bypass: include MGCP_BYPASS:apology in "
                     "the next user prompt."
                 ], audit={"gate": "apology", "tool_denied": tool_name,
-                          "session_id": session_id})
+                          "session_id": session_id,
+                          "pattern": matched_pattern,
+                          "flagged_sentence": flagged_sentence})
     elif (
         tool_name == ADD_LESSON_TOOL
         and APOLOGY_BYPASS_SCOPE not in bypass_scopes
         and ADD_LESSON_TOOL not in (state.get("turn_tools_called") or [])
     ):
         transcript_path = hook_input.get("transcript_path", "")
-        if _has_apology(_current_turn_assistant_text(transcript_path)):
+        matched_pattern, flagged_sentence = _apology_match(
+            _current_turn_assistant_text(transcript_path, turn_started_at)
+        )
+        if matched_pattern:
+            # A compliance is a label too: it says this fire was accepted.
+            # Without the sentence it is an unexaminable vote.
             _audit({"event": "comply", "gate": "apology",
                     "session_id": session_id,
+                    "pattern": matched_pattern,
+                    "flagged_sentence": flagged_sentence,
                     "lesson_id": (tool_input or {}).get("id", "")})
 
     if not rules:

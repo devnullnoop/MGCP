@@ -130,4 +130,6 @@ measured rate.
 
 Label the 29 appends that are currently unlabelled. Read each one against its
 query and record whether it is relevant. That turns the lower bound into a real
-rate, needs no code, and the 29 are listed in `docs/bridge-results/bridge-on.json`.
+rate and needs no code. The per-query row files that list them are not kept in
+this repository, since they hold one operator's note identifiers. Regenerate
+them with `python -m tests.bridge_benchmark`, which writes `bridge-on.json`.

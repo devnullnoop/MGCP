@@ -1380,3 +1380,183 @@ class TestEveryHookSurvivesAMalformedSharedState:
         assert result.returncode == 0
         decision = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"]
         assert decision == "deny"
+
+
+class TestStagedForbidPreconditions:
+    """The two precondition types that keep things out of a public history.
+
+    `staged_files_forbid` refuses a path. `staged_content_forbid` refuses a
+    string inside the diff, which is the only way to catch a private project
+    name or an absolute home directory: both arrive inside a sentence, so no
+    amount of path matching sees them. Two other project names and one home
+    path reached this repository's own documents that way.
+    """
+
+    _run = TestEnforcement._run
+
+    @staticmethod
+    def _repo_with_staged(tmp_path, files):
+        """A real git repository with `files` staged. Needs real git output."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "init", "-q"], cwd=repo, env=env, check=True)
+        for name, body in files.items():
+            target = repo / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(body)
+        subprocess.run(["git", "add", "-A"], cwd=repo, env=env, check=True)
+        return repo
+
+    def _commit_attempt(self, tmp_path, repo, precondition):
+        rule = {
+            "name": "public-repo-hygiene",
+            "enabled": True,
+            "trigger": {"tool_name": "Bash",
+                        "command_match": {"type": "git_subcommand",
+                                          "subcommands": ["commit", "push"]}},
+            "preconditions": [precondition],
+            "bypass_scope": "hygiene",
+            "deny_reason": "this content does not belong in a public repository",
+        }
+        return self._run(
+            {"tool_name": "Bash", "tool_input": {"command": "git commit -m x"},
+             "cwd": str(repo)},
+            {"turn_tools_called": [], "turn_bypass_scopes": []},
+            tmp_path, rules=[rule],
+        )
+
+    def test_a_forbidden_path_is_refused(self, tmp_path):
+        repo = self._repo_with_staged(tmp_path, {
+            "docs/locomo-results/pq-mgcp-observation.json": '{"rows": []}',
+            "README.md": "fine",
+        })
+        r = self._commit_attempt(tmp_path, repo, {
+            "type": "staged_files_forbid",
+            "deny_globs": ["docs/locomo-results/pq-*.json"],
+        })
+        out = json.loads(r.stdout)["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny"
+        assert "pq-mgcp-observation.json" in out["permissionDecisionReason"]
+
+    def test_an_allowed_path_passes(self, tmp_path):
+        repo = self._repo_with_staged(tmp_path, {
+            "docs/locomo-results/cmp-mgcp-observation.json": "{}",
+        })
+        r = self._commit_attempt(tmp_path, repo, {
+            "type": "staged_files_forbid",
+            "deny_globs": ["docs/locomo-results/pq-*.json"],
+        })
+        assert r.stdout.strip() == "", r.stdout
+
+    def test_a_private_name_in_the_diff_is_refused(self, tmp_path):
+        repo = self._repo_with_staged(tmp_path, {
+            "CLAUDE.md": "REM was blocked on SomePrivateProject at session 36.",
+        })
+        r = self._commit_attempt(tmp_path, repo, {
+            "type": "staged_content_forbid",
+            "patterns": [r"\bSomePrivateProject\b"],
+        })
+        out = json.loads(r.stdout)["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny"
+        assert "SomePrivateProject" in out["permissionDecisionReason"]
+
+    def test_an_absolute_home_path_in_the_diff_is_refused(self, tmp_path):
+        # Assembled from fragments on purpose. Written as a literal, this line
+        # would itself be a home path in the staged diff, and the rule under
+        # test would refuse the commit that adds the test. The rule is right to
+        # do that, so the fixture works around it rather than the rule being
+        # loosened.
+        home_path = "/" + "Users" + "/someone/.mgcp/qdrant"
+        repo = self._repo_with_staged(tmp_path, {
+            "CHANGELOG.md": f"Storage folder {home_path} is locked.",
+        })
+        r = self._commit_attempt(tmp_path, repo, {
+            "type": "staged_content_forbid",
+            "patterns": [r"/(?:Users|home)/[A-Za-z0-9_.-]+/"],
+        })
+        assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_matching_is_case_insensitive(self, tmp_path):
+        """The first sweep for these names was case-sensitive and missed one."""
+        repo = self._repo_with_staged(tmp_path, {"a.md": "work on someprivateproject"})
+        r = self._commit_attempt(tmp_path, repo, {
+            "type": "staged_content_forbid",
+            "patterns": [r"\bSomePrivateProject\b"],
+        })
+        assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_removing_a_forbidden_string_is_allowed(self, tmp_path):
+        """Only added lines are scanned.
+
+        Scanning the whole diff would refuse the commit that CLEANS the string
+        up, which is the opposite of what the rule is for.
+        """
+        repo = self._repo_with_staged(tmp_path, {"a.md": "names SomePrivateProject here"})
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "commit", "-qm", "first"], cwd=repo, env=env, check=True)
+        (repo / "a.md").write_text("names nothing private here")
+        subprocess.run(["git", "add", "-A"], cwd=repo, env=env, check=True)
+
+        r = self._commit_attempt(tmp_path, repo, {
+            "type": "staged_content_forbid",
+            "patterns": [r"\bSomePrivateProject\b"],
+        })
+        assert r.stdout.strip() == "", (
+            "the cleanup commit was refused for removing the string: " + r.stdout
+        )
+
+    def test_an_invalid_pattern_does_not_refuse_everything(self, tmp_path):
+        """A bad regex in the rules file must not block every commit."""
+        repo = self._repo_with_staged(tmp_path, {"a.md": "ordinary text"})
+        r = self._commit_attempt(tmp_path, repo, {
+            "type": "staged_content_forbid",
+            "patterns": ["(unclosed", r"\bNothingHere\b"],
+        })
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == ""
+
+    def test_an_empty_pattern_list_allows(self, tmp_path):
+        repo = self._repo_with_staged(tmp_path, {"a.md": "anything"})
+        r = self._commit_attempt(tmp_path, repo, {
+            "type": "staged_content_forbid", "patterns": [],
+        })
+        assert r.stdout.strip() == ""
+
+    def test_outside_a_repository_it_allows_rather_than_crashes(self, tmp_path):
+        plain = tmp_path / "not-a-repo"
+        plain.mkdir()
+        r = self._commit_attempt(tmp_path, plain, {
+            "type": "staged_content_forbid", "patterns": [r"\bAnything\b"],
+        })
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == ""
+
+    def test_deleting_a_forbidden_file_is_allowed(self, tmp_path):
+        """The commit that REMOVES the file must not be refused.
+
+        `git diff --cached --name-only` lists deletions, so a rule built on it
+        blocks its own cleanup. Found while committing the removal of 1.7 MB of
+        row-level output: 11 deleted paths still read as staged.
+        """
+        repo = self._repo_with_staged(tmp_path, {
+            "docs/locomo-results/pq-mgcp-observation.json": '{"rows": []}',
+        })
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "commit", "-qm", "first"], cwd=repo, env=env, check=True)
+        subprocess.run(["git", "rm", "-q", "docs/locomo-results/pq-mgcp-observation.json"],
+                       cwd=repo, env=env, check=True)
+
+        r = self._commit_attempt(tmp_path, repo, {
+            "type": "staged_files_forbid",
+            "deny_globs": ["docs/locomo-results/pq-*.json"],
+        })
+        assert r.stdout.strip() == "", (
+            "the cleanup commit was refused for deleting the file: " + r.stdout
+        )

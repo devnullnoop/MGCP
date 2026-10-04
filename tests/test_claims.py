@@ -1197,3 +1197,92 @@ def test_C33_stated_tool_counts_match_the_server():
         + "; ".join(f"{r}:{n} says {c}" for r, n, c in wrong)
     )
     assert checked, "no file states a tool count any more; drop this test if that is intended"
+
+
+def test_C34_documents_cite_only_files_that_exist():
+    """Every repository path named in the documents has to resolve.
+
+    Three separate rot events in two days, each caught by hand rather than by a
+    test. README pointed at `examples/claude-hooks/legacy/` after the commit
+    that deleted it. The claim ledger listed `/ws/events` after the commit that
+    deleted it. `bridge-measurement.md` cited a per-query result file after it
+    was removed. All three were a path in prose that no longer existed, and
+    nothing checked paths.
+
+    A path inside a command the reader is told to RUN is allowed to be absent,
+    because the command produces it. Those appear in fenced code, which this
+    skips, along with the historical entries in CHANGELOG.md.
+    """
+    doc_paths = ["README.md", "CLAUDE.md", "docs/CAPABILITIES.md", "examples/README.md"]
+    doc_paths += [
+        str(p.relative_to(REPO))
+        for p in sorted((REPO / "docs").glob("*.md"))
+        if p.name != "CAPABILITIES.md"
+    ]
+
+    prefixes = ("src/", "tests/", "docs/", "examples/", "scripts/", ".github/")
+    cited = re.compile(
+        r"[`(\[]((?:" + "|".join(prefixes) + r")[A-Za-z0-9_./*-]+)"
+    )
+
+    missing = []
+    for rel in doc_paths:
+        doc = REPO / rel
+        if not doc.exists():
+            continue
+        text = doc.read_text()
+        # Commands the reader runs may name output that does not exist yet.
+        text = re.sub(r"```.*?```", " ", text, flags=re.S)
+        for raw in cited.findall(text):
+            path = raw.rstrip(".,);:")
+            if "*" in path:
+                # A glob has to match something.
+                if not list(REPO.glob(path)):
+                    missing.append((rel, path))
+                continue
+            if not (REPO / path).exists():
+                missing.append((rel, path))
+
+    assert not missing, (
+        "documents cite repository paths that do not exist: "
+        + "; ".join(f"{d} -> {p}" for d, p in sorted(set(missing)))
+    )
+
+
+def test_C35_no_private_identifiers_in_tracked_files():
+    """This repository is public. Nothing in it may name the operator's
+    machine, their other projects, or anybody they work with.
+
+    Two of their other project names reached CLAUDE.md, the claim ledger and a
+    test docstring, because citing real evidence from the live store is the
+    natural way to write those rows and the names come along with it. One
+    absolute home path reached CHANGELOG.md inside a quoted error message. The
+    enforcement rule `no-private-identifiers` refuses a commit that stages any
+    of this, and its list of names lives in the untracked rules file so the
+    list itself is never published. This test is the same check without the
+    list, so it works for anyone who clones the repository.
+    """
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=REPO, capture_output=True, text=True
+    ).stdout.split()
+
+    # An absolute path into somebody's home directory.
+    home_path = re.compile(r"/(?:Users|home)/(?!user/project\b)[A-Za-z0-9_.-]+/")
+    offenders = []
+    for rel in tracked:
+        path = REPO / rel
+        if path.suffix in (".png", ".jpg", ".gz") or not path.is_file():
+            continue
+        try:
+            text = path.read_text()
+        except (UnicodeDecodeError, OSError):
+            continue
+        for match in home_path.findall(text):
+            offenders.append((rel, match))
+
+    assert not offenders, (
+        "tracked files contain absolute home directory paths; use ~ instead: "
+        + "; ".join(f"{r} -> {m}" for r, m in sorted(set(offenders))[:10])
+    )

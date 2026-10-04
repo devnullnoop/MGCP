@@ -88,6 +88,19 @@ class Precondition(BaseModel):
       Used to gate writes to sensitive paths (settings.json, secrets,
       etc.) by Edit/Write tools and to gate URL targets on web fetches.
       Fails open on missing field or non-string value.
+    - ``staged_files_forbid`` — deny if any staged file path matches a
+      glob in ``deny_globs``. Unlike ``staged_files_coupling`` this asks
+      for nothing in return; the path itself is refused. Used to keep a
+      class of file out of the history, such as regenerable research
+      output.
+    - ``staged_content_forbid`` — deny if the staged diff matches any
+      regular expression in ``patterns``. This is the only type that
+      reads content rather than paths, which is what a private name or an
+      absolute home directory needs: both arrive inside a sentence, not as
+      a filename. Keep the patterns in the rules file rather than in the
+      repository, so a list of private names is never itself published.
+      An unreadable diff or an invalid pattern is skipped, because
+      enforcement is a net rather than a tripwire.
     """
 
     type: Literal[
@@ -95,11 +108,14 @@ class Precondition(BaseModel):
         "tool_not_called_this_turn",
         "staged_files_coupling",
         "tool_input_glob",
+        "staged_files_forbid",
+        "staged_content_forbid",
     ]
     tool_name: str = ""
     couplings: list[dict] = Field(default_factory=list)
     field: str = ""
     deny_globs: list[str] = Field(default_factory=list)
+    patterns: list[str] = Field(default_factory=list)
 
 
 class EnforcementRule(BaseModel):

@@ -376,6 +376,65 @@ def _get_staged_files(cwd: str) -> list:
         return []
 
 
+def _get_staged_paths_not_deleted(cwd: str) -> list:
+    """Staged paths that this commit adds, modifies, copies or renames.
+
+    Deletions are left out. `git diff --cached --name-only` lists them, so a
+    forbid-by-path rule built on that would refuse the very commit that REMOVES
+    the forbidden file. The content scan has the same hazard and solves it the
+    same way, by reading added lines only.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return []
+        return [line for line in result.stdout.splitlines() if line.strip()]
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+
+def _get_staged_diff(cwd: str) -> str:
+    """The staged diff as text, or "" if it cannot be read.
+
+    Separate from _get_staged_files because content and paths answer
+    different questions. A private project name or an absolute home
+    directory arrives inside a sentence, so no amount of path matching sees
+    it. Capped so a large commit cannot stall the hook.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--unified=0"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return ""
+        return result.stdout[:4_000_000]
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _added_lines(diff: str) -> str:
+    """Only the lines this commit ADDS.
+
+    Scanning the whole diff would refuse a commit for REMOVING a forbidden
+    string, which is the opposite of what the rule wants.
+    """
+    out = []
+    for line in diff.splitlines():
+        if line.startswith("+") and not line.startswith("+++"):
+            out.append(line[1:])
+    return "\n".join(out)
+
+
 def _check_coupling(staged, when_staged, require_one_of):
     triggering = [p for p in staged if any(fnmatch.fnmatch(p, w) for w in when_staged)]
     if not triggering:
@@ -386,7 +445,17 @@ def _check_coupling(staged, when_staged, require_one_of):
     return False, triggering
 
 
-def _evaluate_precondition(pre: dict, state: dict, staged_files: list, tool_input: dict = None):
+def _safe_fnmatch(value: str, pattern: str) -> bool:
+    try:
+        return fnmatch.fnmatch(value, pattern)
+    except Exception:
+        return False
+
+
+def _evaluate_precondition(
+    pre: dict, state: dict, staged_files: list, tool_input: dict = None,
+    staged_diff: str = "", staged_not_deleted: list = None,
+):
     tool_input = tool_input or {}
     called = state.get("turn_tools_called") or []
     pre_type = pre.get("type", "")
@@ -418,6 +487,43 @@ def _evaluate_precondition(pre: dict, state: dict, staged_files: list, tool_inpu
         if not unsatisfied:
             return True, ""
         return False, "Doc-coupling violations:\n" + "\n".join(unsatisfied)
+
+    if pre_type == "staged_files_forbid":
+        deny_globs = pre.get("deny_globs") or []
+        if not deny_globs:
+            return True, ""
+        hits = [
+            p for p in (staged_not_deleted or [])
+            if any(_safe_fnmatch(p, g) for g in deny_globs)
+        ]
+        if not hits:
+            return True, ""
+        return False, (
+            "staged files are forbidden by this rule:\n"
+            + "\n".join(f"  - {h}" for h in hits[:20])
+        )
+
+    if pre_type == "staged_content_forbid":
+        patterns = pre.get("patterns") or []
+        if not patterns:
+            return True, ""
+        added = _added_lines(staged_diff or "")
+        if not added:
+            return True, ""
+        hits = []
+        for raw in patterns:
+            try:
+                found = re.search(raw, added, re.IGNORECASE)
+            except re.error:
+                continue  # a bad pattern must not refuse every commit
+            if found:
+                hits.append((raw, found.group(0)[:60]))
+        if not hits:
+            return True, ""
+        return False, (
+            "staged content matches a forbidden pattern:\n"
+            + "\n".join(f"  - {m!r} matched {p!r}" for p, m in hits[:10])
+        )
 
     if pre_type == "tool_input_glob":
         field = pre.get("field", "")
@@ -623,6 +729,8 @@ def main():
 
     denials = []
     staged_files = None  # lazy
+    staged_diff = None  # lazy
+    staged_not_deleted = None  # lazy
 
     for rule in rules:
         try:
@@ -638,17 +746,22 @@ def main():
             continue  # malformed rule -> fail open
 
         preconditions = rule.get("preconditions") or []
-        needs_staged = any(
-            (p or {}).get("type") == "staged_files_coupling" for p in preconditions
-        )
-        if needs_staged and staged_files is None:
+        types = {(p or {}).get("type") for p in preconditions}
+        # Both are one subprocess each, so read them once per tool call at
+        # most, and only when a matched rule actually asks.
+        if staged_files is None and types & {"staged_files_coupling", "staged_files_forbid"}:
             staged_files = _get_staged_files(project_dir)
+        if staged_diff is None and "staged_content_forbid" in types:
+            staged_diff = _get_staged_diff(project_dir)
+        if staged_not_deleted is None and "staged_files_forbid" in types:
+            staged_not_deleted = _get_staged_paths_not_deleted(project_dir)
 
         unsatisfied = []
         for pre in preconditions:
             try:
                 ok, detail = _evaluate_precondition(
-                    pre or {}, state, staged_files or [], tool_input
+                    pre or {}, state, staged_files or [], tool_input,
+                    staged_diff or "", staged_not_deleted or [],
                 )
             except Exception:
                 ok, detail = True, ""

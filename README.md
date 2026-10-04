@@ -222,8 +222,8 @@ these conditions:
 |---|---|
 | The program | [tests/locomo_benchmark.py](tests/locomo_benchmark.py) |
 | Per-run totals | `docs/locomo-results/cmp-*.json` |
-| Per-question outcomes | `docs/locomo-results/pq-*.json` |
 | Paired test output | `docs/locomo-results/paired-*.json` |
+| Per-question outcomes | not committed. The program writes `pq-*.json` when you run it |
 | Write-up | [docs/locomo-retrieval-eval.md](docs/locomo-retrieval-eval.md) |
 | Claim and status | row E12 in [docs/CAPABILITIES.md](docs/CAPABILITIES.md) |
 
@@ -235,8 +235,10 @@ curl -sLO https://raw.githubusercontent.com/snap-research/locomo/main/data/locom
 python -m tests.locomo_benchmark --data-file locomo10.json --retriever mgcp --mode observation
 ```
 
-The paired test needs no download, because the per-question files hold hashed
-question keys rather than LoCoMo's text:
+The paired test reads the per-question files, which hold hashed question keys
+rather than LoCoMo's text. Those files are 1.6 MB of row-level research output
+and are not kept in this repository, so generate them first with the command
+above and then compare:
 
 ```bash
 python -m tests.locomo_benchmark --compare docs/locomo-results/pq-*-observation.json
@@ -547,10 +549,22 @@ The enforcing hook is a general-purpose rule reader. Rules live in
 
 A trigger matches a tool name, and for Bash it can also match the command. The
 three command matchers are `git_subcommand`, `regex`, and `contains`. A
-precondition is one of four checks: a tool was called in this message, a tool was
+precondition is one of six checks: a tool was called in this message, a tool was
 not called, the staged files require a matching file (for example, a change under
-`src/` requires a change to `CHANGELOG.md`), or a tool input matches a path you
-want to protect. A bypass scope is a short word the user can name in
+`src/` requires a change to `CHANGELOG.md`), a tool input matches a path you want
+to protect, a staged file path is refused outright, or the staged text matches a
+pattern you want to keep out of the history.
+
+The last two were added in v2.17 to keep private things out of a public
+repository. Two of the author's other project names and one absolute home path
+had reached the documents here, each one carried in while citing a real
+measurement. A name arrives inside a sentence, so matching file paths cannot see
+it, which is why one check reads the text. Both read only the lines a commit
+ADDS, so neither can refuse the commit that cleans the problem up. The patterns
+live in `~/.mgcp/enforcement_rules.json`, which is not in this repository, so a
+list of private names is never published to find them by.
+
+A bypass scope is a short word the user can name in
 `MGCP_BYPASS:<scope>` to switch off that one rule for one message. Plain
 `MGCP_BYPASS` switches off all of them. Six MCP tools add, change, and remove
 rules from the chat, so a new rule costs a sentence instead of a release.

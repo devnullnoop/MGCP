@@ -2,7 +2,7 @@
 
 Storage stays global on purpose: the agent's message to its future self is not
 partitioned by codebase. What broke was the READ — session start on one project
-surfaced the newest entry from anywhere, so work on BoltMob opened with a
+surfaced the newest entry from anywhere, so work on one project opened with a
 reflection about a 3D flight sim in another language.
 
 These tests drive the real store and the real MCP tool functions. No mocks

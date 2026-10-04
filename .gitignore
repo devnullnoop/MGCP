@@ -82,3 +82,15 @@ scripts/*
 # docs/locomo-results/*.json are OUR aggregate measurements and ARE committed.
 locomo10.json
 msc_personas_all.json
+
+# Row-level research output. The per-run totals in docs/locomo-results and
+# docs/bridge-results ARE committed, because the claim ledger checks the
+# numbers in the write-ups against them. These two patterns are the bulk:
+# 1.6 MB of per-question outcomes and 112 KB of per-query note identifiers,
+# which nothing reads and which carry one operator's store contents.
+# Regenerate with `python -m tests.locomo_benchmark` and
+# `python -m tests.bridge_benchmark --sweep`.
+docs/locomo-results/pq-*.json
+docs/bridge-results/bridge-on.json
+docs/bridge-results/bridge-off.json
+docs/bridge-results/bridge-min*.json

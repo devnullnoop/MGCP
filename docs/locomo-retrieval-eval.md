@@ -348,3 +348,10 @@ The program builds its own throwaway copy of MGCP, and it refuses to run against
 
 The saved results in `docs/locomo-results/` are our measurements. They contain no
 LoCoMo text.
+
+Only the per-run totals are kept here: `cmp-*.json`, `abstention-*.json` and
+`paired-*.json`, about 80 KB. The per-question files, `pq-*.json`, are 1.6 MB of
+row-level output and were removed from the repository. Every number quoted in
+this document is checked against a file that is still here, by row E12 in
+[CAPABILITIES.md](CAPABILITIES.md). The commands above regenerate the
+per-question files when you want them.

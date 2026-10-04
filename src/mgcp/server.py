@@ -3125,11 +3125,22 @@ async def add_enforcement_rule(
             command_match.type ∈ {"git_subcommand", "regex", "contains"}.
         preconditions: list of dicts. Each has "type" ∈
             {"tool_called_this_turn", "tool_not_called_this_turn",
-             "staged_files_coupling", "tool_input_glob"}. The first two
+             "staged_files_coupling", "tool_input_glob",
+             "staged_files_forbid", "staged_content_forbid"}. The first two
             take "tool_name"; the coupling type takes "couplings" — a list
             of {"when_staged": [glob,...], "require_one_of": [glob,...]};
             tool_input_glob takes "field" (which tool_input key to read)
-            and "deny_globs", and denies when any glob matches that field.
+            and "deny_globs", and denies when any glob matches that field;
+            staged_files_forbid takes "deny_globs" and refuses a staged path
+            outright, asking for nothing in return; staged_content_forbid
+            takes "patterns", a list of regular expressions, and is the only
+            type that reads the staged text rather than paths, which is what
+            a private name or an absolute home path needs because both arrive
+            inside a sentence. Both of the last two read only the lines a
+            commit ADDS, so neither can refuse the commit that removes the
+            offending thing. Keep their patterns in the rules file rather
+            than in a repository, so a list of private names is never itself
+            published.
         bypass_scope: short token (e.g. 'git', 'docs') the user can name
             in MGCP_BYPASS:<scope> to disable this rule for one turn.
         deny_reason: text shown to the LLM when the rule blocks a call.

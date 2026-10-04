@@ -109,7 +109,7 @@ All source files are in `src/mgcp/`:
 - `launcher.py` - Unified CLI launcher
 - `bootstrap.py` - Initial lesson seeding
 - `migration.py` - Rebuilds the Qdrant index from SQLite
-- `init_project.py` - Multi-client MCP configuration (8 LLM clients supported)
+- `init_project.py` - Multi-client MCP configuration (8 LLM clients supported). `--doctor` also reports leftover `mgcp.server` processes: reconnecting a client starts a new server without stopping the old one, so they accumulate one per reconnect, and a leftover holds a writable handle on `lessons.db` plus around 330 MB. On embedded Qdrant it holds the directory lock too, which is the 2026-10-01 failure where all 50 tools broke. The process filter requires the command's executable to be a python interpreter, because matching the module name alone counted shell wrappers whose command line merely mentions it and reported 4 servers for 2.
 - `data_ops.py` - Export, import, and duplicate detection
 - `rem_cycle.py` - REM (Recalibrate Everything in Memory) cycle engine
 - `rem_config.py` - REM scheduling strategies (linear, fibonacci, logarithmic)

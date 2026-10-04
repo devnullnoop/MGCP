@@ -1980,3 +1980,110 @@ class TestEnsureEmbeddingModel:
 
         assert result["error"] is not None
         assert "Could not load" in result["message"]
+
+
+class TestFindMgcpServerProcesses:
+    """`mgcp-init --doctor` reports leftover server processes.
+
+    Reconnecting a client starts a new server and leaves the old one running,
+    so they stack up one per reconnect and nothing says so. One sat for nearly
+    two days holding a writable handle on lessons.db and 330 MB. On the default
+    embedded vector store it would also hold the Qdrant directory lock, which
+    permits one client per path, and that is what made all 50 tools fail on
+    2026-10-01.
+    """
+
+    def _with_ps_output(self, monkeypatch, stdout, returncode=0):
+        from mgcp import init_project
+
+        class Result:
+            pass
+
+        def fake_run(cmd, **kwargs):
+            r = Result()
+            r.returncode = returncode
+            r.stdout = stdout
+            r.stderr = ""
+            return r
+
+        monkeypatch.setattr(init_project.sys, "platform", "darwin")
+        monkeypatch.setattr("subprocess.run", fake_run)
+        return init_project.find_mgcp_server_processes()
+
+    def test_it_finds_a_python_module_invocation(self, monkeypatch):
+        out = self._with_ps_output(monkeypatch,
+            "  123   01:02:03  338208 /usr/bin/python3 -m mgcp.server\n"
+            "  124      00:05    4096 /bin/zsh -c ls\n")
+        assert out["supported"] is True
+        assert [p["pid"] for p in out["processes"]] == [123]
+        assert out["processes"][0]["rss_kb"] == 338208
+        assert out["processes"][0]["age"] == "01:02:03"
+
+    def test_a_shell_that_merely_mentions_the_module_is_not_a_server(self, monkeypatch):
+        """A first version counted these and reported 4 servers for 2.
+
+        `ps` shows a `sh -c` with its whole command line, so a subshell that
+        launches the server reads as another server.
+        """
+        out = self._with_ps_output(monkeypatch,
+            "  200   00:10    2048 /bin/sh -c sleep 5 | python -m mgcp.server\n"
+            "  201   00:10    3072 /bin/zsh -c echo python -m mgcp.server\n"
+            "  202   00:10  125000 /path/.venv/bin/python3.12 -m mgcp.server\n")
+        assert [p["pid"] for p in out["processes"]] == [202]
+
+    def test_a_grep_for_the_name_is_not_a_server(self, monkeypatch):
+        out = self._with_ps_output(monkeypatch,
+            "  300   00:01    1024 grep -rn mgcp.server src/\n"
+            "  301   00:01    1024 /usr/bin/python3 -c import mgcp.server\n")
+        assert out["processes"] == [], "an import check has no -m and must not count"
+
+    def test_our_own_pid_is_excluded(self, monkeypatch):
+        out = self._with_ps_output(monkeypatch,
+            f"  {os.getpid()}   00:01  10000 /usr/bin/python3 -m mgcp.server\n"
+            "  999   00:01  10000 /usr/bin/python3 -m mgcp.server\n")
+        assert [p["pid"] for p in out["processes"]] == [999]
+
+    def test_a_ps_failure_reports_unsupported_rather_than_zero(self, monkeypatch):
+        """Reporting "none" on a failed check would read as a clean result."""
+        out = self._with_ps_output(monkeypatch, "", returncode=1)
+        assert out["supported"] is False
+        assert out["processes"] == []
+        assert out["error"]
+
+    def test_unparsable_lines_are_skipped_not_fatal(self, monkeypatch):
+        out = self._with_ps_output(monkeypatch,
+            "garbage\n"
+            "  abc   xx  yy /usr/bin/python3 -m mgcp.server\n"
+            "  400   00:01  5000 /usr/bin/python3 -m mgcp.server\n")
+        assert [p["pid"] for p in out["processes"]] == [400]
+
+    def test_the_diagnosis_flags_more_than_one(self, monkeypatch, tmp_path):
+        from mgcp import init_project
+
+        monkeypatch.setattr(
+            init_project, "find_mgcp_server_processes",
+            lambda: {"supported": True, "error": "",
+                     "processes": [{"pid": 1, "age": "2-00:00:00", "rss_kb": 330000},
+                                   {"pid": 2, "age": "00:01", "rss_kb": 120000}]},
+        )
+        monkeypatch.setattr(init_project, "GLOBAL_CLAUDE_JSON_PATH", tmp_path / "c.json")
+        results = init_project.diagnose_claude_code()
+        joined = " ".join(results["issues"])
+        assert "2 mgcp.server processes" in joined
+        assert "leftovers" in joined
+        assert any("kill -TERM" in s for s in results["suggestions"])
+        assert any("not -9" in s for s in results["suggestions"]), (
+            "the suggestion must say why: the process holds an open database handle"
+        )
+
+    def test_one_server_is_not_an_issue(self, monkeypatch, tmp_path):
+        from mgcp import init_project
+
+        monkeypatch.setattr(
+            init_project, "find_mgcp_server_processes",
+            lambda: {"supported": True, "error": "",
+                     "processes": [{"pid": 1, "age": "00:01", "rss_kb": 120000}]},
+        )
+        monkeypatch.setattr(init_project, "GLOBAL_CLAUDE_JSON_PATH", tmp_path / "c.json")
+        results = init_project.diagnose_claude_code()
+        assert not any("mgcp.server processes" in i for i in results["issues"])

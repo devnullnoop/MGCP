@@ -910,6 +910,100 @@ def configure_claude_code_project(project_path: str, dry_run: bool = False) -> d
     return result
 
 
+def find_mgcp_server_processes() -> dict:
+    """Every running `python -m mgcp.server`, with age and resident memory.
+
+    One connected client needs one server, so more servers than clients means
+    leftovers. Reconnecting a client (`/mcp` in Claude Code) starts a new
+    server and does not stop the old one, so they accumulate one per reconnect.
+
+    A leftover is not idle. It holds a writable handle on `lessons.db` and
+    around 330 MB, most of it a second copy of the embedding model. On the
+    default embedded vector store it also holds the Qdrant directory lock,
+    which permits one client per path, and that is what made all 50 tools fail
+    on 2026-10-01: a restarted session's old server still held the lock, so the
+    three calls the session-start hook requires failed one second apart and the
+    session ran with no memory and could not save any.
+
+    Returns {"supported": bool, "processes": [...], "error": str}. Reports
+    rather than acts: the caller cannot tell which server a client is attached
+    to, and killing the live one would disconnect the user.
+    """
+    import subprocess
+
+    result = {"supported": True, "processes": [], "error": ""}
+    me = os.getpid()
+
+    if sys.platform == "win32":
+        # tasklist does not show command lines, so the module name is invisible
+        # to it. wmic does, and is deprecated but still present on the Windows
+        # versions this project supports.
+        try:
+            out = subprocess.run(
+                ["wmic", "process", "get", "ProcessId,CommandLine"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if out.returncode != 0:
+                result["supported"] = False
+                result["error"] = "wmic is unavailable on this system"
+                return result
+            for line in out.stdout.splitlines():
+                if "mgcp.server" not in line:
+                    continue
+                parts = line.rsplit(None, 1)
+                if len(parts) != 2 or not parts[1].strip().isdigit():
+                    continue
+                pid = int(parts[1])
+                if pid == me:
+                    continue
+                result["processes"].append({"pid": pid, "age": "unknown", "rss_kb": None})
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            result["supported"] = False
+            result["error"] = f"could not list processes: {exc}"
+        return result
+
+    try:
+        out = subprocess.run(
+            ["ps", "-axo", "pid=,etime=,rss=,command="],
+            capture_output=True, text=True, timeout=15,
+        )
+        if out.returncode != 0:
+            result["supported"] = False
+            result["error"] = "ps returned an error"
+            return result
+    except (OSError, subprocess.SubprocessError) as exc:
+        result["supported"] = False
+        result["error"] = f"could not run ps: {exc}"
+        return result
+
+    for line in out.stdout.splitlines():
+        fields = line.split(None, 3)
+        if len(fields) < 4:
+            continue
+        pid_text, age, rss_text, command = fields
+        # Only a python interpreter running the server as a module. Matching
+        # the module name alone counted shell wrappers, because a `sh -c` whose
+        # command line merely MENTIONS the module shows up in ps with that text:
+        # a first version reported 4 servers when 2 were running, the extras
+        # being the subshell and pipeline that launched one of them.
+        if "mgcp.server" not in command or " -m " not in f" {command} ":
+            continue
+        executable = os.path.basename(command.split(None, 1)[0]).lower()
+        if "python" not in executable:
+            continue
+        try:
+            pid = int(pid_text)
+            rss = int(rss_text)
+        except ValueError:
+            continue
+        if pid == me:
+            continue
+        result["processes"].append({"pid": pid, "age": age, "rss_kb": rss})
+
+    result["processes"].sort(key=lambda r: r["pid"])
+    return result
+
+
 def diagnose_claude_code() -> dict:
     """
     Diagnose Claude Code MGCP configuration issues.
@@ -964,6 +1058,24 @@ def diagnose_claude_code() -> dict:
                 )
         except json.JSONDecodeError:
             pass
+
+    # Leftover server processes. One client needs one server; a reconnect
+    # starts another and leaves the first running.
+    servers = find_mgcp_server_processes()
+    results["servers"] = servers
+    if servers["supported"] and len(servers["processes"]) > 1:
+        pids = ", ".join(str(p["pid"]) for p in servers["processes"])
+        results["issues"].append(
+            f"{len(servers['processes'])} mgcp.server processes are running "
+            f"(pids {pids}). One connected client needs one server, so unless "
+            "you have that many clients open, the older ones are leftovers "
+            "from reconnects."
+        )
+        results["suggestions"].append(
+            "Stop a leftover with `kill -TERM <pid>`, not -9: it holds a "
+            "writable handle on lessons.db and needs to close SQLite cleanly. "
+            "Keep the newest one, which is the live connection."
+        )
 
     # Generate suggestions
     if not results["user_config"]["mgcp_configured"]:
@@ -1194,6 +1306,32 @@ Project-local hooks (--local):
         else:
             print(f"    ! {g['status']}")
         print(f"      {g['path']}")
+
+        # Running servers. One connected client needs one; a reconnect starts
+        # another and leaves the first alive, so they stack up unnoticed.
+        servers = results.get("servers") or {}
+        print("\n  Running mgcp.server processes:")
+        if not servers.get("supported"):
+            print(f"    ? cannot check on this platform: {servers.get('error', 'unknown')}")
+        elif not servers.get("processes"):
+            print("    none (this is normal when no client is connected)")
+        else:
+            procs = servers["processes"]
+            for proc in procs:
+                rss = proc.get("rss_kb")
+                size = f"{rss / 1024:.0f} MB" if rss else "size unknown"
+                print(f"    pid {proc['pid']}  up {proc['age']}  {size}")
+            if len(procs) == 1:
+                print("    ✓ one server, which is one connected client")
+            else:
+                print(
+                    f"    ! {len(procs)} servers. Each connected client needs one, so\n"
+                    "      unless that many clients are open, the older ones are\n"
+                    "      leftovers from reconnects. A leftover is not idle: it holds\n"
+                    "      a writable handle on lessons.db, and on the default embedded\n"
+                    "      vector store it holds the Qdrant lock, which allows one\n"
+                    "      client per directory."
+                )
 
         # Issues
         if results["issues"]:

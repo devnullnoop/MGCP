@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: the doctor reports leftover server processes
+- **`mgcp-init --doctor` now lists every running `mgcp.server` with its age and memory.** Reconnecting a client starts a new server and does not stop the old one, so they accumulate one per reconnect and nothing says so. One was found alive for 1 day 23 hours, holding a writable handle on `lessons.db` and 330 MB, most of that a second copy of the embedding model.
+- On the default embedded vector store a leftover also holds the Qdrant directory lock, which permits one client per path. That is the 2026-10-01 failure where all 50 tools broke: a restarted session's old server still held the lock, the three calls the session-start hook requires failed one second apart, and the session ran with no memory and could not save any.
+- The doctor reports and does not act. It cannot tell which server a client is attached to, so stopping one would risk disconnecting the user. It prints the pid and says to use `kill -TERM` rather than `-9`, because the process has an open database handle and needs to close SQLite cleanly.
+- **The first version reported four servers when two were running.** `ps` prints a shell's whole command line, so a `sh -c` that merely mentions the module reads as another server. The filter now requires the command's executable to be a python interpreter. Found by starting a second server and comparing the count against `ps`, not by reading the code.
+- Windows uses `wmic`, since `tasklist` does not show command lines. A platform where neither works reports that it could not check, rather than reporting none, because none would read as a clean result.
+- 8 tests, including one that proves the shell filter bites.
+
+
 ### Removed: private identifiers from a public repository
 - **Two of the author's other project names were in the tracked documents**, in CLAUDE.md, five rows of the claim ledger and one test docstring. One absolute home path was in CHANGELOG.md inside a quoted error message. All of it is gone, replaced by neutral descriptions that keep the measurement: "a second project at session 36" says the same thing as naming it.
 - Each one arrived while citing real evidence. The REM scheduling bug needed another project's session count to be legible, and the Qdrant lock story needed the real error text. That is why a habit at writing time matters more than a sweep afterwards.

@@ -320,6 +320,16 @@ This will:
 - Deploy global hooks (Claude Code) for proactive reminders
 - **Download the embedding model on first run, about 415 MB.** Search needs it. This happens once, and later runs start immediately.
 
+`mgcp-init --doctor` checks the result and reports problems. One of them is easy
+to miss: reconnecting a client starts a new MGCP server and leaves the old one
+running, so they stack up one per reconnect. A leftover is not idle. It holds a
+writable handle on your lessons database and around 330 MB, most of that a
+second copy of the embedding model. On the default embedded vector store it also
+holds a directory lock that allows one client at a time, which is enough to make
+every tool fail in the next session. The doctor lists what is running and tells
+you how to stop a leftover. It does not stop anything itself, because it cannot
+tell which server your client is attached to.
+
 Supports: Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Continue, Cline, Sourcegraph Cody
 
 ### 3. Start Using
@@ -819,6 +829,7 @@ Every release before 3.0, from 1.0 to 2.13, is in [CHANGELOG.md](CHANGELOG.md).
 | Command | Description |
 |---------|-------------|
 | `mgcp-init` | Configure LLM clients, deploy hooks, download embedding model |
+| `mgcp-init --doctor` | Check the client config and report leftover server processes |
 | `mgcp` | Start MCP server |
 | `mgcp-bootstrap` | Seed initial lessons and workflows |
 | `mgcp-dashboard` | Start web UI |

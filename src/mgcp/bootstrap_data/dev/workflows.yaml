@@ -42,6 +42,12 @@ workflows:
           - lesson_id: dependency-security
             relevance: "Check dependencies for vulnerabilities"
             priority: 2
+          - lesson_id: check-library-api-before-coding
+            relevance: "Read the real exports before writing against them"
+            priority: 1
+          - lesson_id: isolate-a-number-before-publishing-it
+            relevance: "Measure before building when a design hangs on a number"
+            priority: 2
 
       - id: plan
         name: "Plan"
@@ -192,6 +198,15 @@ workflows:
           - lesson_id: a-vacuous-check-reads-as-a-pass
             relevance: "Break what the test checks and confirm the test fails"
             priority: 1
+          - lesson_id: write-assertions-from-the-observed-string
+            relevance: "Assert on what the code emits, not on what you meant"
+            priority: 1
+          - lesson_id: validate-one-item-before-batch
+            relevance: "Inspect one real artifact before launching a sweep"
+            priority: 2
+          - lesson_id: test-the-shipping-configuration-not-the-dev-one
+            relevance: "A gate that pins an axis never tests that axis"
+            priority: 2
           - lesson_id: test-edge-cases
             relevance: "Edge cases cause most bugs"
             priority: 1

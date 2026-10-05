@@ -370,6 +370,61 @@ mgcp-bootstrap
 mgcp-dashboard
 ```
 
+### 4. Updating an existing install
+
+A `git pull` is not enough, and the reason catches people every time.
+
+Claude Code does not run the hooks from your checkout. `mgcp-init` copies them to
+`~/.mgcp/hooks/` and writes those absolute paths into `~/.claude/settings.json`.
+So a pull updates the package while the old hooks keep running, and nothing says
+so until you look.
+
+```bash
+cd <your-MGCP-checkout>
+git pull
+source .venv/bin/activate
+pip install -e .          # only needed when dependencies move; harmless otherwise
+mgcp-init                 # the step the pull does NOT do
+```
+
+Then restart your LLM client, or run `/mcp` in Claude Code to reconnect, and call
+the `sync_enforcement_rules` tool. Nothing else delivers a rule shipped since you
+installed, because the built-in defaults seed on first install only. It adds rules
+by name and never overwrites one you already have.
+
+Check the result:
+
+```bash
+mgcp-init --doctor
+```
+
+It reports which interpreter is in use and this machine's Python ceiling, a
+deployed hook payload behind the package, any missing hook file, and leftover
+`mgcp.server` processes.
+
+One more thing, if you run the dashboard. A `mgcp-dashboard` process started
+before the pull keeps serving the code it loaded at start, so new API fields are
+absent while the files on disk have them. Stop it and start it again after
+updating.
+
+### What lives where
+
+Your knowledge and your machine settings are not in the repository, so a pull
+never touches them and a fresh clone does not carry them.
+
+| Path | Holds | Travels with git |
+|---|---|---|
+| `~/.mgcp/lessons.db` | lessons, project context, REM state | no |
+| `~/.mgcp/enforcement_rules.json` | your gates, including any private pattern lists | no |
+| `~/.mgcp/intent_config.json` | intent routing | no |
+| `~/.mgcp/hooks/` | the deployed hooks `mgcp-init` writes | no |
+| `~/.claude/settings.json` | which hooks your client runs | no |
+
+Moving to a new machine means `mgcp-backup` on the old one and
+`mgcp-backup --restore` on the new one. A pull alone gives you the code and an
+empty store.
+
+
 ## MCP Tools (51 total)
 
 ### Lesson Discovery (5)

@@ -41,8 +41,8 @@ lessons:
 
   - id: dependency-monitoring
     trigger: "When maintaining a codebase with third-party dependencies — setting up automated monitoring for newly discovered vulnerabilities (CVEs)"
-    action: "Enable automated vulnerability scanning with tools like Dependabot, Snyk, Renovate, or pip-audit. Configure alerts for critical/high severity CVEs. Set up automated PR creation for security patches. Review and merge security updates within days, not weeks."
-    rationale: "New CVEs are discovered daily. Manual checking is unsustainable. Log4Shell (CVE-2021-44228) demonstrated that even widely-used libraries can have critical vulnerabilities that require immediate patching."
+    action: "Enable automated vulnerability scanning with tools like Dependabot, Snyk, Renovate, or pip-audit. Scan the dependency set a NEW install resolves to, not the one in your working environment: resolve first (pip install --dry-run --report resolve.json -e .), then audit that list. Run it on every pull request AND on a daily schedule, because an advisory is published on a date unrelated to your commits, so a week with no commits is unchecked rather than clean. Make a scan that cannot run fail loudly, since a scan that errors and exits 0 reads exactly like a pass. Do not put the scan in a pre-commit gate: it needs network, takes tens of seconds, and its answer changes on the advisory feed's schedule rather than yours. Review and merge security updates within days, not weeks."
+    rationale: "New CVEs are discovered daily. Manual checking is unsustainable. Log4Shell (CVE-2021-44228) demonstrated that even widely-used libraries can have critical vulnerabilities that require immediate patching. Scanning the wrong set is its own failure: on one project a stale working environment reported 82 advisories across 20 packages while a fresh resolve of the same manifest had none, because the declared lower bounds were already high enough and only the local environment had drifted. Reporting those 82 would have been wrong, and the real finding sat next to them: the test suite had been passing against versions no user installs, including a major version behind on one library."
     tags: [security, supply-chain, monitoring, cve, vulnerability]
     parent_id: security-supply-chain
     examples:
@@ -63,20 +63,31 @@ lessons:
 
   - id: sbom-maintenance
     trigger: "When managing software composition, regulatory compliance, or preparing for security audits — creating and maintaining a Software Bill of Materials"
-    action: "Generate and maintain a Software Bill of Materials (SBOM) in standard format (SPDX or CycloneDX). Include all direct and transitive dependencies with versions and licenses. Update the SBOM on every release. Store SBOMs alongside releases for traceability."
-    rationale: "When a critical CVE drops (like Log4Shell), an SBOM lets you answer 'are we affected?' in minutes instead of days. Regulatory frameworks (US Executive Order 14028, EU Cyber Resilience Act) increasingly require SBOMs."
+    action: "Generate and maintain a Software Bill of Materials (SBOM) in standard format (SPDX or CycloneDX). Include all direct and transitive dependencies with versions and licenses. Generate it REPRODUCIBLY, so two runs are byte-identical and a real change can be told from noise: cyclonedx-py takes --output-reproducible, which omits the serial number and timestamp that otherwise change every run. Then make accuracy mechanical, because updating it by intention does not hold. Three checks that stay true over time: the root component name and version match the package, every declared direct dependency appears in it, and it was not committed before the last change to the manifest, read from git history rather than a date inside the file. Back it with a commit-time coupling rule: staging the manifest requires staging the SBOM. Publish a freshly generated one as a CI artifact on every run too, since that one is always accurate for the versions it was built against."
+    rationale: "When a critical CVE drops (like Log4Shell), an SBOM lets you answer 'are we affected?' in minutes instead of days. Regulatory frameworks (US Executive Order 14028, EU Cyber Resilience Act) increasingly require SBOMs. An SBOM nobody verifies is worse than none, because it answers that question wrongly and nothing says so. Do NOT verify it by comparing against a freshly resolved set: with version ranges rather than pins, that comparison fails every time an upstream project publishes, which teaches people to ignore the alarm. Check the invariants that hold at all times instead."
     tags: [security, supply-chain, sbom, compliance]
     parent_id: security-supply-chain
     examples:
       - label: good
         code: |
-          # Generate CycloneDX SBOM for a Python project
+          # Generate a REPRODUCIBLE CycloneDX SBOM for a Python project.
+          # Without --output-reproducible the serial number and timestamp change
+          # on every run, so the file cannot be diffed and a real change cannot
+          # be told from noise.
           pip install cyclonedx-bom
-          cyclonedx-py requirements -i requirements.txt -o sbom.json --format json
+          cyclonedx-py environment .venv \
+              --of JSON --output-reproducible \
+              --pyproject pyproject.toml --mc-type application \
+              -o sbom.cdx.json
+
+          # Confirm it really is reproducible before trusting a diff of it
+          cyclonedx-py environment .venv --of JSON --output-reproducible \
+              --pyproject pyproject.toml --mc-type application -o second.json
+          cmp sbom.cdx.json second.json && echo "reproducible"
 
           # Or using syft for container images
           syft your-image:latest -o cyclonedx-json > sbom.json
-        explanation: "Standard-format SBOM generated from actual dependencies, machine-readable for automated CVE matching"
+        explanation: "Reproducible output is what makes a committed SBOM verifiable rather than decorative"
 
   - id: transitive-dependency-audit
     trigger: "When evaluating the security posture of project dependencies — looking beyond direct dependencies to audit the full dependency tree"

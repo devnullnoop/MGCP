@@ -655,6 +655,15 @@ workflows:
           - "committed bill of materials"
           - "CI jobs for both, one of them scheduled"
         lessons:
-          - lesson_id: audit-the-install-not-your-venv
-            relevance: "What to scan, what to generate, and how to keep it honest"
+          - lesson_id: dependency-monitoring
+            relevance: "What set to scan, and why the schedule matters as much as the scan"
             priority: 1
+          - lesson_id: sbom-maintenance
+            relevance: "Reproducible generation, and the checks that keep it accurate"
+            priority: 1
+          - lesson_id: transitive-dependency-audit
+            relevance: "Most of the tree is transitive, and that is where the risk sits"
+            priority: 2
+          - lesson_id: dependency-integrity
+            relevance: "Verify what you fetch, not just which version you asked for"
+            priority: 2

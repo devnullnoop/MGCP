@@ -104,16 +104,16 @@ lessons:
         explanation: "Types make the contract explicit — callers know exactly what to pass and what they get back"
 
   - id: dependency-minimization
-    trigger: "When adding a new dependency or library to a project — evaluating whether the dependency is worth the long-term cost"
-    action: "Before adding a dependency, ask: (1) Can I implement this in <50 lines? (2) Is this actively maintained (commits in last 6 months)? (3) How many transitive dependencies does it pull in? (4) What is the project's security track record? Prefer standard library solutions and small, focused packages over large frameworks."
-    rationale: "Every dependency is a liability — it can introduce vulnerabilities (supply chain attacks), break on upgrade, become abandoned, or conflict with other packages. The cost of a dependency is not just installation; it is perpetual maintenance, security monitoring, and upgrade coordination."
+    trigger: "When you implement a feature and reach for a new dependency or library. Also when git commit stages pyproject.toml, requirements.txt or a lockfile."
+    action: "Before adding a dependency, ask: (1) Can I implement this in <50 lines? (2) Is this actively maintained (commits in last 6 months)? (3) How many transitive dependencies does it pull in? (4) What is the project's security track record? Prefer standard library solutions and small, focused packages over large frameworks. Record the choice before you commit. The commit gate asks for a catalogue decision when pyproject.toml is staged. Call add_catalogue_item(item_type='decision') and name the alternative you rejected. When you remove the last import of a package, remove the package in the same commit."
+    rationale: "Every dependency is a liability. It can introduce vulnerabilities through the supply chain, break on upgrade, become abandoned, or conflict with other packages. The cost runs past installation into perpetual maintenance, security monitoring and upgrade coordination. MGCP carried websockets, playwright and aiohttp in pyproject.toml with no import in src or tests. websockets served one route that no client ever connected to. The screenshots the other two would have produced are committed images with no generator. One import sweep found all three."
     parent_id: code-quality
     tags: [code-quality, dependencies, security]
 
   - id: avoid-premature-abstraction
-    trigger: "When tempted to create an abstraction, base class, or shared utility before having multiple concrete use cases — resisting the urge to generalize too early"
-    action: "Wait for three concrete instances before abstracting. Duplicate code is cheaper than the wrong abstraction. When you do abstract, extract from working code — never design abstractions in advance. Prefer composition over inheritance."
-    rationale: "Premature abstraction creates rigid, hard-to-change code that serves imagined future needs instead of real current ones. Three similar lines of code are easier to understand and modify than one wrong abstraction that everything depends on."
+    trigger: "When you implement a feature, refactor, or add a helper. Also when git commit stages a new flag, config key, parameter or base class. Covers an abstraction added before several concrete use cases exist."
+    action: "Wait for three concrete instances before abstracting. Duplicate code costs less than the wrong abstraction. Extract an abstraction from working code, and never design one in advance. Prefer composition over inheritance. Apply the one-caller test before every commit: grep for callers of a new flag, config key or base class. One caller, or one subclass, means the generality is speculative. Delete it and inline the behaviour."
+    rationale: "Premature abstraction creates rigid code that serves imagined needs instead of real ones. Three similar lines read easier than one wrong abstraction that everything depends on. MGCP shipped a REM operation, action_effectiveness, that measured whether past remediations helped. It read rows from a table that nothing in production ever wrote. The live table held 0 rows. A model, a table, two indexes and nine functions existed to feed it. Each had one production caller, and it was that operation. Deleting the operation removed 289 lines of source and 147 lines of tests."
     parent_id: code-quality
     tags: [code-quality, abstraction, design]
     examples:
@@ -130,19 +130,19 @@ lessons:
 
           class EmailStrategy(AbstractNotificationStrategy):
               ...  # 50 lines to implement the interface
-        explanation: "Abstracted on the first use case — now the interface is shaped by email and will poorly fit SMS or Slack"
+        explanation: "Abstracted on the first use case. The interface is now shaped by email and fits SMS or Slack badly"
       - label: good
         code: |
-          # First use case: just send the email
+          # First use case: send the email and nothing more
           def send_email(to: str, subject: str, body: str) -> None:
               smtp.send(to, subject, body)
 
-          # Second use case: just send the SMS
+          # Second use case: send the SMS and nothing more
           def send_sms(to: str, message: str) -> None:
               twilio.send(to, message)
 
           # Third use case: NOW abstract, informed by real patterns
-        explanation: "Concrete implementations first — abstraction later when you know what they have in common"
+        explanation: "Concrete implementations first. Abstract later, once you know what they have in common"
 
   - id: self-documenting-code
     trigger: "When writing comments or deciding whether code needs explanation — using comments for 'why' and letting code express 'what'"
@@ -169,3 +169,151 @@ lessons:
           if user.role == 'admin':
               ...
         explanation: "Comments explain WHY — the non-obvious reasoning that code alone cannot convey"
+
+  - id: no-swallowed-errors
+    trigger: "When you implement or refactor error handling, or add a helper that catches exceptions. Also when git commit stages a new broad except clause in Python."
+    action: "Handle the error or re-raise it. The complexity gate refuses a new `except Exception:` or bare `except:` whose body is only pass, continue, or a return of a constant. To satisfy the gate, log the error with its context, re-raise it, or return a value that tells the caller the work did not happen. When the swallow is the design, write `# mgcp: allow-broad-except <reason>` on the except line. The hook's own fail-open handlers carry that comment, because enforcement must allow a tool call it cannot parse."
+    rationale: "A swallowed error reports success. REM's duplicate scan could not open the embedded vector store, because a local Qdrant allows one client per path. Its handler returned an empty list. An empty finding list renders as 'Knowledge base looks healthy', so every cycle reported a clean corpus from a scan that never ran. The audit found this by reading the handler. No failure was ever visible to read."
+    parent_id: code-quality
+    tags: [code-quality, errors, exceptions, enforcement]
+    examples:
+      - label: bad
+        code: |
+          try:
+              pairs = await find_duplicates(threshold=0.85, store=self.store)
+          except Exception:
+              return []
+        explanation: "The caller cannot tell a clean scan from a scan that never ran"
+      - label: good
+        code: |
+          try:
+              pairs = await find_duplicates(threshold=0.85, store=self.store)
+          except Exception as e:
+              logger.warning(f'Duplicate detection failed: {e}')
+              return [RemFinding(
+                  operation='duplicate_detection',
+                  title='Duplicate scan could not run',
+                  description=f'find_duplicates raised: {e}',
+                  metadata={'error': str(e)},
+              )]
+        explanation: "The failure reaches the caller as data, and the report says the corpus is unverified"
+
+  - id: no-pass-through-wrappers
+    trigger: "When you add a helper, extract a function during a refactor, or implement a convenience method. Also when git commit stages a new one-line function."
+    action: "Call the target directly. The complexity gate refuses a new function whose body is one return of a call that forwards its own parameters unchanged. Give a wrapper work of its own before you keep it: a default, a type conversion, a guard, or a narrower contract. When the only gain is a shorter name, rename the target instead. When you want the call site to read better, name the variable, not a new function."
+    rationale: "graph.py shipped get_prerequisites, get_next_in_sequence and get_alternatives from v1.0.0. Each body was one return of get_by_relationship_type with the same lesson_id. The audit found get_next_in_sequence had no caller at all. The other two had test callers and no production caller. Those two tests now call get_by_relationship_type directly. A later sweep deleted get_by_relationship_type for the same reason. A pass-through adds a name, a test and a stack frame, and changes no behaviour. It also hides the real call site from grep, so the next reader follows two hops to learn nothing."
+    parent_id: code-quality
+    tags: [code-quality, functions, design, enforcement]
+    examples:
+      - label: bad
+        code: |
+          def get_prerequisites(self, lesson_id: str) -> list[str]:
+              """Get prerequisite lessons (must know/do first)."""
+              return self.get_by_relationship_type(lesson_id, 'prerequisite')
+        explanation: "Forwards its only parameter and adds nothing. Callers can pass the literal themselves"
+      - label: good
+        code: |
+          # The call site reads well enough without a second name.
+          prerequisites = graph.get_by_relationship_type(lesson_id, 'prerequisite')
+
+          # A wrapper earns its place when it does work of its own.
+          def get_lesson_or_raise(self, lesson_id: str) -> Lesson:
+              lesson = self.get_lesson(lesson_id)
+              if lesson is None:
+                  raise KeyError(f'no lesson {lesson_id} in store {self.path}')
+              return lesson
+        explanation: "The direct call needs no helper. The kept helper adds a guard and an error message"
+
+  - id: no-unrequested-compat-shims
+    trigger: "When you implement a rename, a replacement field, or a second code path. Also when you refactor and keep the old name, or run git commit with a new alias or a deprecation comment."
+    action: "Remove the old path in the same commit that adds the new one. Do not ship an alias, a deprecated wrapper or a dual code path that nobody asked for. Apply this test before you keep a shim: name the caller that needs it. When you cannot name one, delete the shim. Check who reads a field before you label it deprecated, and record the grep in the commit message."
+    rationale: "MGCP carried related_ids beside relationships, and both held the same edges. link_lessons, bootstrap, the NetworkX builder and the web graph each had a branch labelled backwards compatibility. Every one of them wrote the edge twice. Two sources of truth disagree in the end. Of 124 live lessons carrying related_ids, every id was already in relationships, so the field went with no loss. The same sweep found parent_id labelled deprecated while four production paths read it, and 84 of 241 lessons carried one. Removing that field would have been a rewrite, and the label was what was wrong."
+    parent_id: code-quality
+    tags: [code-quality, design, maintainability]
+    examples:
+      - label: bad
+        code: |
+          def link_lessons(source: str, target: str, rel_type: str) -> None:
+              _append_relationship(source, target, rel_type)
+              # Backwards compatibility: keep related_ids in sync
+              _append_related_id(source, target)
+        explanation: "Two stores of the same edge. Nobody asked for the second one, and they drift"
+      - label: good
+        code: |
+          def link_lessons(source: str, target: str, rel_type: str) -> None:
+              _append_relationship(source, target, rel_type)
+
+          # Migration reads the old column with raw SQL, once, and the model
+          # no longer carries it. Checked first: all 124 rows round-trip.
+        explanation: "One writer. The old data is carried across by a migration, not by a second live path"
+
+  - id: one-implementation-per-behaviour
+    trigger: "When you implement logic that exists elsewhere, refactor shared code, or add a helper beside a similar one. Also when git commit stages the same change in two files."
+    action: "Keep one implementation of any behaviour. When a second copy appears, find which copy runs in production and delete the other. Apply this test: when a bug fix needs the same edit in two places, those places are one behaviour. Test the copy that decides, not the copy that imports cleanly. When two callers need the same code, give them one module to import."
+    rationale: "enforcement.py held a second copy of the PreToolUse evaluator. The hook keeps its own copy, because it must be stdlib-only with no mgcp import. Nothing in production called the package copy. tests/test_enforcement.py was its only importer. The documented shared contract was two suites over two implementations. One of those implementations never decided a tool call. Deleting it took enforcement.py from 573 lines to 260. The copy also hid a real gap. The live MGCP_BYPASS regex in user-prompt-dispatcher.py had no test, because the only tests of that logic drove the dead copy. Six tests were added against the live parse."
+    parent_id: code-quality
+    tags: [code-quality, duplicates, maintainability]
+    examples:
+      - label: bad
+        code: |
+          # src/mgcp/enforcement.py: evaluate_rules, trigger_matches, ...
+          # hook_templates/pre-tool-dispatcher.py: the same logic again
+          # Only the hook ever refuses a tool call. The tests drove the other one.
+        explanation: "Two implementations, two suites, and the tested one decides nothing"
+      - label: good
+        code: |
+          # hook_templates/quality_metrics.py holds the metric code once.
+          # The hook imports it from its own directory.
+          # CI runs the same file as a script:
+          #   python src/mgcp/hook_templates/quality_metrics.py --base origin/main
+        explanation: "One module, two callers. A commit that bypassed the gate locally still fails CI"
+
+  - id: edit-before-adding-a-module
+    trigger: "When you implement a feature and reach for a new file, or refactor by moving code into a new module. Also when git commit stages a new .py file under src."
+    action: "Edit an existing module first. Apply this test before you add a file: name the module you would have edited, and say why the code does not belong there. When the answer is that the file is already too long, split that file instead. The commit gate asks for a catalogue decision when a new module is staged. Record one with add_catalogue_item(item_type='decision') and name the alternative you rejected."
+    rationale: "MGCP shipped migrations.py beside the repairs that persistence.py already runs on every store open. The two drifted, and the new file held the copy nobody ran. It went out with its tests in the audit that removed about 1,600 lines. A new file also costs an import, a test file and one more place for the next reader to look. The catalogue decision is what search_catalogue returns to the next session before it changes the same code. The commit message stays with git blame, and the decision stays with retrieval."
+    parent_id: code-quality
+    tags: [code-quality, architecture, maintainability]
+    examples:
+      - label: bad
+        code: |
+          # New file: src/mgcp/migrations.py
+          # persistence.py already repairs the schema on every store open.
+          # Two schema-repair paths now exist, and only one of them runs.
+        explanation: "The new module duplicates a live path, then drifts from it unnoticed"
+      - label: good
+        code: |
+          # Edit persistence.py: add the repair beside the ones that already run.
+          # Then record why, so the next session finds it:
+          add_catalogue_item(
+              item_type='decision',
+              title='Schema repairs stay in persistence.py',
+              content='Rejected a migrations module: a second path that nothing runs.',
+          )
+        explanation: "One repair path, and the rejected alternative is on the record"
+
+  - id: delete-dead-code-on-sight
+    trigger: "When you implement around code you do not recognise, refactor a module, or read a function with no obvious caller. Also before git commit, for anything your change made unreachable."
+    action: "Grep for callers before you keep a function or a branch. Zero callers means delete, together with the machinery that exists only to feed it. A test that asserts a file exists is not a reader. Trust a grep sweep, and not a deprecation label. Read the advisory vulture report in CI rather than waiting for a job to fail. When you keep something that looks dead, write the reason and the caller in a comment."
+    rationale: "A scan of all 410 definitions in src/mgcp found one unreferenced name, and much more behind it. The web server carried a /ws/events route, a ConnectionManager and a task that polled the telemetry database every 500 milliseconds. No client ever connected. The task woke twice a second for the life of every dashboard process. Two documents said the feature worked. The claim test passed, because it checks that a documented endpoint resolves to a route, not that anything uses it. Six archived hook scripts went the same way. One test asserted that three of them existed, and it was their only reader. The archive answered the test, and the test guarded the archive. That removal was 97 insertions against 788 deletions."
+    parent_id: code-quality
+    tags: [code-quality, maintenance, dead-code]
+    examples:
+      - label: bad
+        code: |
+          @app.websocket('/ws/events')
+          async def ws_events(websocket: WebSocket) -> None:
+              await manager.connect(websocket)
+
+          async def poll_telemetry() -> None:
+              while True:
+                  await manager.broadcast(read_recent_events())
+                  await asyncio.sleep(0.5)
+        explanation: "No client ever connected. The poll ran twice a second in every dashboard process"
+      - label: good
+        code: |
+          # Deleted the route, ConnectionManager, the 500 ms poll task and the
+          # three subscribe hooks in telemetry.py that fed only that route.
+          # Kept scripts/clean_tool_call_envelopes.py, which looks unused:
+          # models.py and server.py name it in operator-facing error messages.
+        explanation: "The sweep deletes what has no reader and records the reader of what stays"

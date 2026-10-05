@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: structured coding gates, all shipped switched off
+- **Four new precondition types turn code structure into something the PreToolUse hook checks, instead of something a prompt asks for.** A diff budget on every edit, a complexity ratchet on every commit, a required `Why:` paragraph, and a required catalogue decision when a commit adds a module. Design, decisions and measurements are in [docs/structured-coding-gates.md](docs/structured-coding-gates.md).
+- **Every new rule ships disabled AND in audit mode.** An audit rule records what it would have refused and allows the call. Two switches rather than one, because `mode` is a key an older deployed hook ignores rather than rejecting, and ignoring it means enforcing. That is the state after a git pull and before `mgcp-init`.
+- **A ratchet, not a limit.** 58 of 463 functions here are already over cyclomatic complexity 10, so a fixed limit would refuse every commit touching them. Changed code may not get worse on a metric it already fails, and new code must meet the limits.
+- `hook_templates/quality_metrics.py` holds the measurement, stdlib only. The hook imports it and CI runs it as a script against a pull request's base, so one implementation serves both and a commit cannot pass locally and fail in CI for reasons nobody can reproduce.
+- `sync_enforcement_rules` is a new MCP tool, and the only thing that delivers a shipped rule to an install that already has a rules file. It adds by name and only by name: a rule already present keeps every field and its position, because a populated rules file is a customised one and a shipped rule may differ from its default on purpose.
+
+### Changed: the evaluator stopped growing a parameter per input
+- **`_evaluate_precondition` went from 42 cyclomatic complexity to 8.** It was an if-chain over six types that gained a positional parameter for every lazily loaded input, and the four types added here would have made it ten parameters. Each type is now one handler behind a dict, and the git and transcript reads live on one lazy context object.
+- The three ad-hoc git readers are gone with it, about 69 lines, replaced by accessors that cache per tool call. A rule that needs the staged diff costs one subprocess and a rule that needs nothing costs none.
+- `Trigger.tool_names` lets one rule cover Edit, Write and MultiEdit instead of three copies that drift apart.
+- `Trigger` and `Precondition` now set `extra="forbid"`. Every enforcement tool rewrites the whole file from these models, so a field the model does not know was silently dropped on the next write, turning a one-field typo into deleted enforcement.
+
+### Changed: the hook payload version is a plain counter
+- `hook_templates/VERSION` holds `18` and no longer looks like a release. It read `2.17` beside a package version of 3.0.0, which reads as the hooks being a major version behind, and that is how it was read. Its only job is to differ from the marker in `~/.mgcp/hooks/.mgcp-hook-version` so `mgcp-init` re-copies the hooks. Feature names such as v2.11 and v2.16 stay in the documents as historical labels.
+
+### Added: the doctor reports hooks that a pull did not update
+- **`mgcp-init --doctor` now reports a deployed hook payload behind the package, and any missing hook file.** A git pull does not refresh the installed hooks: `settings.json` names copies under `~/.mgcp/hooks` by absolute path, and only `mgcp-init` rewrites them. So new gate code and new rules can sit in the repository while the hook enforcing them is weeks old, and nothing said so.
+
+### Fixed: three defects found by building the gate and running it on itself
+- **The gate refused its own commit, 11 times.** Running the new ratchet against this change reported 11 violations in the code that adds it, including a dispatcher that had got worse rather than better. All of them are fixed, and the change now passes with none.
+- **`fnmatch` cannot express `**`.** `src/**/*.py` did not match a module added directly in `src/`, which is the exact case `new-module-requires-decision` exists to catch. Both glob matchers handle the two `**` forms now.
+- **The transcript rule refused when it could not read the transcript.** A missing `transcript_path` would have blocked every commit that adds a module. It allows and records a skipped row, which is what the hook's own fail-open invariant requires.
+
+### Added: a history replay, so limits are calibrated and not guessed
+- `tests/history_replay.py` runs each gate against the last 200 commits, comparing each to its first parent, and prints refusal counts plus the worst five per gate. Read only: every call is `git -C <repo> show` or `diff`, nothing is checked out.
+- Measured on this repository: the complexity ratchet would refuse 36% of 200 commits, the diff budget 12%, and the `Why:` rule every one of the 81 eligible commits, because no past commit carries that paragraph. Added lines per commit: median 19, maximum 4,933.
+- The ratchet's refusals read as real on inspection, so CC 10 stands as the starting limit rather than being relaxed to fit the code it judges.
+
+### Added: the dashboard separates a projection from an action
+- `/api/gate-audit` and `/api/enforcement/rules` count `would_deny` as its own total, its own daily series and its own per-rule tally, kept apart from real denials everywhere. A rule in audit mode that would have refused 40 commits must never be added to the same number as a rule that refused one.
+- The Enforcement view shows each rule's mode, so a long `would_fire` column reads as a projection from a rule that is refusing nothing.
+
+### Changed
+- The `feature-development` workflow gains `fit` after `plan` and `simplify` after `test`. `bug-fix` gains `simplify`. Existing step IDs are unchanged, because stored workflow state resolves a step by ID.
+- Six lessons added to `bootstrap_data/dev/code-quality.yaml`, one per banned pattern not already covered, and two existing lessons extended.
+- `hook_templates/VERSION` moves to 18. Installed hooks upgrade on the next `mgcp-init` run, and the gates do nothing until then.
+
+
 ### Added: the doctor reports leftover server processes
 - **`mgcp-init --doctor` now lists every running `mgcp.server` with its age and memory.** Reconnecting a client starts a new server and does not stop the old one, so they accumulate one per reconnect and nothing says so. One was found alive for 1 day 23 hours, holding a writable handle on `lessons.db` and 330 MB, most of that a second copy of the embedding model.
 - On the default embedded vector store a leftover also holds the Qdrant directory lock, which permits one client per path. That is the 2026-10-01 failure where all 50 tools broke: a restarted session's old server still held the lock, the three calls the session-start hook requires failed one second apart, and the session ran with no memory and could not save any.

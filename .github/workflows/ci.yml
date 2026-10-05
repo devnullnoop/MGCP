@@ -50,3 +50,60 @@ jobs:
 
       - name: Check formatting
         run: ruff check src/ tests/
+
+  # The complexity ratchet, run against the real base commit of a pull request.
+  # The hook enforces it locally, and a local bypass leaves no trace in the pull
+  # request, so the same module runs here as the second caller.
+  complexity:
+    # Only a pull request carries a base commit. On a push to main there is
+    # nothing to ratchet against, and a guessed base diffs a commit with itself.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The default clone has depth 1. `git show <base>:<path>` then finds
+          # no base blob, the script exits 2, and the step reports nothing while
+          # looking like it ran.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # quality_metrics.py is stdlib only, because the hook that imports it
+      # cannot reach site-packages. So this job installs nothing.
+      - name: Verify the base commit is in the clone
+        # Kept out of the ratchet step on purpose. That step is advisory, so its
+        # exit code is swallowed, and an unresolvable base would read the same
+        # as a clean run. This check is not advisory: a gate that cannot find
+        # its base enforces nothing, which is worse than having no gate.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git rev-parse --verify "$BASE_SHA^{commit}"
+
+      - name: Complexity ratchet against the pull request base
+        # Advisory for the audit period in update_plan.md. The plan promotes a
+        # rule on evidence, so remove continue-on-error once a sample of 10
+        # would_deny events holds refusals a reviewer agrees with.
+        continue-on-error: true
+        env:
+          # The event's base commit, never a branch name. A branch name can
+          # resolve to the same commit as HEAD, which diffs a commit against
+          # itself and passes every time. Read through env rather than
+          # interpolated into the shell line, so a ref name cannot inject.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # These two lists mirror the commit-complexity-ratchet rule in
+          # enforcement.py. If they drift, a commit passes the hook and fails
+          # the pull request for a reason nobody can reproduce locally.
+          python src/mgcp/hook_templates/quality_metrics.py \
+            --base "$BASE_SHA" \
+            --exclude 'tests/**' 'docs/**' '*.md' '**/bootstrap_data/**' \
+            --file-length-exempt 'src/mgcp/server.py' \
+              'src/mgcp/init_project.py' 'src/mgcp/web_server.py' \
+              'src/mgcp/persistence.py' \
+              'src/mgcp/hook_templates/pre-tool-dispatcher.py'

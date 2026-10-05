@@ -344,7 +344,7 @@ mgcp-bootstrap
 mgcp-dashboard
 ```
 
-## MCP Tools (50 total)
+## MCP Tools (51 total)
 
 ### Lesson Discovery (5)
 | Tool | Purpose |
@@ -425,7 +425,7 @@ project settles. You can change the schedules, and the defaults work well.
 | `schedule_reminder` | Schedule self-reminder |
 | `reset_reminder_state` | Clear reminders |
 
-### Enforcement Rules (6)
+### Enforcement Rules (7)
 Data-driven gates for the PreToolUse hook. Edits take effect on the next tool call.
 | Tool | Purpose |
 |------|---------|
@@ -435,6 +435,7 @@ Data-driven gates for the PreToolUse hook. Edits take effect on the next tool ca
 | `update_enforcement_rule` | Change fields on an existing rule |
 | `remove_enforcement_rule` | Delete a rule |
 | `toggle_enforcement_rule` | Enable/disable without deleting |
+| `sync_enforcement_rules` | Add shipped rules this install does not have, by name. Add only, so a rule you changed is never reverted |
 
 ### Gate Adjudication (1)
 The apology gate's second exit: contest a tripwire fire on the record instead of being hard-blocked.
@@ -559,7 +560,7 @@ The enforcing hook is a general-purpose rule reader. Rules live in
 
 A trigger matches a tool name, and for Bash it can also match the command. The
 three command matchers are `git_subcommand`, `regex`, and `contains`. A
-precondition is one of six checks: a tool was called in this message, a tool was
+precondition is one of ten checks: a tool was called in this message, a tool was
 not called, the staged files require a matching file (for example, a change under
 `src/` requires a change to `CHANGELOG.md`), a tool input matches a path you want
 to protect, a staged file path is refused outright, or the staged text matches a
@@ -573,6 +574,20 @@ it, which is why one check reads the text. Both read only the lines a commit
 ADDS, so neither can refuse the commit that cleans the problem up. The patterns
 live in `~/.mgcp/enforcement_rules.json`, which is not in this repository, so a
 list of private names is never published to find them by.
+
+Four more arrived with the structured coding gates, described in
+[docs/structured-coding-gates.md](docs/structured-coding-gates.md). They check
+the size of a change, the complexity of the Python it stages, the content of the
+commit message, and whether a decision was recorded in this session. Every one
+of them ships switched off and in audit mode, which records what a rule would
+have refused and refuses nothing. Two numbers say why that matters: over this
+repository's last 200 commits the complexity rule would have refused 36%, and
+the commit-message rule would have refused every eligible commit, because the
+`Why:` paragraph it asks for is a new convention that no past commit follows.
+Run `python tests/history_replay.py` to see those numbers for yourself, read the
+recorded rows in the dashboard's Enforcement view, and turn a rule on with
+`sync_enforcement_rules` and `update_enforcement_rule` when its refusals are
+ones you agree with.
 
 A bypass scope is a short word the user can name in
 `MGCP_BYPASS:<scope>` to switch off that one rule for one message. Plain

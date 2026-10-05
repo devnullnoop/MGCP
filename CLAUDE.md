@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **MGCP** (Memory Graph Core Primitives) is a Python MCP server providing persistent, graph-based memory for LLM interactions. The system stores lessons learned during LLM sessions in a graph structure, allowing semantic querying without loading full context histories.
 
-**Status**: Alpha/Research project. Package version 3.0.0 (`pyproject.toml`, `mgcp.__version__`); the hook/feature line is versioned separately and sits at v2.17 (`src/mgcp/hook_templates/VERSION`, which is authoritative; this line has three times been written stale in the same commit that bumped it), and v2.2 through v3.0 is released under CHANGELOG `[3.0.0]`. Phases 1-7 complete plus v3 multi-session (Qdrant server mode, compare-and-swap writes, shared embedding daemon). Embedded single-session remains the default and MGCP needs no server, daemon or container. Actively dogfooding. Phase 8's plan of moving lessons out of `query_lessons` into compiled skill prompts was dropped, because it made retrieval less reliable. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
+**Status**: Alpha/Research project. Package version 3.0.0 (`pyproject.toml`, `mgcp.__version__`); the deployed hook payload is counted separately in `src/mgcp/hook_templates/VERSION`, which now holds a plain counter and reads **18**. It is not a release number. Its only job is to differ from the marker in `~/.mgcp/hooks/.mgcp-hook-version` so `mgcp-init` re-copies the hooks, and it changes when a hook changes rather than when the package does. It used to be written as `2.17`, which read as a release a major version behind 3.0.0 and caused exactly that confusion. Feature names like v2.11 and v2.16 stay in the documents as historical labels for when something shipped, and v2.2 through v3.0 is released under CHANGELOG `[3.0.0]`. Phases 1-7 complete plus v3 multi-session (Qdrant server mode, compare-and-swap writes, shared embedding daemon). Embedded single-session remains the default and MGCP needs no server, daemon or container. Actively dogfooding. Phase 8's plan of moving lessons out of `query_lessons` into compiled skill prompts was dropped, because it made retrieval less reliable. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
 
 ## Documentation Preferences
 
@@ -94,7 +94,7 @@ The system flows from Claude/LLM through MCP Protocol to the MGCP Server, which 
 
 All source files are in `src/mgcp/`:
 
-- `server.py` - MCP server with 50 tools
+- `server.py` - MCP server with 51 tools
 - `models.py` - Pydantic models (Lesson, ProjectContext, ProjectCatalogue, SecurityNote, Convention, etc.)
 - `graph.py` - NetworkX graph operations with typed relationships and Louvain community detection
 - `embedding.py` - Centralized BGE embedding model (`BAAI/bge-base-en-v1.5`); daemon-first with an in-process fallback
@@ -109,7 +109,7 @@ All source files are in `src/mgcp/`:
 - `launcher.py` - Unified CLI launcher
 - `bootstrap.py` - Initial lesson seeding
 - `migration.py` - Rebuilds the Qdrant index from SQLite
-- `init_project.py` - Multi-client MCP configuration (8 LLM clients supported). `--doctor` also reports leftover `mgcp.server` processes: reconnecting a client starts a new server without stopping the old one, so they accumulate one per reconnect, and a leftover holds a writable handle on `lessons.db` plus around 330 MB. On embedded Qdrant it holds the directory lock too, which is the 2026-10-01 failure where all 50 tools broke. The process filter requires the command's executable to be a python interpreter, because matching the module name alone counted shell wrappers whose command line merely mentions it and reported 4 servers for 2.
+- `init_project.py` - Multi-client MCP configuration (8 LLM clients supported). `--doctor` also reports leftover `mgcp.server` processes: reconnecting a client starts a new server without stopping the old one, so they accumulate one per reconnect, and a leftover holds a writable handle on `lessons.db` plus around 330 MB. On embedded Qdrant it holds the directory lock too, which is the 2026-10-01 failure where every tool broke. The process filter requires the command's executable to be a python interpreter, because matching the module name alone counted shell wrappers whose command line merely mentions it and reported 4 servers for 2.
 - `data_ops.py` - Export, import, and duplicate detection
 - `rem_cycle.py` - REM (Recalibrate Everything in Memory) cycle engine
 - `rem_config.py` - REM scheduling strategies (linear, fibonacci, logarithmic)
@@ -141,7 +141,7 @@ built-in directory.
 the graph, and telemetry. `_ensure_vector_stores` opens Qdrant the first time one of the ten
 tools that need it asks, and raises `VectorStoreUnavailableError` naming the process holding the
 lock and the `mgcp-qdrant setup` remedy. The two used to share one `try` block, so a lock held by
-another process failed all 50 tools. That included `read_soliloquy` and `get_project_context`,
+another process failed all 51 tools. That included `read_soliloquy` and `get_project_context`,
 which need no search at all, so a session that started while a previous session's server was
 still running could neither load its memory nor save it. Writes now continue instead of failing,
 because `add_lesson` is the only exit from the apology gate, and `_ensure_vector_stores` adds
@@ -179,7 +179,7 @@ unchanged.
 - Decisions with rationale
 - Error patterns with solutions
 
-### MCP Tools (50 total)
+### MCP Tools (51 total)
 
 **Lesson Discovery & Retrieval (5):**
 - `query_lessons` - Semantic search for relevant lessons
@@ -292,13 +292,14 @@ cwd. Entries written before tagging existed carry no project tag and read as
 **Gate Adjudication (1):** The apology gate's second exit (v2.11).
 - `adjudicate_apology_gate` - Contest or confirm a gate fire on the record: flagged sentence + verdict + reasoning (>=20 chars) appended to `~/.mgcp/gate_audit.jsonl`; verdict `not_apology` opens the gate for the current turn, `apology` keeps it shut until `add_lesson`
 
-**Enforcement Rules (6):** Data-driven PreToolUse gates stored in `~/.mgcp/enforcement_rules.json`. Edits take effect on the next tool call.
+**Enforcement Rules (7):** Data-driven PreToolUse gates stored in `~/.mgcp/enforcement_rules.json`. Edits take effect on the next tool call.
 - `list_enforcement_rules` - List all rules with enabled/disabled status and trigger
 - `get_enforcement_rule` - Full JSON definition of one rule
 - `add_enforcement_rule` - Add a rule: `trigger` dict, `preconditions` list, `bypass_scope`, `deny_reason`
 - `update_enforcement_rule` - Change fields on an existing rule
 - `remove_enforcement_rule` - Delete a rule by name
 - `toggle_enforcement_rule` - Enable/disable without deleting
+- `sync_enforcement_rules` - Add shipped rules this install does not have, by name. Add only: a rule already present keeps every field and its position, because a populated rules file is a customised one. Nothing else delivered a rule added after your install, since the defaults seed on first install only. Rules that arrive this way are disabled and in audit mode.
 
 ## Web UI
 
@@ -412,7 +413,9 @@ The dispatcher falls back to a minimal hard-coded intent set if the JSON file is
 }
 ```
 
-Trigger `command_match.type` ∈ {`git_subcommand`, `regex`, `contains`}. Precondition `type` ∈ {`tool_called_this_turn`, `tool_not_called_this_turn`, `staged_files_coupling`, `tool_input_glob`, `staged_files_forbid`, `staged_content_forbid`}. The staged-file coupling type takes `couplings: [{"when_staged": [glob,...], "require_one_of": [glob,...]}]`. If any staged file matches `when_staged`, at least one must match `require_one_of` or the tool call is denied. Use it to enforce doc-coupling, test-coupling, or changelog discipline on commits. **The last two keep things out of a public history (v2.17).** `staged_files_forbid` takes `deny_globs` and denies when a staged path matches one, asking for nothing in return, unlike `staged_files_coupling`. `staged_content_forbid` takes `patterns`, a list of regular expressions, and is the only type that reads content rather than paths. That is what a private name or an absolute home directory needs, because both arrive inside a sentence rather than as a filename. Both read only what the commit ADDS: `git diff --cached --name-only` lists deletions and the added-lines filter exists for the same reason, so neither rule can refuse the commit that cleans the offending thing up. That bug was found while committing the removal of 1.7 MB of research output, where 11 deleted paths still read as staged. An unreadable diff or an invalid pattern is skipped. Put the patterns in `~/.mgcp/enforcement_rules.json` and not in the repository, so a list of private names is never itself published; `no-private-identifiers` and `no-research-row-output` are the two rules that use them, and claim test C35 checks the home-path half without needing the list. The `tool_input_glob` type takes `field` (which `tool_input` key to read) and `deny_globs`, and denies when any glob matches that field. Use it to gate Edit/Write against sensitive paths (settings.json, secrets) or to gate URL targets on web fetches. It fails open on a missing field or a non-string value.
+Trigger `command_match.type` ∈ {`git_subcommand`, `regex`, `contains`}. `Trigger.tool_names` lets one rule cover several tools, and a hook that predates the field sees `tool_name` `""`, which matches nothing, so such a rule is inert rather than universal on an older install. Precondition `type` ∈ {`tool_called_this_turn`, `tool_not_called_this_turn`, `staged_files_coupling`, `tool_input_glob`, `staged_files_forbid`, `staged_content_forbid`, `diff_budget`, `staged_python_complexity`, `commit_message_requires`, `transcript_tool_called`}.
+
+**The last four are the structured coding gates (payload 18).** See [docs/structured-coding-gates.md](docs/structured-coding-gates.md) for the design, the six things a pre-build review changed about it, and the history replay that calibrated the limits. Three points carry the most weight. `EnforcementRule.mode` is `audit` or `enforce`, and an audit rule writes a `would_deny` row and allows the call; every new rule ships in audit mode AND disabled, because `mode` is a key an older deployed hook ignores rather than rejecting, which is the state after a pull and before `mgcp-init`. `enforcement.merge_missing_defaults` is the only thing that delivers a shipped rule to an install that already has a rules file, it adds by name and only by name, and it enables an audit rule only once the deployed hook payload matches the package, because a disabled rule writes no rows and would never be promoted. The metric code in `hook_templates/quality_metrics.py` is imported inside its handler and never at module level: at module level an ImportError is raised before `main`'s handler exists, the hook exits 1 with empty output, and the harness reads that as allow, so one missing file would take all ten rules dark. The staged-file coupling type takes `couplings: [{"when_staged": [glob,...], "require_one_of": [glob,...]}]`. If any staged file matches `when_staged`, at least one must match `require_one_of` or the tool call is denied. Use it to enforce doc-coupling, test-coupling, or changelog discipline on commits. **The last two keep things out of a public history (v2.17).** `staged_files_forbid` takes `deny_globs` and denies when a staged path matches one, asking for nothing in return, unlike `staged_files_coupling`. `staged_content_forbid` takes `patterns`, a list of regular expressions, and is the only type that reads content rather than paths. That is what a private name or an absolute home directory needs, because both arrive inside a sentence rather than as a filename. Both read only what the commit ADDS: `git diff --cached --name-only` lists deletions and the added-lines filter exists for the same reason, so neither rule can refuse the commit that cleans the offending thing up. That bug was found while committing the removal of 1.7 MB of research output, where 11 deleted paths still read as staged. An unreadable diff or an invalid pattern is skipped. Put the patterns in `~/.mgcp/enforcement_rules.json` and not in the repository, so a list of private names is never itself published; `no-private-identifiers` and `no-research-row-output` are the two rules that use them, and claim test C35 checks the home-path half without needing the list. The `tool_input_glob` type takes `field` (which `tool_input` key to read) and `deny_globs`, and denies when any glob matches that field. Use it to gate Edit/Write against sensitive paths (settings.json, secrets) or to gate URL targets on web fetches. It fails open on a missing field or a non-string value.
 
 **Committed prose has a style, and a rule that checks one part of it.** Everything written
 into this repository follows ASD-STE100 and the Google developer documentation style guide: one

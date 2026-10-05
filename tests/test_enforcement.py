@@ -148,3 +148,147 @@ def test_no_default_rule_message_contains_an_em_dash():
         for field in ("description", "deny_reason"):
             text = getattr(rule, field) or ""
             assert "—" not in text, f"{rule.name}.{field} contains an em dash"
+
+
+class TestMergeMissingDefaults:
+    """Delivery of shipped rules to an install that already has a rules file.
+
+    Nothing else does this. load_config returns the defaults only when the file
+    is MISSING, and the one other writer seeds on first install behind a check
+    for a missing file, so an operator who installed a week ago never receives a
+    rule shipped since. update_plan.md named mgcp-bootstrap as the channel and
+    bootstrap has no enforcement code at all.
+    """
+
+    @staticmethod
+    def _existing(tmp_path, rules):
+        path = tmp_path / "enforcement_rules.json"
+        path.write_text(json.dumps({"version": 1, "rules": rules}))
+        return path
+
+    @staticmethod
+    def _custom(name, enabled=True):
+        return {
+            "name": name, "description": "the operator wrote this",
+            "enabled": enabled,
+            "trigger": {"tool_name": "Bash", "tool_names": [],
+                        "command_match": {"type": "contains", "subcommands": [],
+                                          "pattern": "rm -rf"}},
+            "preconditions": [{"type": "tool_called_this_turn",
+                               "tool_name": "mcp__mgcp__query_lessons",
+                               "couplings": [], "field": "", "deny_globs": [],
+                               "patterns": [], "exclude_globs": [],
+                               "max_added_lines": 0, "max_files": 0, "limits": {},
+                               "banned": [], "file_length_exempt": [],
+                               "min_added_lines": 0, "pattern": "",
+                               "input_match": {}, "when_staged_added": []}],
+            "bypass_scope": "mine", "deny_reason": "mine", "mode": "enforce",
+        }
+
+    def test_it_adds_only_what_is_absent(self, tmp_path):
+        from mgcp.enforcement import DEFAULT_RULES, STRUCTURE_RULES, merge_missing_defaults
+
+        path = self._existing(tmp_path, [self._custom("my-own-rule")])
+        result = merge_missing_defaults(path)
+        expected = len(DEFAULT_RULES) + len(STRUCTURE_RULES)
+        assert len(result["added"]) == expected
+        assert result["kept"] == 1
+
+    def test_a_rule_already_present_is_never_touched(self, tmp_path):
+        """A populated file is a customised file.
+
+        A shipped rule may be disabled, retuned or renamed on purpose, and
+        overwriting it by name would silently revert that.
+        """
+        from mgcp.enforcement import DEFAULT_RULES, merge_missing_defaults
+
+        shipped = DEFAULT_RULES[0].model_dump()
+        shipped["enabled"] = False                 # the operator turned it off
+        shipped["deny_reason"] = "my own wording"  # and rewrote the message
+        path = self._existing(tmp_path, [shipped])
+
+        merge_missing_defaults(path)
+        after = json.loads(path.read_text())["rules"]
+        assert after[0]["enabled"] is False
+        assert after[0]["deny_reason"] == "my own wording"
+        assert after[0]["name"] == DEFAULT_RULES[0].name
+
+    def test_existing_rules_keep_their_order_and_stay_first(self, tmp_path):
+        from mgcp.enforcement import merge_missing_defaults
+
+        names = ["alpha", "beta", "gamma"]
+        path = self._existing(tmp_path, [self._custom(n) for n in names])
+        merge_missing_defaults(path)
+        after = [r["name"] for r in json.loads(path.read_text())["rules"]]
+        assert after[:3] == names
+
+    def test_it_is_idempotent(self, tmp_path):
+        from mgcp.enforcement import merge_missing_defaults
+
+        path = self._existing(tmp_path, [self._custom("mine")])
+        first = merge_missing_defaults(path)
+        assert first["added"]
+        second = merge_missing_defaults(path)
+        assert second["added"] == []
+
+    def test_every_structure_rule_ships_in_audit_mode(self, tmp_path):
+        """A wrong limit must cost a log row, not a blocked session."""
+        from mgcp.enforcement import STRUCTURE_RULES
+
+        for rule in STRUCTURE_RULES:
+            assert rule.mode == "audit", rule.name
+            assert rule.enabled is False, rule.name
+
+    def test_audit_rules_stay_off_when_the_deployed_hook_is_old(
+        self, tmp_path, monkeypatch
+    ):
+        """mode is a key an older hook has never heard of.
+
+        An unknown key there is neither a parse error nor a fail-open: it is
+        ignored and the rule enforces. That is the state after a git pull and
+        before mgcp-init, so an audit rule must not be enabled then.
+        """
+        import mgcp.enforcement as enf
+
+        monkeypatch.setattr(enf, "_deployed_hook_is_current",
+                            lambda: (False, "installed payload is 2.17"))
+        path = self._existing(tmp_path, [self._custom("mine")])
+        result = enf.merge_missing_defaults(path)
+        assert result["enabled"] == []
+        by_name = {r["name"]: r for r in json.loads(path.read_text())["rules"]}
+        # Only the audit-mode structure rules stay off. The four original gates
+        # are established enforcing rules and arrive enabled, which is correct.
+        for rule in enf.STRUCTURE_RULES:
+            assert by_name[rule.name]["enabled"] is False, rule.name
+        assert "2.17" in result["hook_detail"]
+
+    def test_audit_rules_turn_on_when_the_hook_is_current(self, tmp_path, monkeypatch):
+        """A disabled rule records nothing, so it would never be promoted.
+
+        Once the installed hook honours audit mode, enabling is safe: the rule
+        refuses nothing and writes the would_deny rows the promotion decision
+        needs.
+        """
+        import mgcp.enforcement as enf
+
+        monkeypatch.setattr(enf, "_deployed_hook_is_current",
+                            lambda: (True, "payload matches"))
+        path = self._existing(tmp_path, [self._custom("mine")])
+        result = enf.merge_missing_defaults(path)
+        assert set(result["enabled"]) == {r.name for r in enf.STRUCTURE_RULES}
+
+        by_name = {r["name"]: r for r in json.loads(path.read_text())["rules"]}
+        for rule in enf.STRUCTURE_RULES:
+            assert by_name[rule.name]["enabled"] is True
+            assert by_name[rule.name]["mode"] == "audit"
+        # The operator's own rule is untouched either way.
+        assert by_name["mine"]["enabled"] is True
+
+    def test_a_file_that_does_not_parse_is_never_overwritten(self, tmp_path):
+        path = tmp_path / "enforcement_rules.json"
+        path.write_text("{not json")
+        from mgcp.enforcement import merge_missing_defaults
+
+        with pytest.raises(Exception):
+            merge_missing_defaults(path)
+        assert path.read_text() == "{not json"

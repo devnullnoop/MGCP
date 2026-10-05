@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -941,6 +942,7 @@ async def intent_skill_status_api(name: str, scope: str = "user") -> dict[str, A
 
 BRIDGED_SENTINEL = 0.0
 DEFAULT_MISS_THRESHOLD = 0.45
+_ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def _gate_audit_path() -> Path:
@@ -965,6 +967,31 @@ def _read_gate_audit() -> list[dict[str, Any]]:
         if isinstance(entry, dict):
             rows.append(entry)
     return rows
+
+
+def _rule_names(row: dict[str, Any]) -> list[str]:
+    """The rule names one audit row blames.
+
+    A real denial names every rule that refused the call in `rules`, because
+    one tool call is refused once for all of them. An audit-mode row concerns
+    the single rule that would have refused, and the hook may write that as
+    `rule`. Reading one key only is how a per-rule tally reads zero while the
+    log holds the rows.
+    """
+    names = row.get("rules")
+    if isinstance(names, list):
+        return [n for n in names if isinstance(n, str)]
+    one = row.get("rule")
+    return [one] if isinstance(one, str) else []
+
+
+def _tally_rules(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Count audit rows per rule name. The caller decides the order."""
+    tally: dict[str, int] = {}
+    for row in rows:
+        for name in _rule_names(row):
+            tally[name] = tally.get(name, 0) + 1
+    return tally
 
 
 async def _retrieval_pairs() -> list[dict[str, Any]]:
@@ -1209,25 +1236,35 @@ async def get_lesson_effectiveness() -> list[dict[str, Any]]:
 
 @app.get("/api/gate-audit")
 async def get_gate_audit(limit: int = 400) -> dict[str, Any]:
-    """Enforcement activity: what fired, what it cost, what was contested."""
+    """Enforcement activity: what fired, what it cost, what was contested.
+
+    A rule in audit mode allows the call and logs the refusal it would have
+    made, as `would_deny`. That projection is kept apart from a real denial in
+    every figure below. A rule that would have refused 40 commits and a rule
+    that refused one commit are different facts, and one number holding both
+    would decide the promote-or-retune call on a figure nobody can read back.
+    """
     await ensure_initialized()
     rows = _read_gate_audit()
     denials = [r for r in rows if r.get("event") == "deny"]
+    projections = [r for r in rows if r.get("event") == "would_deny"]
     complies = [r for r in rows if r.get("event") == "comply"]
     adjudications = [r for r in rows if r.get("event") == "adjudication"]
 
-    rule_fires: dict[str, int] = {}
-    for r in denials:
-        for name in (r.get("rules") or []):
-            rule_fires[name] = rule_fires.get(name, 0) + 1
+    rule_fires = _tally_rules(denials)
+    rule_would_fire = _tally_rules(projections)
 
     per_day: dict[str, dict[str, int]] = {}
     for r in rows:
         day = (r.get("ts") or "")[:10]
-        if not day:
+        # The day becomes a chart label, and the tooltip builds it into
+        # innerHTML. A row's `ts` is whatever the hook appended, so anything
+        # that is not an ISO date is dropped here rather than escaped later.
+        if not _ISO_DAY.fullmatch(day):
             continue
-        slot = per_day.setdefault(day, {"day": day, "deny": 0, "comply": 0,
-                                        "adjudication": 0, "human_bypass": 0})
+        slot = per_day.setdefault(day, {"day": day, "deny": 0, "would_deny": 0,
+                                        "comply": 0, "adjudication": 0,
+                                        "human_bypass": 0})
         event = r.get("event")
         if event in slot:
             slot[event] += 1
@@ -1240,6 +1277,8 @@ async def get_gate_audit(limit: int = 400) -> dict[str, Any]:
         "totals": {
             "entries": len(rows),
             "deny": len(denials),
+            "would_deny": len(projections),
+            "audit_rules_projecting": len(rule_would_fire),
             "comply": len(complies),
             "adjudication": len(adjudications),
             "human_bypass": sum(1 for r in rows if r.get("event") == "human_bypass"),
@@ -1249,6 +1288,9 @@ async def get_gate_audit(limit: int = 400) -> dict[str, Any]:
         },
         "rule_fires": [{"rule": k, "fires": v}
                        for k, v in sorted(rule_fires.items(), key=lambda kv: -kv[1])],
+        "rule_would_fire": [{"rule": k, "would_fire": v}
+                            for k, v in sorted(rule_would_fire.items(),
+                                               key=lambda kv: -kv[1])],
         "tools_denied": [{"tool": k, "denials": v}
                          for k, v in sorted(tools.items(), key=lambda kv: -kv[1])],
         "per_day": [per_day[d] for d in sorted(per_day)],
@@ -1266,17 +1308,19 @@ async def get_enforcement_rules_api() -> list[dict[str, Any]]:
     """Live rules, each with how often it has actually denied something.
 
     A rule that has never fired is either dead or mis-triggered, and the audit
-    log alone cannot tell you which — so the count is shown, not judged.
+    log alone cannot tell you which, so the count is shown, not judged.
+
+    `mode` comes from the rule, and it changes what `fires` and `would_fire`
+    mean. A rule in audit mode refuses nothing, so its `fires` is 0 by
+    construction and its `would_fire` is the projection the promotion decision
+    reads. The two counts never merge.
     """
     await ensure_initialized()
     from .enforcement import load_config
 
-    fires: dict[str, int] = {}
-    for r in _read_gate_audit():
-        if r.get("event") != "deny":
-            continue
-        for name in (r.get("rules") or []):
-            fires[name] = fires.get(name, 0) + 1
+    rows = _read_gate_audit()
+    fires = _tally_rules([r for r in rows if r.get("event") == "deny"])
+    would_fire = _tally_rules([r for r in rows if r.get("event") == "would_deny"])
     try:
         config = load_config()
     except (json.JSONDecodeError, ValueError) as exc:
@@ -1286,11 +1330,13 @@ async def get_enforcement_rules_api() -> list[dict[str, Any]]:
         {
             "name": rule.name,
             "enabled": rule.enabled,
+            "mode": rule.mode,
             "bypass_scope": rule.bypass_scope,
             "deny_reason": rule.deny_reason,
             "trigger": rule.trigger.model_dump(),
             "preconditions": [p.model_dump() for p in rule.preconditions],
             "fires": fires.get(rule.name, 0),
+            "would_fire": would_fire.get(rule.name, 0),
         }
         for rule in config.rules
     ]

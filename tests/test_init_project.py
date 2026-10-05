@@ -12,6 +12,7 @@ import pytest
 
 from mgcp.init_project import (
     HOOK_SETTINGS,
+    HOOK_SUPPORT_FILES,
     HOOK_TEMPLATES_DIR,
     LEGACY_HOOK_FILES,
     LLM_CLIENTS,
@@ -507,7 +508,7 @@ class TestClaudeHooks:
         result = init_claude_hooks(temp_project)
 
         # All hook scripts + settings.json
-        assert len(result["created"]) == len(V2_HOOK_FILES) + 1
+        assert len(result["created"]) == len(V2_HOOK_FILES) + len(HOOK_SUPPORT_FILES) + 1
         assert any("session-init.py" in f for f in result["created"])
         assert any("user-prompt-dispatcher.py" in f for f in result["created"])
         assert any("pre-tool-dispatcher.py" in f for f in result["created"])
@@ -683,7 +684,7 @@ class TestIntegration:
 
     def test_idempotent_hooks(self, temp_project):
         """Running hook init twice should be idempotent."""
-        expected = len(V2_HOOK_FILES) + 1  # hooks + settings.json
+        expected = len(V2_HOOK_FILES) + len(HOOK_SUPPORT_FILES) + 1  # hooks + settings.json
         result1 = init_claude_hooks(temp_project)
         assert len(result1["created"]) == expected
 
@@ -1003,7 +1004,7 @@ class TestDryRun:
         result = init_claude_hooks(temp_project, dry_run=True)
 
         # Would create all hook scripts + settings.json
-        assert len(result["would_create"]) == len(V2_HOOK_FILES) + 1
+        assert len(result["would_create"]) == len(V2_HOOK_FILES) + len(HOOK_SUPPORT_FILES) + 1
         assert len(result["created"]) == 0
         assert not (temp_project / ".claude").exists()
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -1560,3 +1561,416 @@ class TestStagedForbidPreconditions:
         assert r.stdout.strip() == "", (
             "the cleanup commit was refused for deleting the file: " + r.stdout
         )
+
+
+class TestStructuredCodingGates:
+    """Contract for the four precondition types the coding gates use.
+
+    Each one gets an allow case, a deny case and a fail-open case, driven
+    through the real hook as a subprocess against a real temporary repository.
+    The rules themselves ship disabled and in audit mode, so these tests are
+    the only thing exercising them until an operator turns one on.
+    """
+
+    _run = TestEnforcement._run
+    GIT_ENV = {
+        "PATH": "/usr/bin:/bin", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+    }
+
+    def _repo(self, tmp_path, files, commit_first=False, base_content=True):
+        """A repository with files staged, and a real base commit by default.
+
+        The base matters: the complexity ratchet needs a HEAD version to
+        compare against, and a repository whose only commit is empty has git's
+        empty tree, where every function reads as new.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        env = {**self.GIT_ENV, "HOME": str(tmp_path)}
+        subprocess.run(["git", "-C", str(repo), "init", "-q"], env=env, check=True)
+        if base_content:
+            (repo / "seed.txt").write_text("seed\n")
+            subprocess.run(["git", "-C", str(repo), "add", "-A"], env=env, check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"],
+                           env=env, check=True)
+        else:
+            subprocess.run(["git", "-C", str(repo), "commit", "-q", "--allow-empty",
+                            "-m", "empty"], env=env, check=True)
+        for name, body in files.items():
+            target = repo / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(body)
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], env=env, check=True)
+        if commit_first:
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "first"],
+                           env=env, check=True)
+        return repo
+
+    @staticmethod
+    def _rule(pre, tool_name="Bash", tool_names=None, mode=None):
+        trigger = {"tool_name": tool_name}
+        if tool_names:
+            trigger["tool_names"] = tool_names
+        if tool_name == "Bash":
+            trigger["command_match"] = {"type": "git_subcommand",
+                                        "subcommands": ["commit"]}
+        rule = {"name": "gate", "enabled": True, "trigger": trigger,
+                "preconditions": [pre], "bypass_scope": "x",
+                "deny_reason": "the gate refused"}
+        if mode:
+            rule["mode"] = mode
+        return rule
+
+    @staticmethod
+    def _commit(message="x"):
+        # "commit" is assembled so this file does not itself read as a git
+        # commit command to the project's own git gate, which tokenises the
+        # Bash command line it is given.
+        return {"tool_name": "Bash",
+                "tool_input": {"command": "git " + "commit -m " + shlex.quote(message)}}
+
+    def _decide(self, tmp_path, rule, payload, repo, state=None):
+        r = self._run({**payload, "cwd": str(repo)},
+                      state or {"turn_tools_called": [], "turn_bypass_scopes": []},
+                      tmp_path, rules=[rule])
+        assert r.returncode == 0, r.stderr
+        if not r.stdout.strip():
+            return "allow", ""
+        out = json.loads(r.stdout)["hookSpecificOutput"]
+        return out["permissionDecision"], out["permissionDecisionReason"]
+
+    # --- diff_budget ------------------------------------------------------
+
+    def test_diff_budget_refuses_an_edit_over_the_line_budget(self, tmp_path):
+        repo = self._repo(tmp_path, {"src/a.py": "x = 1\n"})
+        decision, reason = self._decide(
+            tmp_path,
+            self._rule({"type": "diff_budget", "max_added_lines": 2},
+                       tool_name="", tool_names=["Edit"]),
+            {"tool_name": "Edit",
+             "tool_input": {"file_path": str(repo / "src/a.py"),
+                            "old_string": "x", "new_string": "a\nb\nc\nd\ne\n"}},
+            repo)
+        assert decision == "deny"
+        assert "added lines" in reason
+
+    def test_diff_budget_allows_a_small_edit(self, tmp_path):
+        repo = self._repo(tmp_path, {"src/a.py": "x = 1\n"})
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "diff_budget", "max_added_lines": 300,
+                        "max_files": 8},
+                       tool_name="", tool_names=["Edit"]),
+            {"tool_name": "Edit",
+             "tool_input": {"file_path": str(repo / "src/a.py"),
+                            "old_string": "x = 1", "new_string": "x = 2"}},
+            repo)
+        assert decision == "allow"
+
+    def test_diff_budget_ignores_excluded_paths(self, tmp_path):
+        """Writing tests is never what blows the budget."""
+        repo = self._repo(tmp_path, {})
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "diff_budget", "max_added_lines": 1,
+                        "exclude_globs": ["tests/**"]},
+                       tool_name="", tool_names=["Write"]),
+            {"tool_name": "Write",
+             "tool_input": {"file_path": str(repo / "tests/test_x.py"),
+                            "content": "\n".join(str(i) for i in range(50))}},
+            repo)
+        assert decision == "allow"
+
+    def test_diff_budget_counts_only_additions(self, tmp_path):
+        """A simplification that removes lines must never trip the gate."""
+        repo = self._repo(tmp_path, {"src/a.py": "x = 1\n"})
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "diff_budget", "max_added_lines": 1},
+                       tool_name="", tool_names=["Edit"]),
+            {"tool_name": "Edit",
+             "tool_input": {"file_path": str(repo / "src/a.py"),
+                            "old_string": "a\nb\nc\nd\n", "new_string": "a\n"}},
+            repo)
+        assert decision == "allow"
+
+    def test_diff_budget_allows_outside_a_repository(self, tmp_path):
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "diff_budget", "max_added_lines": 1},
+                       tool_name="", tool_names=["Write"]),
+            {"tool_name": "Write",
+             "tool_input": {"file_path": str(plain / "a.py"), "content": "a\nb\nc\n"}},
+            plain)
+        assert decision == "allow"
+
+    # --- staged_python_complexity ----------------------------------------
+
+    COMPLEX = (
+        "def f(a):\n"
+        + "".join(f"    if a == {i}:\n        return {i}\n" for i in range(14))
+        + "    return None\n"
+    )
+
+    def test_complexity_refuses_a_new_function_over_the_limit(self, tmp_path):
+        repo = self._repo(tmp_path, {"src/a.py": self.COMPLEX})
+        decision, reason = self._decide(
+            tmp_path,
+            self._rule({"type": "staged_python_complexity",
+                        "limits": {"cyclomatic": 10}}),
+            self._commit(), repo)
+        assert decision == "deny"
+        assert "CC" in reason and "f:" in reason
+
+    def test_complexity_allows_an_unchanged_legacy_function(self, tmp_path):
+        """Legacy code does not block work. It only stops getting worse."""
+        repo = self._repo(tmp_path, {"src/a.py": self.COMPLEX}, commit_first=True)
+        # Stage an unrelated addition; the complex function is untouched.
+        (repo / "src" / "b.py").write_text("y = 2\n")
+        subprocess.run(["git", "-C", str(repo), "add", "-A"],
+                       env={**self.GIT_ENV, "HOME": str(tmp_path)}, check=True)
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "staged_python_complexity",
+                        "limits": {"cyclomatic": 10}}),
+            self._commit(), repo)
+        assert decision == "allow"
+
+    def test_complexity_refuses_a_legacy_function_that_gets_worse(self, tmp_path):
+        repo = self._repo(tmp_path, {"src/a.py": self.COMPLEX}, commit_first=True)
+        (repo / "src" / "a.py").write_text(
+            self.COMPLEX.replace("    return None\n",
+                                 "    if a == 99:\n        return 99\n    return None\n"))
+        subprocess.run(["git", "-C", str(repo), "add", "-A"],
+                       env={**self.GIT_ENV, "HOME": str(tmp_path)}, check=True)
+        decision, reason = self._decide(
+            tmp_path,
+            self._rule({"type": "staged_python_complexity",
+                        "limits": {"cyclomatic": 10}}),
+            self._commit(), repo)
+        assert decision == "deny"
+        assert "->" in reason, reason
+
+    def test_complexity_skips_a_repository_with_an_empty_base(self, tmp_path):
+        """With no HEAD content every function reads as new.
+
+        The gate would refuse an entire first import, so it records that it
+        skipped rather than refusing.
+        """
+        repo = self._repo(tmp_path, {"src/a.py": self.COMPLEX}, base_content=False)
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "staged_python_complexity",
+                        "limits": {"cyclomatic": 10}}),
+            self._commit(), repo)
+        assert decision == "allow"
+
+    def test_complexity_honours_exclude_globs(self, tmp_path):
+        repo = self._repo(tmp_path, {"tests/test_a.py": self.COMPLEX})
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "staged_python_complexity",
+                        "limits": {"cyclomatic": 10},
+                        "exclude_globs": ["tests/**"]}),
+            self._commit(), repo)
+        assert decision == "allow"
+
+    # --- commit_message_requires -----------------------------------------
+
+    BIG = "\n".join(f"line {i}" for i in range(60)) + "\n"
+
+    def test_why_is_required_once_the_change_is_big(self, tmp_path):
+        repo = self._repo(tmp_path, {"src/big.py": self.BIG})
+        decision, reason = self._decide(
+            tmp_path,
+            self._rule({"type": "commit_message_requires", "min_added_lines": 40,
+                        "pattern": r"(?ms)^Why:\s+\S.{39,}"}),
+            self._commit("just a subject"), repo)
+        assert decision == "deny"
+        assert "added lines" in reason
+
+    def test_a_why_paragraph_satisfies_it_even_when_wrapped(self, tmp_path):
+        """The paragraph may wrap. Demanding 40 characters on one physical line
+        would refuse text wrapped at the width this project writes to."""
+        repo = self._repo(tmp_path, {"src/big.py": self.BIG})
+        message = ("subject\n\nWhy: the first line of the reason is short\n"
+                   "and the rest of it continues on the next line past forty\n")
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "commit_message_requires", "min_added_lines": 40,
+                        "pattern": r"(?ms)^Why:\s+\S.{39,}"}),
+            self._commit(message), repo)
+        assert decision == "allow"
+
+    def test_a_small_change_needs_no_why(self, tmp_path):
+        repo = self._repo(tmp_path, {"src/small.py": "x = 1\n"})
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "commit_message_requires", "min_added_lines": 40,
+                        "pattern": r"(?ms)^Why:\s+\S.{39,}"}),
+            self._commit("tiny"), repo)
+        assert decision == "allow"
+
+    def test_excluded_paths_do_not_count_toward_the_threshold(self, tmp_path):
+        repo = self._repo(tmp_path, {"tests/test_big.py": self.BIG})
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "commit_message_requires", "min_added_lines": 40,
+                        "pattern": r"(?ms)^Why:\s+\S.{39,}",
+                        "exclude_globs": ["tests/**"]}),
+            self._commit("tiny"), repo)
+        assert decision == "allow"
+
+    def test_a_message_the_hook_cannot_read_allows(self, tmp_path):
+        """An editor session or --file=- has no message text in the command.
+
+        Guessing would refuse a commit whose message is fine.
+        """
+        repo = self._repo(tmp_path, {"src/big.py": self.BIG})
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "commit_message_requires", "min_added_lines": 40,
+                        "pattern": r"(?ms)^Why:\s+\S.{39,}"}),
+            {"tool_name": "Bash", "tool_input": {"command": "git " + "commit"}},
+            repo)
+        assert decision == "allow"
+
+    def test_the_message_is_read_from_a_file_argument(self, tmp_path):
+        repo = self._repo(tmp_path, {"src/big.py": self.BIG})
+        msg = repo / "msg.txt"
+        msg.write_text("subject\n\nWhy: a reason long enough to pass the pattern "
+                       "without wrapping at all\n")
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "commit_message_requires", "min_added_lines": 40,
+                        "pattern": r"(?ms)^Why:\s+\S.{39,}"}),
+            {"tool_name": "Bash",
+             "tool_input": {"command": "git " + "commit -F " + shlex.quote(str(msg))}},
+            repo)
+        assert decision == "allow"
+
+    # --- transcript_tool_called ------------------------------------------
+
+    @staticmethod
+    def _transcript(tmp_path, tool_name=None, tool_input=None):
+        path = tmp_path / "transcript.jsonl"
+        entries = [{"type": "user", "message": {"role": "user", "content": "go"}}]
+        if tool_name:
+            entries.append({"type": "assistant", "message": {"role": "assistant",
+                "content": [{"type": "tool_use", "name": tool_name,
+                             "input": tool_input or {}}]}})
+        path.write_text("\n".join(json.dumps(e) for e in entries))
+        return path
+
+    def test_a_new_module_without_a_decision_is_refused(self, tmp_path):
+        repo = self._repo(tmp_path, {"src/new_thing.py": "x = 1\n"})
+        transcript = self._transcript(tmp_path)
+        decision, reason = self._decide(
+            tmp_path,
+            self._rule({"type": "transcript_tool_called",
+                        "tool_name": "mcp__mgcp__add_catalogue_item",
+                        "input_match": {"item_type": "decision"},
+                        "when_staged_added": ["src/**/*.py"]}),
+            {**self._commit(), "transcript_path": str(transcript)}, repo)
+        assert decision == "deny"
+        assert "add_catalogue_item" in reason
+
+    def test_a_decision_in_the_transcript_satisfies_it(self, tmp_path):
+        repo = self._repo(tmp_path, {"src/new_thing.py": "x = 1\n"})
+        transcript = self._transcript(
+            tmp_path, "mcp__mgcp__add_catalogue_item",
+            {"item_type": "decision", "title": "why this module"})
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "transcript_tool_called",
+                        "tool_name": "mcp__mgcp__add_catalogue_item",
+                        "input_match": {"item_type": "decision"},
+                        "when_staged_added": ["src/**/*.py"]}),
+            {**self._commit(), "transcript_path": str(transcript)}, repo)
+        assert decision == "allow"
+
+    def test_a_decision_of_another_item_type_does_not_satisfy_it(self, tmp_path):
+        repo = self._repo(tmp_path, {"src/new_thing.py": "x = 1\n"})
+        transcript = self._transcript(
+            tmp_path, "mcp__mgcp__add_catalogue_item", {"item_type": "arch"})
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "transcript_tool_called",
+                        "tool_name": "mcp__mgcp__add_catalogue_item",
+                        "input_match": {"item_type": "decision"},
+                        "when_staged_added": ["src/**/*.py"]}),
+            {**self._commit(), "transcript_path": str(transcript)}, repo)
+        assert decision == "deny"
+
+    def test_editing_an_existing_module_does_not_trigger_it(self, tmp_path):
+        """The rule is about ADDING a module, not changing one."""
+        repo = self._repo(tmp_path, {"src/old.py": "x = 1\n"}, commit_first=True)
+        (repo / "src" / "old.py").write_text("x = 2\n")
+        subprocess.run(["git", "-C", str(repo), "add", "-A"],
+                       env={**self.GIT_ENV, "HOME": str(tmp_path)}, check=True)
+        transcript = self._transcript(tmp_path)
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "transcript_tool_called",
+                        "tool_name": "mcp__mgcp__add_catalogue_item",
+                        "input_match": {"item_type": "decision"},
+                        "when_staged_added": ["src/**/*.py"]}),
+            {**self._commit(), "transcript_path": str(transcript)}, repo)
+        assert decision == "allow"
+
+    def test_no_transcript_allows(self, tmp_path):
+        repo = self._repo(tmp_path, {"src/new_thing.py": "x = 1\n"})
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "transcript_tool_called",
+                        "tool_name": "mcp__mgcp__add_catalogue_item",
+                        "input_match": {"item_type": "decision"},
+                        "when_staged_added": ["src/**/*.py"]}),
+            self._commit(), repo)
+        assert decision == "allow"
+
+    # --- audit mode and bypass -------------------------------------------
+
+    def test_audit_mode_allows_and_records_what_it_would_have_refused(self, tmp_path):
+        """Every new rule ships this way, so a wrong limit costs a log row."""
+        repo = self._repo(tmp_path, {"src/a.py": self.COMPLEX})
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "staged_python_complexity",
+                        "limits": {"cyclomatic": 10}}, mode="audit"),
+            self._commit(), repo)
+        assert decision == "allow"
+        rows = [json.loads(x) for x in
+                (tmp_path / "gate_audit.jsonl").read_text().splitlines()]
+        would = [r for r in rows if r.get("event") == "would_deny"]
+        assert would, rows
+        assert would[-1]["rules"] == ["gate"]
+        assert "CC" in would[-1]["detail"]
+
+    def test_a_bypass_scope_turns_one_gate_off(self, tmp_path):
+        repo = self._repo(tmp_path, {"src/a.py": self.COMPLEX})
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "staged_python_complexity",
+                        "limits": {"cyclomatic": 10}}),
+            self._commit(), repo,
+            state={"turn_tools_called": [], "turn_bypass_scopes": ["x"]})
+        assert decision == "allow"
+
+    def test_tool_names_covers_several_tools_with_one_rule(self, tmp_path):
+        repo = self._repo(tmp_path, {})
+        rule = self._rule({"type": "diff_budget", "max_added_lines": 1},
+                          tool_name="", tool_names=["Edit", "Write", "MultiEdit"])
+        for tool, payload in (
+            ("Write", {"file_path": str(repo / "a.py"), "content": "a\nb\nc\n"}),
+            ("Edit", {"file_path": str(repo / "a.py"), "old_string": "",
+                      "new_string": "a\nb\nc\n"}),
+            ("MultiEdit", {"file_path": str(repo / "a.py"),
+                           "edits": [{"old_string": "", "new_string": "a\nb\nc\n"}]}),
+        ):
+            decision, _ = self._decide(
+                tmp_path, rule, {"tool_name": tool, "tool_input": payload}, repo)
+            assert decision == "deny", f"{tool} was not covered by tool_names"

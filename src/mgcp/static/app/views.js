@@ -11,6 +11,7 @@ import { barsH, forceGraph, histogram, lineChart, quadrant, stackedBars } from '
 const S1 = 'var(--series-1)';
 const S2 = 'var(--series-2)';
 const S3 = 'var(--series-3)';
+const S4 = 'var(--series-4)';
 
 function head(title, blurb) {
   return `<div class="view-head"><h1>${esc(title)}</h1><p>${blurb}</p></div>`;
@@ -269,42 +270,75 @@ async function enforcement(main) {
   const t = audit.totals;
   const captureRate = t.deny ? t.comply / t.deny : 0;
   const contestRate = t.deny ? t.adjudication / t.deny : 0;
-  const neverFired = rules.filter((r) => !r.error && r.fires === 0);
+  /* An audit-mode rule refuses nothing by construction, and a disabled rule is
+   * never reached, so counting either as "never fired" reports a defect that is
+   * not there. Only an enabled enforcing rule can fire. */
+  const enforcing = rules.filter((r) => !r.error && r.enabled && r.mode !== 'audit');
+  const auditRules = rules.filter((r) => !r.error && r.mode === 'audit');
+  const neverFired = enforcing.filter((r) => r.fires === 0);
+  /* barsH writes its label into innerHTML unescaped, and these labels are rule
+   * names read out of gate_audit.jsonl. A telemetry string reached innerHTML
+   * raw once before, so escape at the boundary. */
+  const safeLabels = (rows) => rows.map((r) => ({ ...r, rule: esc(r.rule) }));
 
   main.innerHTML = `
     ${head('Enforcement', `What the gates actually did. The audit log records friction, not
       traffic: an allowed call leaves no entry, so every number here is a refusal, a compliance,
-      a contest or a human override.`)}
+      a contest, a human override, or a refusal an audit-mode rule would have made.`)}
 
     <div class="callout">
       <b>${num(t.deny)} denials produced ${num(t.comply)} lessons.</b>
       The apology gate exists to force capture at a failure moment; measured against its own
       purpose that is a ${pct(captureRate, 1)} capture rate. Contests outnumber compliances
       ${t.comply ? `${(t.adjudication / t.comply).toFixed(0)}:1` : '—'}.
-      ${neverFired.length ? `${neverFired.length} of ${rules.length} live rules have never fired once.` : ''}
+      ${neverFired.length ? `${neverFired.length} of ${enforcing.length} enabled enforcing rules have never fired once.` : ''}
     </div>
+
+    ${t.would_deny ? `<div class="callout">
+      <b>${num(t.would_deny)} refusals exist only as projections.</b>
+      ${num(t.audit_rules_projecting)} of ${auditRules.length} audit-mode rules wrote a
+      <code>would_deny</code> row. An audit-mode rule allows the tool call. It records the
+      refusal it would have made, and it blocked nothing. No denial figure on this page counts
+      those rows. Read a sample of ten projections before you promote a rule to enforce.
+      ${status('warn', 'audit projection')} marks every audit-mode number below.
+    </div>` : ''}
 
     <div class="grid cols-4">
       ${tile({ label: 'Denials', value: num(t.deny),
                sub: `${num(t.rule_denials)} rule · ${num(t.apology_denials)} apology` })}
+      ${tile({ label: 'Would deny', value: num(t.would_deny),
+               sub: 'audit mode · nothing refused' })}
       ${tile({ label: 'Lessons written', value: num(t.comply), sub: 'the gate’s purpose', meter: captureRate })}
       ${tile({ label: 'Contested', value: num(t.adjudication), sub: 'on the record', meter: contestRate })}
       ${tile({ label: 'Sessions affected', value: num(t.sessions_affected) })}
     </div>
 
-    <div class="grid cols-2" style="margin-top:1rem">
+    <div class="grid" style="margin-top:1rem">
       <section class="card">
         <h2>Activity by day</h2>
-        <p class="note">Denials, compliances and contests.</p>
-        ${legend([{ name: 'deny', color: S1 }, { name: 'comply', color: S3 }, { name: 'contest', color: S2 }])}
+        <p class="note">Denials, compliances and contests, plus what audit-mode rules would have
+          refused. The audit series is a projection, so it blocked nothing.</p>
+        ${legend([{ name: 'deny', color: S1 }, { name: 'comply', color: S3 },
+                  { name: 'contest', color: S2 }, { name: 'would deny (audit)', color: S4 }])}
         <div id="c-days"></div>
         <div id="t-days"></div>
       </section>
+    </div>
+
+    <div class="grid cols-2" style="margin-top:1rem">
       <section class="card">
         <h2>Which rules fire</h2>
-        <p class="note">A rule that never fires is either dead or mis-triggered. The log cannot
-          tell you which, so it is counted, not judged.</p>
+        <p class="note">${status('good', 'enforcing')} Real denials. A rule that never fires is
+          either dead or mis-triggered. The log cannot tell you which, so it is counted, not
+          judged.</p>
         <div id="c-rules"></div>
+      </section>
+      <section class="card">
+        <h2>Which rules would fire</h2>
+        <p class="note">${status('warn', 'audit projection')} Refusals an audit-mode rule would
+          have made. Every one of those calls ran. Never add this count to the denials beside
+          it. A projection stopped no work.</p>
+        <div id="c-would"></div>
       </section>
     </div>
 
@@ -320,24 +354,39 @@ async function enforcement(main) {
     </div>`;
 
   stackedBars(document.getElementById('c-days'), audit.per_day, {
-    x: 'day', keys: ['deny', 'comply', 'adjudication'], colors: [S1, S3, S2],
-    names: ['deny', 'comply', 'contest'], yLabel: 'events',
+    x: 'day', keys: ['deny', 'comply', 'adjudication', 'would_deny'],
+    colors: [S1, S3, S2, S4],
+    names: ['deny', 'comply', 'contest', 'would deny (audit)'], yLabel: 'events',
   });
   document.getElementById('t-days').innerHTML = twin(table(audit.per_day, [
     { key: 'day', label: 'Day' },
     { key: 'deny', label: 'Deny', num: true },
     { key: 'comply', label: 'Comply', num: true },
     { key: 'adjudication', label: 'Contest', num: true },
+    { key: 'would_deny', label: 'Would deny (audit)', num: true },
   ], { sortBy: 'day', desc: true }));
 
-  barsH(document.getElementById('c-rules'), audit.rule_fires, { label: 'rule', value: 'fires' });
+  barsH(document.getElementById('c-rules'), safeLabels(audit.rule_fires),
+        { label: 'rule', value: 'fires' });
+  barsH(document.getElementById('c-would'), safeLabels(audit.rule_would_fire || []),
+        { label: 'rule', value: 'would_fire', colorFor: () => S4 });
 
   document.getElementById('t-rules').innerHTML = table(rules, [
     { key: 'name', label: 'Rule', render: (r) => `<span class="id">${esc(r.name || r.error)}</span>` },
+    { key: 'mode', label: 'Mode', render: (r) => {
+      if (r.error) return '—';
+      return r.mode === 'audit' ? status('warn', 'audit') : status('good', 'enforcing');
+    } },
     { key: 'enabled', label: 'State', render: (r) => (r.enabled
       ? status('good', 'enabled') : status('warn', 'disabled')) },
-    { key: 'fires', label: 'Fires', num: true,
-      render: (r) => (r.fires === 0 ? status('warn', 'never') : num(r.fires)) },
+    { key: 'fires', label: 'Denied', num: true,
+      render: (r) => {
+        // An audit-mode rule cannot deny, so "never" would read as a defect.
+        if (r.mode === 'audit') return '—';
+        return r.fires === 0 ? status('warn', 'never') : num(r.fires);
+      } },
+    { key: 'would_fire', label: 'Would deny', num: true,
+      render: (r) => (r.would_fire ? num(r.would_fire) : '—') },
     { key: 'bypass_scope', label: 'Bypass scope', render: (r) => `<code>${esc(r.bypass_scope)}</code>` },
   ], { sortBy: 'fires', desc: true });
 
@@ -349,7 +398,7 @@ async function enforcement(main) {
   document.getElementById('t-adj').innerHTML = audit.adjudications.length
     ? audit.adjudications.slice().reverse().map((a) => `<div class="entry">
         <div class="meta">
-          <span>${shortDate(a.ts)}</span>
+          <span>${esc(shortDate(a.ts))}</span>
           <span>${a.verdict === 'not_apology' ? status('warn', 'contested') : status('good', 'confirmed')}</span>
         </div>
         <div class="body"><b>flagged:</b> ${esc(a.flagged)}</div>

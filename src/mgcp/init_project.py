@@ -217,6 +217,19 @@ V2_HOOK_FILES = {
     "mgcp-precompact.py": "PreCompact",
 }
 
+# Support modules the hooks import, installed beside them but NOT registered
+# as hooks. Keeping them out of V2_HOOK_FILES is load-bearing: that dict is a
+# filename-to-event map driving hook registration as well as the two copy
+# loops, so a support module listed there would write a sixth command into the
+# operator's settings.json that runs a library on every event.
+#
+# pre-tool-dispatcher.py imports quality_metrics for the complexity ratchet,
+# and it does so inside the handler rather than at module level, so a machine
+# that has not re-run mgcp-init loses that one gate instead of every gate.
+HOOK_SUPPORT_FILES = [
+    "quality_metrics.py",
+]
+
 VERSION_MARKER = ".mgcp-hook-version"
 
 
@@ -590,7 +603,7 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False, force: bool = Fa
 
     # Build hook file list from templates
     hook_files = []
-    for filename in V2_HOOK_FILES:
+    for filename in list(V2_HOOK_FILES) + HOOK_SUPPORT_FILES:
         content = _load_hook_template(filename)
         hook_files.append((hooks_dir / filename, content))
 
@@ -712,8 +725,8 @@ def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
 
     overwrite = force or auto_upgrade
 
-    # Copy hook scripts from templates to ~/.mgcp/hooks/
-    for filename in V2_HOOK_FILES:
+    # Copy hook scripts and their support modules to ~/.mgcp/hooks/
+    for filename in list(V2_HOOK_FILES) + HOOK_SUPPORT_FILES:
         src = HOOK_TEMPLATES_DIR / filename
         dst = hooks_dir / filename
 
@@ -910,6 +923,91 @@ def configure_claude_code_project(project_path: str, dry_run: bool = False) -> d
     return result
 
 
+def _report_hook_drift(results: dict) -> None:
+    """Record a hook deployment that is behind the package, or incomplete.
+
+    A git pull does NOT refresh the deployed hooks: settings.json names copies
+    under ~/.mgcp/hooks by absolute path, and only mgcp-init rewrites those. So
+    the state right after a pull is new rules and new code read by an old hook,
+    and nothing said so until this check existed.
+    """
+    hooks = results["hooks"]
+    if hooks["version_behind"]:
+        results["issues"].append(
+            f"Deployed hooks are payload {hooks['installed_version'] or 'unknown'} "
+            f"and the package ships {hooks['package_version']}. A git pull does "
+            "not update them, because Claude Code runs the copies under "
+            f"{hooks['hooks_dir']}."
+        )
+        results["suggestions"].append("Run `mgcp-init` to install the new hooks")
+    if hooks["missing"]:
+        results["issues"].append(
+            "Hook files are missing from the deployed directory: "
+            + ", ".join(hooks["missing"])
+            + ". A missing support module costs the one gate that imports it, "
+            "not every gate, but that gate is inert until it is installed."
+        )
+        results["suggestions"].append("Run `mgcp-init` to install the missing files")
+
+
+def _report_leftover_servers(results: dict) -> None:
+    """Record more servers than a connected client needs."""
+    servers = results["servers"]
+    if not servers["supported"] or len(servers["processes"]) <= 1:
+        return
+    pids = ", ".join(str(p["pid"]) for p in servers["processes"])
+    results["issues"].append(
+        f"{len(servers['processes'])} mgcp.server processes are running "
+        f"(pids {pids}). One connected client needs one server, so unless "
+        "you have that many clients open, the older ones are leftovers "
+        "from reconnects."
+    )
+    results["suggestions"].append(
+        "Stop a leftover with `kill -TERM <pid>`, not -9: it holds a "
+        "writable handle on lessons.db and needs to close SQLite cleanly. "
+        "Keep the newest one, which is the live connection."
+    )
+
+
+def diagnose_hook_deployment() -> dict:
+    """Compare the deployed hooks with the ones the package ships.
+
+    Claude Code runs copies under ~/.mgcp/hooks, named by absolute path in
+    settings.json. A git pull updates the templates in the package and leaves
+    those copies alone, so new gate code and new rules can sit in the
+    repository while the hook enforcing them is weeks old. mgcp-init is the
+    only thing that closes that gap, and nothing told the operator to run it.
+    """
+    hooks_dir = Path.home() / ".mgcp" / "hooks"
+    out = {
+        "hooks_dir": str(hooks_dir),
+        "package_version": _get_hook_version(),
+        "installed_version": "",
+        "version_behind": False,
+        "missing": [],
+        "present": [],
+    }
+    marker = hooks_dir / VERSION_MARKER
+    if marker.exists():
+        try:
+            out["installed_version"] = marker.read_text().strip()
+        except OSError:
+            out["installed_version"] = ""
+
+    for filename in list(V2_HOOK_FILES) + HOOK_SUPPORT_FILES:
+        if (hooks_dir / filename).exists():
+            out["present"].append(filename)
+        else:
+            out["missing"].append(filename)
+
+    if not hooks_dir.exists():
+        # Nothing installed at all is a fresh machine, not a drift problem.
+        out["missing"] = []
+        return out
+    out["version_behind"] = out["installed_version"] != out["package_version"]
+    return out
+
+
 def find_mgcp_server_processes() -> dict:
     """Every running `python -m mgcp.server`, with age and resident memory.
 
@@ -1059,23 +1157,14 @@ def diagnose_claude_code() -> dict:
         except json.JSONDecodeError:
             pass
 
-    # Leftover server processes. One client needs one server; a reconnect
-    # starts another and leaves the first running.
-    servers = find_mgcp_server_processes()
-    results["servers"] = servers
-    if servers["supported"] and len(servers["processes"]) > 1:
-        pids = ", ".join(str(p["pid"]) for p in servers["processes"])
-        results["issues"].append(
-            f"{len(servers['processes'])} mgcp.server processes are running "
-            f"(pids {pids}). One connected client needs one server, so unless "
-            "you have that many clients open, the older ones are leftovers "
-            "from reconnects."
-        )
-        results["suggestions"].append(
-            "Stop a leftover with `kill -TERM <pid>`, not -9: it holds a "
-            "writable handle on lessons.db and needs to close SQLite cleanly. "
-            "Keep the newest one, which is the live connection."
-        )
+    # Deployed hooks versus the package. A git pull does NOT refresh them:
+    # settings.json points at copies under ~/.mgcp/hooks by absolute path, and
+    # only mgcp-init rewrites those. So the state right after a pull is new
+    # rules and new code read by an old hook, and nothing said so until now.
+    results["hooks"] = diagnose_hook_deployment()
+    _report_hook_drift(results)
+    results["servers"] = find_mgcp_server_processes()
+    _report_leftover_servers(results)
 
     # Generate suggestions
     if not results["user_config"]["mgcp_configured"]:

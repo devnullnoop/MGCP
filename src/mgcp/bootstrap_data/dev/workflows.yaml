@@ -66,9 +66,41 @@ workflows:
             relevance: "Design error handling into the plan"
             priority: 2
 
+      # Step order stays contiguous from 1. web_server.py builds the graph edge
+      # for each step from workflow.steps[step.order - 2], so a gap raises
+      # IndexError or draws the edge from the wrong step. Inserting fit here
+      # renumbers document, execute, test and review by one.
+      - id: fit
+        name: "Fit"
+        order: 3
+        description: "Reshape the existing code for the feature before you add the feature."
+        guidance: >-
+          Ask what this code would look like if the feature had been designed in
+          from the start. Refactor to that shape in its own commit with a
+          `Refactor:` subject. Tests must pass unchanged. A refactor that needs
+          test edits changes behavior, so split it into two commits.
+        checklist:
+          - "Named the shape the feature needs"
+          - "Refactored to that shape with no feature code added"
+          - "Tests pass unchanged"
+          - "Committed on its own with a `Refactor:` subject"
+        outputs:
+          - "refactor commit"
+          - "code shaped for the feature"
+        lessons:
+          - lesson_id: function-design
+            relevance: "The target shape is short functions with few parameters"
+            priority: 1
+          - lesson_id: avoid-premature-abstraction
+            relevance: "Refactor to the shape this feature needs, not a general one"
+            priority: 1
+          - lesson_id: code-quality
+            relevance: "A refactor is held to the same readability standard"
+            priority: 2
+
       - id: document
         name: "Document Plan"
-        order: 3
+        order: 4
         description: "Record the plan with sources. This prevents re-research and enables review."
         guidance: "Write down what you learned in research. Cite API docs and version numbers."
         checklist:
@@ -87,7 +119,7 @@ workflows:
 
       - id: execute
         name: "Execute"
-        order: 4
+        order: 5
         description: "Implement step-by-step, testing as you go. Don't write everything then test at the end."
         guidance: "Implement one piece, test it, commit. Don't batch large changes."
         checklist:
@@ -136,7 +168,7 @@ workflows:
 
       - id: test
         name: "Test"
-        order: 5
+        order: 6
         description: "Comprehensive testing including edge cases. Verify the feature works as intended."
         guidance: "Test happy path, error cases, and edge cases. Verify error messages are helpful."
         checklist:
@@ -162,9 +194,44 @@ workflows:
             relevance: "Verify all assumptions"
             priority: 2
 
+      # The subagent gets this step's guidance as its whole prompt, so the
+      # guidance holds the prompt and nothing else. Fresh context is the point:
+      # an agent that wrote the code defends it.
+      - id: simplify
+        name: "Simplify"
+        order: 7
+        description: "A fresh-context subagent reduces the change before you review it."
+        guidance: |-
+          You have not seen this change. Reduce it.
+          Keep public interfaces and tests unchanged; tests must still pass.
+          Remove: speculative flags or abstractions with one caller, compat shims,
+          wrappers that only forward, duplicated logic, handlers that hide errors.
+          Prefer editing existing code over adding files or layers.
+          Output a unified diff, then one line per change saying why.
+          If nothing should change, say so and stop.
+        checklist:
+          - "Spawned a subagent that has not seen this work"
+          - "Passed this step's guidance as the whole prompt"
+          - "Public interfaces and tests are unchanged"
+          - "Full test suite still passes"
+          - "Applied the diff, or recorded why not in the commit's Why: paragraph"
+        outputs:
+          - "simplifier diff"
+          - "reduced change, or a recorded reason to keep it"
+        lessons:
+          - lesson_id: function-design
+            relevance: "Fewer lines, layers and parameters per function"
+            priority: 1
+          - lesson_id: avoid-premature-abstraction
+            relevance: "Cut abstractions and flags with one caller"
+            priority: 1
+          - lesson_id: dependency-minimization
+            relevance: "Prefer editing existing code over adding files or dependencies"
+            priority: 2
+
       - id: review
         name: "Review"
-        order: 6
+        order: 8
         description: "Self-review before commit. Check for obvious issues, code quality, and documentation."
         guidance: "Review diff before committing. Look for debug code, TODOs, and incomplete error handling."
         checklist:
@@ -292,6 +359,37 @@ workflows:
             priority: 1
           - lesson_id: test-known-inputs
             relevance: "Add regression test"
+            priority: 1
+
+      # Appended as order 5 rather than inserted, so no existing bug-fix step
+      # changes its order field. The fix is already verified at this point.
+      - id: simplify
+        name: "Simplify"
+        order: 5
+        description: "A fresh-context subagent reduces the fix before you commit it."
+        guidance: |-
+          You have not seen this change. Reduce it.
+          Keep public interfaces and tests unchanged; tests must still pass.
+          Remove: speculative flags or abstractions with one caller, compat shims,
+          wrappers that only forward, duplicated logic, handlers that hide errors.
+          Prefer editing existing code over adding files or layers.
+          Output a unified diff, then one line per change saying why.
+          If nothing should change, say so and stop.
+        checklist:
+          - "Spawned a subagent that has not seen this work"
+          - "Passed this step's guidance as the whole prompt"
+          - "Public interfaces and tests are unchanged"
+          - "Regression test still fails without the fix"
+          - "Applied the diff, or recorded why not in the commit's Why: paragraph"
+        outputs:
+          - "simplifier diff"
+          - "minimal fix"
+        lessons:
+          - lesson_id: function-design
+            relevance: "A fix that grew a function needs the extraction now"
+            priority: 1
+          - lesson_id: avoid-premature-abstraction
+            relevance: "A bug fix is the wrong moment to generalize"
             priority: 1
 
   - id: secure-code-review

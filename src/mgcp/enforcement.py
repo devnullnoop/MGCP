@@ -40,7 +40,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 ENFORCEMENT_CONFIG_FILENAME = "enforcement_rules.json"
 
@@ -65,9 +65,22 @@ class CommandMatch(BaseModel):
 
 
 class Trigger(BaseModel):
-    """Match specifier for a tool call."""
+    """Match specifier for a tool call.
+
+    ``extra="forbid"`` is load-bearing. Every enforcement MCP tool rewrites the
+    whole file from these models, including ``toggle_enforcement_rule``, so a
+    field the model does not know is silently dropped on the next write. That
+    turns a one-field typo into deleted enforcement, discovered only when the
+    rule stops firing. An unknown field now fails as loudly as an unknown
+    ``type`` already does.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     tool_name: str  # exact match; "*" = any tool
+    # One rule for several tools, instead of three copies of the same rule.
+    # Matches when tool_name matches OR the called tool is in this list.
+    tool_names: list[str] = Field(default_factory=list)
     command_match: CommandMatch | None = None
 
 
@@ -103,6 +116,8 @@ class Precondition(BaseModel):
       enforcement is a net rather than a tripwire.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     type: Literal[
         "tool_called_this_turn",
         "tool_not_called_this_turn",
@@ -110,18 +125,51 @@ class Precondition(BaseModel):
         "tool_input_glob",
         "staged_files_forbid",
         "staged_content_forbid",
+        "diff_budget",
+        "staged_python_complexity",
+        "commit_message_requires",
+        "transcript_tool_called",
     ]
     tool_name: str = ""
     couplings: list[dict] = Field(default_factory=list)
     field: str = ""
     deny_globs: list[str] = Field(default_factory=list)
     patterns: list[str] = Field(default_factory=list)
+    # Shared by the three types that measure a change.
+    exclude_globs: list[str] = Field(default_factory=list)
+    # diff_budget
+    max_added_lines: int = 0
+    max_files: int = 0
+    # staged_python_complexity
+    limits: dict = Field(default_factory=dict)
+    banned: list[str] = Field(default_factory=list)
+    # Files exempt from the FILE LENGTH row only, so their functions are still
+    # measured. A whole-file exclusion would exempt the project's largest and
+    # most complex files from every metric, which is the opposite of what the
+    # gate is for.
+    file_length_exempt: list[str] = Field(default_factory=list)
+    # commit_message_requires
+    min_added_lines: int = 0
+    pattern: str = ""
+    # transcript_tool_called
+    input_match: dict = Field(default_factory=dict)
+    when_staged_added: list[str] = Field(default_factory=list)
 
 
 class EnforcementRule(BaseModel):
     name: str
     description: str = ""
     enabled: bool = True
+    # "audit" records a would_deny row in gate_audit.jsonl and ALLOWS the call.
+    # Every new rule ships in audit mode and is promoted on evidence.
+    #
+    # `enabled` remains the real kill switch, and a new rule ships disabled as
+    # well. `mode` is a key no previously deployed hook has heard of, and an
+    # unknown key there is neither a parse error nor a fail-open: it is ignored
+    # and the rule enforces. That is the exact state after a git pull and
+    # before `mgcp-init` installs the mode-aware hook, so audit mode alone
+    # would have enforced on a machine that had only pulled.
+    mode: Literal["enforce", "audit"] = "enforce"
     trigger: Trigger
     preconditions: list[Precondition]
     bypass_scope: str
@@ -290,8 +338,205 @@ DEFAULT_RULES: list[EnforcementRule] = [
 ]
 
 
+# ----------------------------------------------------------------------------
+# Structured coding gates. Every one of these ships DISABLED and in audit mode.
+#
+# Two switches, not one, on purpose. `mode="audit"` is honoured only by a hook
+# that knows the key, and a hook is a COPY under ~/.mgcp/hooks that `git pull`
+# does not refresh. So the state right after a pull is new rules read by an old
+# hook, which ignores `mode` and enforces. `enabled=False` is the one switch
+# every deployed hook version has always honoured, so it is what makes the pull
+# safe. Turn these on after `mgcp-init` installs the mode-aware hook, and after
+# audit data says the limits are right.
+# ----------------------------------------------------------------------------
+STRUCTURE_RULES: list[EnforcementRule] = [
+    EnforcementRule(
+        name="edit-diff-budget",
+        description=(
+            "Refuse an edit that would push this session's uncommitted work past "
+            "300 added lines or 8 touched files. It fires before the edit lands, "
+            "which is the only point where a large change is still cheap to "
+            "split. Deletions are free, so a simplification never trips it."
+        ),
+        enabled=False,
+        mode="audit",
+        trigger=Trigger(tool_name="", tool_names=["Edit", "Write", "MultiEdit"]),
+        preconditions=[
+            Precondition(
+                type="diff_budget",
+                max_added_lines=300,
+                max_files=8,
+                exclude_globs=[
+                    "tests/**", "docs/**", "*.md", "**/bootstrap_data/**",
+                ],
+            ),
+        ],
+        bypass_scope="size",
+        deny_reason=(
+            "This edit would push the session past its diff budget.\n"
+            "Two exits: commit the part that is already coherent, which resets "
+            "the budget, or split the task.\n"
+            "Bypass with MGCP_BYPASS:size in your next prompt."
+        ),
+    ),
+    EnforcementRule(
+        name="commit-complexity-ratchet",
+        description=(
+            "Refuse a commit whose staged Python makes a function worse on a "
+            "metric where it is already over the limit, or adds a function that "
+            "starts over one. Legacy code does not block work; it only stops "
+            "getting worse. 58 of 463 functions here are already over CC 10, so "
+            "an absolute limit would refuse every commit."
+        ),
+        enabled=False,
+        mode="audit",
+        trigger=Trigger(
+            tool_name="Bash",
+            command_match=CommandMatch(type="git_subcommand", subcommands=["commit"]),
+        ),
+        preconditions=[
+            Precondition(
+                type="staged_python_complexity",
+                limits={
+                    "cyclomatic": 10, "length": 80, "depth": 4,
+                    "params": 6, "file_lines": 1000,
+                },
+                banned=["swallowed_error", "pass_through_wrapper"],
+                # server.py is 3,399 lines, so the file-length row would refuse
+                # every new MCP tool. Excluding it keeps the per-function
+                # metrics there while dropping the file row. Tests are excluded
+                # because four test files already pass 1,000 lines, including
+                # the one every new case for this gate goes into.
+                exclude_globs=[
+                    "tests/**", "docs/**", "*.md", "**/bootstrap_data/**",
+                ],
+                # Five of 34 source files are already over the 1,000-line
+                # limit, against a median of 363, and each is the place its
+                # code belongs: every MCP tool, every installer path, every
+                # dashboard route, every store method, every gate. The
+                # file-length row would refuse growth in all five, which means
+                # refusing to add an MCP tool. They are exempt from THAT ROW
+                # ONLY, so every function in them is still measured. Splitting
+                # them is an open decision in update_plan.md, and it is not a
+                # decision this gate should force at commit time.
+                file_length_exempt=[
+                    "src/mgcp/server.py",
+                    "src/mgcp/init_project.py",
+                    "src/mgcp/web_server.py",
+                    "src/mgcp/persistence.py",
+                    "src/mgcp/hook_templates/pre-tool-dispatcher.py",
+                ],
+            ),
+        ],
+        bypass_scope="complexity",
+        deny_reason=(
+            "Staged Python makes a function worse, or adds one over a limit.\n"
+            "Extract a helper or flatten the nesting, then retry.\n"
+            "Bypass with MGCP_BYPASS:complexity in your next prompt."
+        ),
+    ),
+    EnforcementRule(
+        name="commit-requires-why",
+        description=(
+            "A commit over 40 added lines carries a Why: paragraph, so the "
+            "reason travels with git blame. The pattern allows the paragraph to "
+            "wrap, because requiring 40 characters on one physical line refuses "
+            "text wrapped at the width this project writes to."
+        ),
+        enabled=False,
+        mode="audit",
+        trigger=Trigger(
+            tool_name="Bash",
+            command_match=CommandMatch(type="git_subcommand", subcommands=["commit"]),
+        ),
+        preconditions=[
+            Precondition(
+                type="commit_message_requires",
+                min_added_lines=40,
+                pattern=r"(?ms)^Why:\s+\S.{39,}",
+                exclude_globs=[
+                    "tests/**", "docs/**", "*.md", "**/bootstrap_data/**",
+                ],
+            ),
+        ],
+        bypass_scope="intent",
+        deny_reason=(
+            "A commit over 40 added lines needs a Why: paragraph.\n"
+            "\n"
+            "<subject, 50 characters or fewer>\n"
+            "\n"
+            "What: <the change in one or two sentences>\n"
+            "Why: <the problem it solves or the constraint it meets>\n"
+            "Rejected: <alternatives considered, and why not>\n"
+            "\n"
+            "Bypass with MGCP_BYPASS:intent in your next prompt."
+        ),
+    ),
+    EnforcementRule(
+        name="new-module-requires-decision",
+        description=(
+            "A commit that ADDS a Python module or changes pyproject.toml is "
+            "preceded by a catalogue decision in the same session. The commit "
+            "message serves git blame; the catalogue entry is what "
+            "search_catalogue returns to the next session before it changes the "
+            "same code, which is where intent is actually lost."
+        ),
+        enabled=False,
+        mode="audit",
+        trigger=Trigger(
+            tool_name="Bash",
+            command_match=CommandMatch(type="git_subcommand", subcommands=["commit"]),
+        ),
+        preconditions=[
+            Precondition(
+                type="transcript_tool_called",
+                tool_name="mcp__mgcp__add_catalogue_item",
+                input_match={"item_type": "decision"},
+                when_staged_added=["src/**/*.py", "pyproject.toml"],
+            ),
+        ],
+        bypass_scope="intent",
+        deny_reason=(
+            "A new module or dependency is staged with no catalogue decision "
+            "this session.\n"
+            "Record one with add_catalogue_item(item_type='decision'), naming "
+            "the alternatives you rejected.\n"
+            "Bypass with MGCP_BYPASS:intent in your next prompt."
+        ),
+    ),
+    EnforcementRule(
+        name="refactor-commits-keep-tests",
+        description=(
+            "A commit whose subject starts with Refactor: may not stage test "
+            "changes. A refactor that needs its tests edited changed behaviour, "
+            "so it was not a refactor. Uses only precondition types that "
+            "already existed."
+        ),
+        enabled=False,
+        mode="audit",
+        trigger=Trigger(
+            tool_name="Bash",
+            command_match=CommandMatch(
+                type="regex",
+                pattern=r"\bgit\b.*\bcommit\b[\s\S]*Refactor:",
+            ),
+        ),
+        preconditions=[
+            Precondition(type="staged_files_forbid", deny_globs=["tests/**"]),
+        ],
+        bypass_scope="refactor",
+        deny_reason=(
+            "A Refactor: commit has staged test changes.\n"
+            "If the tests had to change, the behaviour changed, so this is not a "
+            "refactor. Split it, or retitle the commit.\n"
+            "Bypass with MGCP_BYPASS:refactor in your next prompt."
+        ),
+    ),
+]
+
+
 def default_config() -> EnforcementConfig:
-    return EnforcementConfig(version=1, rules=list(DEFAULT_RULES))
+    return EnforcementConfig(version=1, rules=list(DEFAULT_RULES) + list(STRUCTURE_RULES))
 
 
 # ============================================================================
@@ -345,5 +590,83 @@ def _atomic_write(path: Path, text: str) -> None:
 
 def save_config(config: EnforcementConfig, path: Path | None = None) -> None:
     _atomic_write(path or _config_path(), json.dumps(config.model_dump(), indent=2))
+
+
+def merge_missing_defaults(path: Path | None = None) -> dict:
+    """Append shipped rules the file does not have, by name. Add only.
+
+    This exists because nothing else delivers a new shipped rule to an install
+    that already has a rules file. ``load_config`` returns the defaults only
+    when the file is MISSING, and the one other writer outside the MCP tools
+    seeds on first install behind ``if not path.exists()``. So an operator who
+    has used MGCP for a week never receives a rule added after their install.
+    ``mgcp-bootstrap`` was the plan's named channel for this and has no
+    enforcement code at all.
+
+    Add only, and never upsert. A populated file is a customised file: rules
+    get renamed, disabled, retuned and added by hand, and a shipped rule of the
+    same name may deliberately differ from its default. Overwriting one by name
+    would silently revert that, which is the failure this function is shaped to
+    avoid. A rule already present is left byte-identical and in place, and the
+    order of existing rules never changes.
+
+    Returns {"added": [names], "kept": n, "path": str}.
+    """
+    p = path or _config_path()
+    config = load_config(p)
+    present = {r.name for r in config.rules}
+    shipped = list(DEFAULT_RULES) + list(STRUCTURE_RULES)
+
+    added = [r.model_copy(deep=True) for r in shipped if r.name not in present]
+    # A rule in audit mode refuses nothing, so enabling it is safe AS LONG AS
+    # the installed hook knows what audit mode is. A hook that predates the key
+    # ignores it and enforces, and `git pull` does not refresh the installed
+    # hooks. So an audit rule is enabled only once the deployed payload matches
+    # the package, and left disabled otherwise with the reason returned.
+    #
+    # This matters because a disabled rule produces no would_deny rows either,
+    # and those rows are the whole basis for promoting a rule later. Shipping
+    # disabled and never enabling would make the gates decoration.
+    hook_current, hook_detail = _deployed_hook_is_current()
+    enabled_now = []
+    for rule in added:
+        if rule.mode == "audit" and hook_current:
+            rule.enabled = True
+            enabled_now.append(rule.name)
+
+    if added:
+        config.rules = list(config.rules) + added
+        save_config(config, p)
+    return {
+        "added": [r.name for r in added],
+        "enabled": enabled_now,
+        "hook_current": hook_current,
+        "hook_detail": hook_detail,
+        "kept": len(present),
+        "path": str(p),
+    }
+
+
+def _deployed_hook_is_current() -> tuple[bool, str]:
+    """(is the installed hook payload the one this package ships, why).
+
+    The installed hooks are copies under ~/.mgcp/hooks that Claude Code runs by
+    absolute path. Only ``mgcp-init`` rewrites them, so the package and the
+    deployed payload drift apart on every pull.
+    """
+    try:
+        from .init_project import HOOK_TEMPLATES_DIR, VERSION_MARKER
+
+        shipped = (HOOK_TEMPLATES_DIR / "VERSION").read_text().strip()
+        marker = Path.home() / ".mgcp" / "hooks" / VERSION_MARKER
+        if not marker.exists():
+            return False, "no hooks are installed yet"
+        installed = marker.read_text().strip()
+        if installed != shipped:
+            return False, (f"installed hook payload is {installed} and this "
+                           f"package ships {shipped}")
+        return True, f"installed hook payload {installed} matches the package"
+    except Exception as exc:
+        return False, f"could not read the installed hook payload: {exc}"
 
 

@@ -208,7 +208,13 @@ def _detect_git_subcommand(command: str, subcommands: list) -> bool:
 
 def _trigger_matches(trigger: dict, tool_name: str, tool_input: dict) -> bool:
     t_tool = trigger.get("tool_name", "")
-    if t_tool != "*" and t_tool != tool_name:
+    # tool_names lets one rule cover Edit, Write and MultiEdit instead of three
+    # copies that then drift apart. A hook that predates the field ignores it
+    # and sees tool_name "", which matches nothing, so such a rule is inert
+    # rather than universal on an older install. That is the safe direction.
+    names = trigger.get("tool_names")
+    names = names if isinstance(names, list) else []
+    if t_tool != "*" and t_tool != tool_name and tool_name not in names:
         return False
     cm = trigger.get("command_match")
     # Absent means "match the tool whatever the command is"; an empty dict
@@ -218,7 +224,11 @@ def _trigger_matches(trigger: dict, tool_name: str, tool_input: dict) -> bool:
         return True
     if tool_name != "Bash":
         return False
-    command = str(tool_input.get("command", ""))
+    return _command_matches(cm, str(tool_input.get("command", "")))
+
+
+def _command_matches(cm: dict, command: str) -> bool:
+    """One command_match sub-matcher against a Bash command."""
     cm_type = cm.get("type", "")
     if cm_type == "git_subcommand":
         return _detect_git_subcommand(command, cm.get("subcommands") or [])
@@ -360,66 +370,7 @@ def _latest_apology(transcript_path: str) -> tuple:
 # ---------------------------------------------------------------------------
 
 
-def _get_staged_files(cwd: str) -> list:
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode != 0:
-            return []
-        return [line for line in result.stdout.splitlines() if line.strip()]
-    except (OSError, subprocess.SubprocessError):
-        return []
 
-
-def _get_staged_paths_not_deleted(cwd: str) -> list:
-    """Staged paths that this commit adds, modifies, copies or renames.
-
-    Deletions are left out. `git diff --cached --name-only` lists them, so a
-    forbid-by-path rule built on that would refuse the very commit that REMOVES
-    the forbidden file. The content scan has the same hazard and solves it the
-    same way, by reading added lines only.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode != 0:
-            return []
-        return [line for line in result.stdout.splitlines() if line.strip()]
-    except (OSError, subprocess.SubprocessError):
-        return []
-
-
-def _get_staged_diff(cwd: str) -> str:
-    """The staged diff as text, or "" if it cannot be read.
-
-    Separate from _get_staged_files because content and paths answer
-    different questions. A private project name or an absolute home
-    directory arrives inside a sentence, so no amount of path matching sees
-    it. Capped so a large commit cannot stall the hook.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--cached", "--unified=0"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return ""
-        return result.stdout[:4_000_000]
-    except (OSError, subprocess.SubprocessError):
-        return ""
 
 
 def _added_lines(diff: str) -> str:
@@ -452,103 +403,676 @@ def _safe_fnmatch(value: str, pattern: str) -> bool:
         return False
 
 
-def _evaluate_precondition(
-    pre: dict, state: dict, staged_files: list, tool_input: dict = None,
-    staged_diff: str = "", staged_not_deleted: list = None,
-):
-    tool_input = tool_input or {}
-    called = state.get("turn_tools_called") or []
-    pre_type = pre.get("type", "")
+class EvalContext:
+    """Everything a precondition may need, read at most once each.
 
-    if pre_type == "tool_called_this_turn":
-        name = pre.get("tool_name", "")
-        if name in called:
-            return True, ""
-        return False, f"Required tool not called this turn: {name}"
+    This exists because the alternative was one more positional parameter on
+    ``_evaluate_precondition`` for every new input. It reached six that way and
+    42 cyclomatic complexity, and the four types added here would have made it
+    ten. The existing parameters stay, because ten callers pass them
+    positionally; new inputs arrive through this object instead.
 
-    if pre_type == "tool_not_called_this_turn":
-        name = pre.get("tool_name", "")
-        if name not in called:
-            return True, ""
-        return False, f"Forbidden tool called this turn: {name}"
+    Every accessor is lazy and caches, including failures, so a rule that needs
+    the staged diff costs one subprocess for the whole tool call and a rule
+    that needs nothing costs none. Each returns an empty value on any error,
+    because this hook allows a call it cannot measure.
+    """
 
-    if pre_type == "staged_files_coupling":
-        unsatisfied = []
-        for c in pre.get("couplings") or []:
-            when = c.get("when_staged") or []
-            req = c.get("require_one_of") or []
-            if not when or not req:
-                continue
-            ok, triggering = _check_coupling(staged_files, when, req)
-            if not ok:
-                unsatisfied.append(
-                    f"  - staged: {', '.join(triggering)} -> require one of: {', '.join(req)}"
-                )
-        if not unsatisfied:
-            return True, ""
-        return False, "Doc-coupling violations:\n" + "\n".join(unsatisfied)
+    EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
-    if pre_type == "staged_files_forbid":
-        deny_globs = pre.get("deny_globs") or []
-        if not deny_globs:
-            return True, ""
-        hits = [
-            p for p in (staged_not_deleted or [])
-            if any(_safe_fnmatch(p, g) for g in deny_globs)
-        ]
-        if not hits:
-            return True, ""
-        return False, (
-            "staged files are forbidden by this rule:\n"
-            + "\n".join(f"  - {h}" for h in hits[:20])
-        )
+    def __init__(self, hook_input=None, seed=None):
+        """Built from the hook payload. ``seed`` pre-fills the cache.
 
-    if pre_type == "staged_content_forbid":
-        patterns = pre.get("patterns") or []
-        if not patterns:
-            return True, ""
-        added = _added_lines(staged_diff or "")
-        if not added:
-            return True, ""
-        hits = []
-        for raw in patterns:
+        Two parameters rather than one per field, because this object exists
+        to stop a parameter list from growing. ``seed`` is how a direct caller,
+        such as a test, supplies a value without a repository.
+        """
+        payload = hook_input or {}
+        self.tool_name = payload.get("tool_name", "")
+        self.tool_input = payload.get("tool_input") or {}
+        self._transcript_path = payload.get("transcript_path", "")
+        # Every command runs with -C the repository root, and every path is
+        # made relative to it. Rules compare globs like "tests/**" against
+        # paths printed relative to the root, so running from a subdirectory
+        # would silently stop matching.
+        self._root = None
+        self._raw_dir = payload.get("cwd") or os.environ.get(
+            "CLAUDE_PROJECT_DIR") or "."
+        self._cache = dict(seed or {})
+
+    @property
+    def root(self):
+        if self._root is None:
+            rc, out = self._run(["rev-parse", "--show-toplevel"], self._raw_dir)
+            self._root = out.strip() if rc == 0 and out.strip() else ""
+        return self._root
+
+    @staticmethod
+    def _run(args, cwd):
+        try:
+            r = subprocess.run(["git", "-C", cwd, *args], capture_output=True,
+                               text=True, timeout=10)
+            return r.returncode, r.stdout
+        except (OSError, subprocess.SubprocessError):
+            return 1, ""
+
+    def git(self, args):
+        """Run one read-only command at the repository root."""
+        if not self.root:
+            return 1, ""
+        return self._run(args, self.root)
+
+    def _cached(self, key, build):
+        if key not in self._cache:
             try:
-                found = re.search(raw, added, re.IGNORECASE)
-            except re.error:
-                continue  # a bad pattern must not refuse every commit
-            if found:
-                hits.append((raw, found.group(0)[:60]))
-        if not hits:
-            return True, ""
-        return False, (
-            "staged content matches a forbidden pattern:\n"
-            + "\n".join(f"  - {m!r} matched {p!r}" for p, m in hits[:10])
-        )
+                self._cache[key] = build()
+            except Exception:  # mgcp: allow-broad-except measurement cannot deny
+                self._cache[key] = None
+        return self._cache[key]
 
-    if pre_type == "tool_input_glob":
-        field = pre.get("field", "")
-        deny_globs = pre.get("deny_globs") or []
-        if not field or not deny_globs:
-            return True, ""
-        value = tool_input.get(field)
-        if not isinstance(value, str):
-            return True, ""
-        for pattern in deny_globs:
+    def rel(self, path):
+        """A path relative to the repository root, in POSIX form."""
+        if not path:
+            return ""
+        p = str(path).replace("\\", "/")
+        root = (self.root or "").replace("\\", "/").rstrip("/")
+        if root and p.startswith(root + "/"):
+            return p[len(root) + 1:]
+        return p.lstrip("/") if p.startswith("/") else p
+
+    def has_base(self):
+        """True when HEAD is a commit with a non-empty tree.
+
+        The ratchet's premise is that legacy code has a HEAD version to compare
+        against. With no commit, or a commit whose tree is git's empty tree,
+        every function reads as new and the gate would refuse a whole first
+        import. It records that it skipped instead of refusing.
+        """
+        def build():
+            rc, _ = self.git(["rev-parse", "--verify", "-q", "HEAD^{commit}"])
+            if rc != 0:
+                return False
+            rc, out = self.git(["rev-parse", "HEAD^{tree}"])
+            return rc == 0 and out.strip() != self.EMPTY_TREE
+        return bool(self._cached("has_base", build))
+
+    def staged_paths(self, added_only=False):
+        """Staged paths relative to the root, never including deletions.
+
+        Deletions are left out because a rule built on them refuses the commit
+        that removes the offending file.
+        """
+        key = f"staged:{added_only}"
+
+        def build():
+            flt = "A" if added_only else "ACMR"
+            rc, out = self.git(["diff", "--cached", "--name-only",
+                                "--diff-filter=" + flt])
+            return [x for x in out.splitlines() if x.strip()] if rc == 0 else []
+        return self._cached(key, build) or []
+
+    def staged_files(self):
+        """Every staged path, deletions included.
+
+        The coupling rule needs deletions, because removing a source file is
+        still a change that may require a doc update.
+        """
+        def build():
+            rc, out = self.git(["diff", "--cached", "--name-only"])
+            return [x for x in out.splitlines() if x.strip()] if rc == 0 else []
+        return self._cached("staged_files", build) or []
+
+    def staged_diff(self):
+        """The staged diff as text, capped so a large commit cannot stall."""
+        def build():
+            rc, out = self.git(["diff", "--cached", "--unified=0"])
+            return out[:4_000_000] if rc == 0 else ""
+        return self._cached("staged_diff", build) or ""
+
+    def staged_added_lines(self, exclude):
+        """Added lines across the staged set, skipping excluded paths."""
+        def build():
+            rc, out = self.git(["diff", "--cached", "--numstat"])
+            if rc != 0:
+                return 0
+            total = 0
+            for line in out.splitlines():
+                parts = line.split("\t")
+                if len(parts) != 3:
+                    continue
+                count, _, path = parts
+                # "-" marks a binary file, which has no line count.
+                if count.isdigit() and not _path_excluded(path, exclude):
+                    total += int(count)
+            return total
+        return self._cached(f"staged_added:{','.join(exclude or [])}", build) or 0
+
+    def blob(self, ref, path):
+        """One path's content at a ref, or "" when it is not there."""
+        def build():
+            rc, out = self.git(["show", f"{ref}:{path}"])
+            return out if rc == 0 else ""
+        return self._cached(f"blob:{ref}:{path}", build) or ""
+
+    def transcript(self):
+        """Parsed transcript entries, oldest first. Empty on any read problem."""
+        def build():
+            if not self._transcript_path:
+                return []
             try:
-                if fnmatch.fnmatch(value, pattern):
-                    return (
-                        False,
-                        f"tool_input.{field} = {value!r} matches deny pattern {pattern!r}",
-                    )
-            except Exception:
+                with open(self._transcript_path) as fh:
+                    lines = fh.readlines()
+            except (OSError, IOError):
+                return []
+            out = []
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if isinstance(entry, dict):
+                    out.append(entry)
+            return out
+        return self._cached("transcript", build) or []
+
+    def tool_uses(self, names):
+        """Every recorded tool_use block in this session whose name is wanted."""
+        out = []
+        for entry in self.transcript():
+            if entry.get("type") != "assistant":
                 continue
+            content = (entry.get("message") or {}).get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_use" and block.get("name") in names:
+                    out.append(block)
+        return out
+
+    def message_text(self):
+        """The commit message this call carries, or "".
+
+        Read from the command, which is where the prose-style rule reads it, so
+        two rules can never disagree about what the message is. Covers -m,
+        --message, --message=, -F, --file, --file= and a heredoc body. A form
+        this cannot read returns "", and the caller allows rather than guessing.
+        """
+        return self._cached("message", self._build_message) or ""
+
+    def _build_message(self):
+        command = str(self.tool_input.get("command", ""))
+        if not command:
+            return ""
+        parts = self._message_flags(command)
+        if parts:
+            return "\n\n".join(parts)
+        found = re.search(r"<<-?\s*['\"]?(\w+)['\"]?\n(.*?)\n\1", command, re.S)
+        return found.group(2) if found else ""
+
+    # Flags that carry the message inline, and flags that name a file holding it.
+    _INLINE_FLAGS = ("-m", "--message")
+    _FILE_FLAGS = ("-F", "--file")
+
+    def _message_flags(self, command):
+        """Message text from every flag form, in the order it appears."""
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            tokens = command.split()
+        parts, i = [], 0
+        while i < len(tokens):
+            text, step = self._flag_value(tokens, i)
+            if text:
+                parts.append(text)
+            i += step
+        return parts
+
+    def _flag_value(self, tokens, i):
+        """(message text, how many tokens consumed) for the flag at i."""
+        tok = tokens[i]
+        nxt = tokens[i + 1] if i + 1 < len(tokens) else ""
+        if tok in self._INLINE_FLAGS:
+            return nxt, 2 if nxt else 1
+        if tok in self._FILE_FLAGS:
+            return (self._read_file(nxt), 2) if nxt else ("", 1)
+        if tok.startswith("--message="):
+            return tok.split("=", 1)[1], 1
+        if tok.startswith("--file="):
+            return self._read_file(tok.split("=", 1)[1]), 1
+        return "", 1
+
+    def _read_file(self, path):
+        if path == "-":
+            return ""     # the message comes from stdin, which the hook cannot see
+        for cand in (path, f"{self.root}/{path}" if self.root else path):
+            try:
+                with open(cand) as fh:
+                    return fh.read()
+            except (OSError, IOError):
+                continue
+        return ""
+
+
+def _glob_match(path, pattern):
+    """One glob against a repo-relative POSIX path, with working ``**``.
+
+    fnmatch cannot express "zero or more directories": its ``*`` crosses a path
+    separator, so ``src/**/*.py`` requires at least one directory under src and
+    silently misses a module added directly there. That hole let a rule gated on
+    ``src/**/*.py`` pass a new top-level module, which is the case the rule
+    exists for. Both ``**`` forms are handled here instead.
+    """
+    try:
+        if fnmatch.fnmatch(path, pattern):
+            return True
+        if "/**/" in pattern and fnmatch.fnmatch(
+                path, pattern.replace("/**/", "/", 1)):
+            return True
+        if pattern.endswith("/**") and fnmatch.fnmatch(path, pattern[:-3] + "/*"):
+            return True
+    except Exception:  # mgcp: allow-broad-except a bad glob must never deny
+        return False
+    return False
+
+
+def _path_excluded(path, globs):
+    """True when a repo-relative path matches any glob."""
+    return any(_glob_match(path, g) for g in globs or [])
+
+
+def _added_by_input(name, inp):
+    """Lines one Edit, Write or MultiEdit input adds, floored at zero."""
+    def grew(old, new):
+        return max(0, str(new or "").count("\n") - str(old or "").count("\n"))
+    if name == "Write":
+        return str(inp.get("content") or "").count("\n")
+    if name == "MultiEdit":
+        return sum(grew(e.get("old_string"), e.get("new_string"))
+                   for e in (inp.get("edits") or []) if isinstance(e, dict))
+    return grew(inp.get("old_string"), inp.get("new_string"))
+
+
+def _h_diff_budget(pre, state, ctx):
+    """Refuse an edit that pushes THIS SESSION's additions past the budget.
+
+    Measured from the session's own recorded edits, not from the whole
+    HEAD-to-worktree delta. Measuring the dirty tree refuses the first edit of
+    any session that resumes mid-feature, follows a soft reset, or runs during
+    a merge, for a reason that has nothing to do with the edit. Git exits 0 in
+    all of those cases, so no fail-open engages and the session is simply
+    stuck. The session's own edits are in the transcript, which is per session
+    and which the agent cannot write.
+    """
+    if ctx is None or not ctx.root:
+        return True, ""
+    max_lines = int(pre.get("max_added_lines") or 0)
+    max_files = int(pre.get("max_files") or 0)
+    if max_lines <= 0 and max_files <= 0:
         return True, ""
 
-    # Unknown type — fail open, but on the record. A typo'd type disables the
-    # whole rule silently, and the schema that would have rejected it never
-    # sees a hand-edited rules file.
-    _audit({"event": "skipped_precondition", "type": pre_type})
+    added, touched = _session_edit_totals(ctx, pre.get("exclude_globs") or [])
+    over = _budget_overruns(added, len(touched), max_lines, max_files)
+    if not over:
+        return True, ""
+    listed = ", ".join(sorted(touched)[:10])
+    return False, ("This session is over budget:\n  " + "\n  ".join(over)
+                   + "\n  files: " + listed)
+
+
+def _budget_overruns(added, files, max_lines, max_files):
+    """Each budget this change exceeds, named with both numbers."""
+    over = []
+    if max_lines > 0 and added > max_lines:
+        over.append(f"added lines {added}, budget {max_lines}")
+    if max_files > 0 and files > max_files:
+        over.append(f"files touched {files}, budget {max_files}")
+    return over
+
+
+def _session_edit_totals(ctx, exclude):
+    """(added lines, touched paths) for this session, including this call.
+
+    The call being evaluated has not reached the transcript yet, so it is added
+    separately. Both go through the same exclusion and path normalisation, or a
+    file would count in one place and not the other.
+    """
+    added, touched = 0, set()
+    pending = [(ctx.tool_name, ctx.tool_input or {})]
+    for block in ctx.tool_uses(("Edit", "Write", "MultiEdit")):
+        pending.append((block.get("name"), block.get("input") or {}))
+    for name, inp in pending:
+        rel = ctx.rel(inp.get("file_path", ""))
+        if not rel or _path_excluded(rel, exclude):
+            continue
+        touched.add(rel)
+        added += _added_by_input(name, inp)
+    return added, touched
+
+
+def _h_staged_python_complexity(pre, state, ctx):
+    """Refuse staged Python that worsens a function or adds one over a limit.
+
+    The metric module is imported HERE, not at module level. At module level an
+    ImportError is raised before main's own handler exists, so the hook exits 1
+    with empty output, which the harness reads as allow. One missing file would
+    take every rule dark, including the git gate. Imported here, the same
+    failure costs one inert gate and leaves a row in the audit log.
+    """
+    qm = _ratchet_ready(ctx)
+    if qm is None:
+        return True, ""
+
+    limits = dict(qm.DEFAULT_LIMITS)
+    limits.update(pre.get("limits") or {})
+    exclude = pre.get("exclude_globs") or []
+    checks = pre.get("banned") or []
+    paths = [p for p in ctx.staged_paths()
+             if p.endswith(".py") and not _path_excluded(p, exclude)]
+    exempt = pre.get("file_length_exempt") or []
+
+    violations = []
+    for path in paths:
+        violations.extend(_file_violations(
+            qm, ctx, path, limits, checks, _path_excluded(path, exempt)))
+    if not violations:
+        return True, ""
+    return False, qm.format_violations(violations)
+
+
+def _ratchet_ready(ctx):
+    """The metric module when the ratchet can run, else None.
+
+    Three reasons it cannot: no repository, no metric module installed, or no
+    HEAD commit with content to compare against. Each one allows the call, and
+    the last two leave a row in the audit log so an inert gate is visible
+    rather than looking like a clean result.
+    """
+    if ctx is None or not ctx.root:
+        return None
+    qm = _load_metrics()
+    if qm is None:
+        return None
+    if not ctx.has_base():
+        _audit({"event": "skipped_precondition",
+                "type": "staged_python_complexity",
+                "reason": "no HEAD commit with content to compare against"})
+        return None
+    return qm
+
+
+def _load_metrics():
+    """The metric module, or None when it is not installed.
+
+    Imported here and not at module level. At module level an ImportError is
+    raised before main's own handler exists, so the hook exits 1 with empty
+    output, which the harness reads as allow: one missing file would take every
+    rule dark, including the git gate. Here the same failure costs one inert
+    gate and leaves a row in the audit log.
+    """
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import quality_metrics
+        return quality_metrics
+    except Exception as exc:  # mgcp: allow-broad-except one gate, not all of them
+        _audit({"event": "skipped_precondition",
+                "type": "staged_python_complexity",
+                "reason": f"quality_metrics unavailable: {exc!r}"[:200]})
+        return None
+
+
+def _file_violations(qm, ctx, path, limits, checks, skip_file_length=False):
+    """Ratchet violations and banned patterns for one staged file."""
+    # An empty ref means the index, so this reads the staged blob.
+    staged_src = ctx.blob("", path)
+    after = qm.measure_source(staged_src, path)
+    if not after:
+        return []
+    head_src = ctx.blob("HEAD", path)
+    before = qm.measure_source(head_src, path) if head_src else {}
+    out = list(qm.compare(before, after, limits, skip_file_length))
+    for b in qm.banned_patterns(staged_src, checks):
+        out.append({
+            "name": f"{path}:{b['lineno']}", "metric": b["pattern"],
+            "before": None, "after": b["detail"], "limit": "banned",
+            "lineno": b["lineno"], "reason": b["detail"],
+        })
+    return out
+
+
+def _h_commit_message_requires(pre, state, ctx):
+    """Require a pattern in the message once the change is big enough."""
+    if ctx is None or not ctx.root:
+        return True, ""
+    pattern = pre.get("pattern") or ""
+    if not pattern:
+        return True, ""
+    exclude = pre.get("exclude_globs") or []
+    added = ctx.staged_added_lines(exclude)
+    if added < int(pre.get("min_added_lines") or 0):
+        return True, ""
+
+    message = ctx.message_text()
+    if not message:
+        # A form the hook cannot read, such as --file=- or an editor session.
+        # Allowing is the only honest answer. Guessing would refuse a commit
+        # whose message is fine.
+        _audit({"event": "skipped_precondition",
+                "type": "commit_message_requires",
+                "reason": "no message text in the command"})
+        return True, ""
+    if _matches_or_unusable(pattern, message):
+        return True, ""
+    return False, (f"{added} added lines, and the message does not match "
+                   f"{pattern!r}.")
+
+
+def _matches_or_unusable(pattern, text):
+    """True when the pattern matches, or when the pattern itself is broken.
+
+    A bad regex in the rules file must not refuse every commit.
+    """
+    try:
+        return bool(re.search(pattern, text))
+    except re.error:
+        return True
+
+
+def _h_transcript_tool_called(pre, state, ctx):
+    """Require a tool call with matching input somewhere in this session.
+
+    Read from the transcript rather than from turn_tools_called, for the reason
+    the apology gate learned in v2.16. That list lives in a file shared by
+    every project and every concurrent session, and the agent being gated can
+    write it. The transcript is per session and it cannot.
+    """
+    want = pre.get("tool_name", "")
+    if not _rule_applies(ctx, want, pre.get("when_staged_added", [])):
+        return True, ""
+    if not ctx.transcript():
+        # No readable transcript means the question cannot be answered, not
+        # that the answer is no. Refusing here would block every commit that
+        # adds a module whenever transcript_path is absent, which is the
+        # opposite of a net. An empty result is recorded so an inert gate is
+        # visible rather than looking like a clean pass.
+        _audit({"event": "skipped_precondition", "type": "transcript_tool_called",
+                "reason": "no readable transcript for this session"})
+        return True, ""
+    wanted = pre.get("input_match", {})
+    if any(_input_matches(b.get("input") or {}, wanted)
+           for b in ctx.tool_uses((want,))):
+        return True, ""
+    return False, _missing_call_detail(want, wanted)
+
+
+def _rule_applies(ctx, want, gate_globs):
+    """True when this rule has something to check."""
+    if ctx is None or not want:
+        return False
+    return _gate_applies(ctx, gate_globs or [])
+
+
+def _missing_call_detail(want, wanted):
+    """Why the rule refused, naming the call it looked for."""
+    if wanted:
+        return f"no {want} call in this session with {wanted}"
+    return f"no {want} call in this session"
+
+
+def _input_matches(recorded, wanted):
+    """True when every wanted key matches the recorded tool input."""
+    return all(str(recorded.get(k)) == str(v) for k, v in wanted.items())
+
+
+def _gate_applies(ctx, gate_globs):
+    """True when this rule applies to what is staged.
+
+    No globs means the rule always applies. Otherwise it applies only when a
+    file this commit ADDS matches one, which is the difference between adding a
+    module and editing one.
+    """
+    if not gate_globs:
+        return True
+    if not ctx.root:
+        return False
+    return any(_path_excluded(p, gate_globs)
+               for p in ctx.staged_paths(added_only=True))
+
+
+def _h_tool_called_this_turn(pre, state, ctx):
+    name = pre.get("tool_name", "")
+    if name in (state.get("turn_tools_called") or []):
+        return True, ""
+    return False, f"Required tool not called this turn: {name}"
+
+
+def _h_tool_not_called_this_turn(pre, state, ctx):
+    name = pre.get("tool_name", "")
+    if name not in (state.get("turn_tools_called") or []):
+        return True, ""
+    return False, f"Forbidden tool called this turn: {name}"
+
+
+def _h_staged_files_coupling(pre, state, ctx):
+    unsatisfied = []
+    for c in pre.get("couplings") or []:
+        when = c.get("when_staged") or []
+        req = c.get("require_one_of") or []
+        if not when or not req:
+            continue
+        ok, triggering = _check_coupling(ctx.staged_files(), when, req)
+        if not ok:
+            unsatisfied.append(
+                f"  - staged: {', '.join(triggering)} -> require one of: {', '.join(req)}"
+            )
+    if not unsatisfied:
+        return True, ""
+    return False, "Doc-coupling violations:\n" + "\n".join(unsatisfied)
+
+
+def _h_staged_files_forbid(pre, state, ctx):
+    deny_globs = pre.get("deny_globs") or []
+    if not deny_globs:
+        return True, ""
+    hits = [p for p in ctx.staged_paths()
+            if any(_safe_fnmatch(p, g) for g in deny_globs)]
+    if not hits:
+        return True, ""
+    return False, ("staged files are forbidden by this rule:\n"
+                   + "\n".join(f"  - {h}" for h in hits[:20]))
+
+
+def _h_staged_content_forbid(pre, state, ctx):
+    patterns = pre.get("patterns") or []
+    added = _added_lines(ctx.staged_diff())
+    if not patterns or not added:
+        return True, ""
+    hits = []
+    for raw in patterns:
+        try:
+            found = re.search(raw, added, re.IGNORECASE)
+        except re.error:
+            continue  # a bad pattern must not refuse every commit
+        if found:
+            hits.append((raw, found.group(0)[:60]))
+    if not hits:
+        return True, ""
+    return False, ("staged content matches a forbidden pattern:\n"
+                   + "\n".join(f"  - {m!r} matched {p!r}" for p, m in hits[:10]))
+
+
+def _h_tool_input_glob(pre, state, ctx):
+    field = pre.get("field", "")
+    deny_globs = pre.get("deny_globs") or []
+    value = (ctx.tool_input or {}).get(field)
+    if not field or not deny_globs or not isinstance(value, str):
+        return True, ""
+    for pattern in deny_globs:
+        if _safe_fnmatch(value, pattern):
+            return False, (f"tool_input.{field} = {value!r} matches deny "
+                           f"pattern {pattern!r}")
     return True, ""
+
+
+# Every precondition type has exactly one handler, looked up here. This was an
+# if-chain that reached 42 cyclomatic complexity on six types, and each new
+# type made the whole function harder to read while adding a parameter to it.
+# A dict means the dispatcher stays at 3 whatever gets added, and each rule's
+# logic is readable on its own.
+_HANDLERS = {
+    "tool_called_this_turn": _h_tool_called_this_turn,
+    "tool_not_called_this_turn": _h_tool_not_called_this_turn,
+    "staged_files_coupling": _h_staged_files_coupling,
+    "staged_files_forbid": _h_staged_files_forbid,
+    "staged_content_forbid": _h_staged_content_forbid,
+    "tool_input_glob": _h_tool_input_glob,
+    "diff_budget": _h_diff_budget,
+    "staged_python_complexity": _h_staged_python_complexity,
+    "commit_message_requires": _h_commit_message_requires,
+    "transcript_tool_called": _h_transcript_tool_called,
+}
+
+
+
+def _evaluate_precondition(
+    pre: dict, state: dict, staged_files: list = None, tool_input: dict = None,
+    ctx: "EvalContext" = None,
+):
+    """Dispatch one precondition to its handler.
+
+    Three parameters are the ones callers already pass positionally, so every
+    existing call site and test keeps working. When no context is given, one is
+    built with those values seeded into its cache, which is how a test
+    exercises a rule without a repository.
+
+    The staged diff and the staged path list used to be parameters here too.
+    They are git reads, so they belong on the context with every other git
+    read, and moving them stopped this list at five. Growing it by one per
+    input is how it reached six parameters and 42 cyclomatic complexity.
+    """
+    handler = _HANDLERS.get((pre or {}).get("type", ""))
+    if handler is None:
+        # An unknown type fails open, on the record. A mistyped type disables
+        # the whole rule silently, and the schema that would have rejected it
+        # never sees a hand-edited rules file.
+        _audit({"event": "skipped_precondition",
+                "type": (pre or {}).get("type", "")})
+        return True, ""
+    if ctx is None:
+        staged = list(staged_files or [])
+        ctx = EvalContext(
+            {"tool_input": tool_input or {}},
+            # A direct caller has no repository, so seed the git reads it would
+            # otherwise make. "staged:False" is the cache key staged_paths uses.
+            seed={"staged_files": staged, "staged:False": staged},
+        )
+    return handler(pre, state, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -728,9 +1252,11 @@ def main():
         _allow()
 
     denials = []
-    staged_files = None  # lazy
-    staged_diff = None  # lazy
-    staged_not_deleted = None  # lazy
+    # One context for the whole tool call. Every accessor on it is lazy and
+    # caches, so a rule that needs the staged diff costs one subprocess and a
+    # rule that needs nothing costs none. This replaced three separate lazy
+    # variables that each had to be threaded through the evaluator.
+    ctx = EvalContext(hook_input)
 
     for rule in rules:
         try:
@@ -745,33 +1271,30 @@ def main():
         except Exception:
             continue  # malformed rule -> fail open
 
-        preconditions = rule.get("preconditions") or []
-        types = {(p or {}).get("type") for p in preconditions}
-        # Both are one subprocess each, so read them once per tool call at
-        # most, and only when a matched rule actually asks.
-        if staged_files is None and types & {"staged_files_coupling", "staged_files_forbid"}:
-            staged_files = _get_staged_files(project_dir)
-        if staged_diff is None and "staged_content_forbid" in types:
-            staged_diff = _get_staged_diff(project_dir)
-        if staged_not_deleted is None and "staged_files_forbid" in types:
-            staged_not_deleted = _get_staged_paths_not_deleted(project_dir)
-
         unsatisfied = []
-        for pre in preconditions:
+        for pre in rule.get("preconditions") or []:
             try:
-                ok, detail = _evaluate_precondition(
-                    pre or {}, state, staged_files or [], tool_input,
-                    staged_diff or "", staged_not_deleted or [],
-                )
+                ok, detail = _evaluate_precondition(pre or {}, state, ctx=ctx)
             except Exception:
                 ok, detail = True, ""
             if not ok:
                 unsatisfied.append(detail)
 
         if unsatisfied:
-            reason = rule.get("deny_reason") or f"Rule '{rule.get('name', '?')}' violated"
+            name = rule.get("name", "?")
+            reason = rule.get("deny_reason") or f"Rule '{name}' violated"
             details = "\n".join(unsatisfied)
-            denials.append(f"[{rule.get('name', '?')}] {reason}\n{details}")
+            # Audit mode records what the rule WOULD have refused and allows
+            # the call. Every new rule ships this way and is promoted on
+            # evidence, so a limit that is wrong costs a log row rather than a
+            # blocked session. would_deny is counted separately from deny in
+            # the dashboard, because a projection is not an action.
+            if rule.get("mode") == "audit":
+                _audit({"event": "would_deny", "gate": "rules",
+                        "tool_denied": tool_name, "session_id": session_id,
+                        "rules": [name], "detail": details[:1000]})
+                continue
+            denials.append(f"[{name}] {reason}\n{details}")
 
     if denials:
         _deny(denials, audit={

@@ -3126,7 +3126,9 @@ async def add_enforcement_rule(
         preconditions: list of dicts. Each has "type" ∈
             {"tool_called_this_turn", "tool_not_called_this_turn",
              "staged_files_coupling", "tool_input_glob",
-             "staged_files_forbid", "staged_content_forbid"}. The first two
+             "staged_files_forbid", "staged_content_forbid",
+             "diff_budget", "staged_python_complexity",
+             "commit_message_requires", "transcript_tool_called"}. The first two
             take "tool_name"; the coupling type takes "couplings" — a list
             of {"when_staged": [glob,...], "require_one_of": [glob,...]};
             tool_input_glob takes "field" (which tool_input key to read)
@@ -3140,7 +3142,9 @@ async def add_enforcement_rule(
             commit ADDS, so neither can refuse the commit that removes the
             offending thing. Keep their patterns in the rules file rather
             than in a repository, so a list of private names is never itself
-            published.
+            published. The last four are the structured coding gates;
+            `mgcp.enforcement.Precondition` documents every field, and the
+            evaluator in hook_templates/pre-tool-dispatcher.py is the contract.
         bypass_scope: short token (e.g. 'git', 'docs') the user can name
             in MGCP_BYPASS:<scope> to disable this rule for one turn.
         deny_reason: text shown to the LLM when the rule blocks a call.
@@ -3224,6 +3228,64 @@ async def update_enforcement_rule(
         save_config(config)
         return f"Updated rule '{name}'."
     return f"No rule named '{name}'."
+
+
+@mcp.tool()
+async def sync_enforcement_rules() -> str:
+    """Add shipped enforcement rules this install does not have yet. Add only.
+
+    Nothing else delivers a rule added after you installed MGCP. The defaults
+    seed on first install only, behind a check for a missing file, and
+    load_config returns them only when the file is absent. So an operator who
+    has used MGCP for a week never receives a rule shipped since.
+
+    Add only, and never upsert. A populated rules file is a customised file:
+    rules get disabled, retuned and renamed by hand, and a shipped rule of the
+    same name may differ from its default on purpose. Overwriting one by name
+    would silently revert that. A rule already present keeps its every field
+    and its position, and the order of your rules never changes.
+
+    Rules that arrive this way are the ones the package ships. The structured
+    coding gates all ship disabled and in audit mode, so this call cannot start
+    refusing your tool calls. Enable one with toggle_enforcement_rule when you
+    have read what it would have refused.
+    """
+    from .enforcement import merge_missing_defaults
+
+    try:
+        result = merge_missing_defaults()
+    except Exception as exc:
+        return (f"Could not sync enforcement rules: {exc}\n"
+                "The file was left untouched. A rules file that exists but "
+                "does not parse is never overwritten, because the hook is "
+                "still enforcing from it.")
+
+    if not result["added"]:
+        return (f"Nothing to add. All shipped rules are already in "
+                f"{result['path']} ({result['kept']} rules).")
+    lines = [
+        f"Added {len(result['added'])} rule(s) to {result['path']}:",
+        *(f"  {name}" for name in result["added"]),
+        "",
+        f"Your {result['kept']} existing rules were not touched.",
+    ]
+    if result["enabled"]:
+        lines += [
+            f"{len(result['enabled'])} of them are ON in audit mode, which "
+            "records what each would have refused and refuses nothing.",
+            f"Hook check: {result['hook_detail']}.",
+            "Read the would_deny rows in the Enforcement view, then promote a "
+            "rule with update_enforcement_rule(mode='enforce') when its "
+            "refusals are ones you agree with.",
+        ]
+    else:
+        lines += [
+            "They are all DISABLED, because audit mode is only honoured by a "
+            f"hook that knows the key. {result['hook_detail']}.",
+            "Run `mgcp-init` to install the current hooks, then call this tool "
+            "again to turn them on in audit mode.",
+        ]
+    return "\n".join(lines)
 
 
 @mcp.tool()

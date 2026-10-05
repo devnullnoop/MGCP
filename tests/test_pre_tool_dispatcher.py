@@ -1974,3 +1974,25 @@ class TestStructuredCodingGates:
             decision, _ = self._decide(
                 tmp_path, rule, {"tool_name": tool, "tool_input": payload}, repo)
             assert decision == "deny", f"{tool} was not covered by tool_names"
+
+    def test_a_file_outside_the_repository_does_not_count(self, tmp_path):
+        """A repository diff budget counts repository files.
+
+        Found live: an audit row reported 2,570 added lines across 15 files for a
+        session whose repository edits were a fraction of that, because the path
+        normaliser stripped the leading slash off an absolute path instead of
+        rejecting it, so scratch files in a temporary directory read as
+        repository paths.
+        """
+        repo = self._repo(tmp_path, {})
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        decision, _ = self._decide(
+            tmp_path,
+            self._rule({"type": "diff_budget", "max_added_lines": 1, "max_files": 1},
+                       tool_name="", tool_names=["Write"]),
+            {"tool_name": "Write",
+             "tool_input": {"file_path": str(outside / "scratch.py"),
+                            "content": "\n".join(str(i) for i in range(50))}},
+            repo)
+        assert decision == "allow"

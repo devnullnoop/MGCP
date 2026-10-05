@@ -471,14 +471,24 @@ class EvalContext:
         return self._cache[key]
 
     def rel(self, path):
-        """A path relative to the repository root, in POSIX form."""
+        """A path relative to the repository root, or "" if it is outside.
+
+        An absolute path that is not under the root returns "", so the caller
+        skips it. Stripping its leading slash instead made a file in a temporary
+        directory read as a repository path: a live audit row showed 2,570 added
+        lines across 15 files for a session whose repository edits were a
+        fraction of that, because scratch files counted toward a repository diff
+        budget.
+        """
         if not path:
             return ""
         p = str(path).replace("\\", "/")
         root = (self.root or "").replace("\\", "/").rstrip("/")
         if root and p.startswith(root + "/"):
             return p[len(root) + 1:]
-        return p.lstrip("/") if p.startswith("/") else p
+        if p.startswith("/"):
+            return ""     # absolute, and not under this repository
+        return p          # already relative, so it is this repository's
 
     def has_base(self):
         """True when HEAD is a commit with a non-empty tree.

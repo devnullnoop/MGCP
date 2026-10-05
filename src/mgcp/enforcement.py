@@ -532,6 +532,46 @@ STRUCTURE_RULES: list[EnforcementRule] = [
             "Bypass with MGCP_BYPASS:refactor in your next prompt."
         ),
     ),
+    EnforcementRule(
+        name="dependency-change-requires-sbom",
+        description=(
+            "A commit that changes pyproject.toml also stages sbom.cdx.json. A "
+            "software bill of materials that drifts from the project is worse "
+            "than none, because it answers the question wrongly and nothing "
+            "says so. The coupling is the only moment the two can be kept "
+            "together cheaply. Scanning for vulnerabilities is NOT done here: "
+            "it needs network access, takes tens of seconds, and its answer "
+            "changes on the advisory database's schedule rather than yours, so "
+            "it belongs in scheduled CI."
+        ),
+        enabled=False,
+        mode="audit",
+        trigger=Trigger(
+            tool_name="Bash",
+            command_match=CommandMatch(
+                type="git_subcommand",
+                subcommands=["commit"],
+            ),
+        ),
+        preconditions=[
+            Precondition(
+                type="staged_files_coupling",
+                couplings=[{
+                    "when_staged": ["pyproject.toml"],
+                    "require_one_of": ["sbom.cdx.json"],
+                }],
+            ),
+        ],
+        bypass_scope="sbom",
+        deny_reason=(
+            "This commit changes pyproject.toml without updating sbom.cdx.json.\n"
+            "Regenerate it, then stage both together:\n"
+            "  cyclonedx-py environment .venv --of JSON --output-reproducible \\\n"
+            "    --pyproject pyproject.toml --mc-type application -o sbom.cdx.json\n"
+            "If this commit changes no dependency, bypass with MGCP_BYPASS:sbom "
+            "in your next prompt."
+        ),
+    ),
 ]
 
 

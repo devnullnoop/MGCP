@@ -1010,6 +1010,47 @@ If someone tries this, we'd be interested to hear how it goes.
 | Skill compilation | Complete. It writes a SKILL.md file and never writes to the store. The earlier plan to remove compiled notes from search was dropped, because it made retrieval worse. |
 | More than one session at a time | Complete in 3.0. Qdrant server support, version-checked writes, and a shared embedding model. A single session with the built-in index stays the default. |
 
+## Dependency security
+
+MGCP has 11 direct dependencies and resolves to around 74 packages, most of them
+below sentence-transformers and PyTorch.
+
+CI audits them with [pip-audit](https://pypi.org/project/pip-audit/) against the
+[Python advisory database](https://github.com/pypa/advisory-database), on every
+pull request and once a day at 06:00 UTC. The daily run is the one that matters:
+an advisory is published on a date that has nothing to do with our commits, so
+without a clock a quiet week reads as a clean week.
+
+**The audit resolves a fresh install rather than reading an existing
+environment.** Those answer different questions, and the gap is large. On
+2026-10-05 a developer working environment here carried 82 advisories across 20
+packages while a fresh resolve of the same `pyproject.toml` had none. The lower
+bounds were already high enough. Only the local environment had drifted. Auditing
+that environment would have reported a problem no user has, and auditing nothing
+at all would have missed the real one, which is that a stale environment tests
+code against versions nobody installs.
+
+To run it yourself:
+
+```bash
+pip install pip-audit
+python -m pip install --dry-run --report resolve.json -e .
+# then audit the versions in resolve.json
+```
+
+Scanning is not part of the commit gates, on purpose. It needs network access,
+takes tens of seconds, and answers a question whose answer changes on the
+advisory database's schedule rather than yours. The PreToolUse hook is
+stdlib-only, runs on every tool call, and fails open, so a network call there
+would be slow and unreliable in the same breath. What the commit gate does check
+is cheaper and still useful: `new-module-requires-decision` fires when a commit
+stages `pyproject.toml`, and asks for a catalogue decision recording why the
+dependency changed.
+
+Reporting something you believe is a vulnerability in MGCP itself: open a GitHub
+issue if it is low risk, or email the address on the maintainer's GitHub profile
+if it is not.
+
 ## Contributing
 
 Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).

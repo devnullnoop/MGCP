@@ -633,3 +633,28 @@ workflows:
           - lesson_id: owasp-file-execution
             relevance: "No script execution in upload directories"
             priority: 2
+
+      - id: dependencies-and-sbom
+        name: "Dependency Scan and Bill of Materials"
+        order: 9
+        description: "Scan the dependencies a new install gets, and verify the bill of materials describes the project."
+        guidance: "Resolve a fresh install first, then audit that list. Auditing your own working environment answers a different question: a stale venv here once reported 82 advisories while a fresh resolve of the same manifest had none. Generate the bill of materials reproducibly, then check it mechanically, because keeping it updated by intention does not hold."
+        checklist:
+          - "Vulnerability scan runs on pull requests AND on a daily schedule"
+          - "The scan reads a fresh resolve, not the local environment"
+          - "A scan that cannot run fails loudly instead of exiting zero"
+          - "A bill of materials is committed, in CycloneDX or SPDX format"
+          - "It is generated reproducibly, with no timestamp or serial number"
+          - "Its root component name and version match the package"
+          - "Every declared direct dependency appears in it"
+          - "It was not committed before the last change to the manifest"
+          - "A commit-time rule couples the manifest to the bill of materials"
+          - "The scan is NOT a commit gate, since it needs network and a clock"
+        outputs:
+          - "advisory list for a fresh install"
+          - "committed bill of materials"
+          - "CI jobs for both, one of them scheduled"
+        lessons:
+          - lesson_id: audit-the-install-not-your-venv
+            relevance: "What to scan, what to generate, and how to keep it honest"
+            priority: 1

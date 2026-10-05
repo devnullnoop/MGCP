@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # A vulnerability is published on a date that has nothing to do with our
+  # commits. Without a clock, a quiet week means an unchecked week, not a clean
+  # one. 06:00 UTC daily.
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
 
 jobs:
   test:
@@ -110,3 +116,88 @@ jobs:
               'src/mgcp/init_project.py' 'src/mgcp/web_server.py' \
               'src/mgcp/persistence.py' \
               'src/mgcp/hook_templates/pre-tool-dispatcher.py'
+
+  audit:
+    name: dependency vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pip-audit
+        run: python -m pip install --upgrade pip pip-audit
+
+      # Resolve what a NEW user installs today, which is the set that matters.
+      # Auditing a developer's existing environment answers a different and less
+      # useful question: on 2026-10-05 a stale working venv carried 82 advisories
+      # across 20 packages while a fresh resolve of the same pyproject.toml had
+      # none. The lower bounds were already high enough; only the local
+      # environment had drifted.
+      - name: Resolve a fresh install
+        run: |
+          python -m pip install --dry-run --quiet --report resolve.json -e .
+          python - <<'PY'
+          import json
+          report = json.load(open("resolve.json"))
+          lines = []
+          for item in report.get("install", []):
+              meta = item.get("metadata", {})
+              name, version = meta.get("name"), meta.get("version")
+              if name and version and name.lower() != "mgcp":
+                  lines.append(f"{name}=={version}")
+          assert lines, "resolved nothing, which is a broken check and not a pass"
+          open("resolved.txt", "w").write("\n".join(sorted(lines)) + "\n")
+          print(f"resolved {len(lines)} packages")
+          PY
+
+      - name: Audit
+        run: pip-audit -r resolved.txt --no-deps --progress-spinner off
+
+      - name: Audit again, as JSON, for the log
+        if: always()
+        run: pip-audit -r resolved.txt --no-deps --progress-spinner off --format json || true
+
+  sbom:
+    name: software bill of materials
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # the staleness test reads git history
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest cyclonedx-bom
+
+      # The committed SBOM must still describe this project. These checks hold at
+      # all times, unlike byte equality with a fresh resolve, which breaks every
+      # time an upstream project publishes and would teach people to ignore it.
+      - name: Check the committed SBOM
+        run: python -m pytest tests/test_sbom.py -q
+
+      # A fresh bill of materials for THIS run, always accurate for the versions
+      # it was built against. Downloadable from the run page for 90 days.
+      - name: Generate a current SBOM
+        run: |
+          cyclonedx-py environment "$(python -c 'import sys; print(sys.prefix)')" \
+            --of JSON --output-reproducible --pyproject pyproject.toml \
+            --mc-type application -o sbom-current.cdx.json
+          python -c "import json; d=json.load(open('sbom-current.cdx.json')); print(f\"{len(d['components'])} components\")"
+
+      - name: Upload it
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom-current.cdx.json

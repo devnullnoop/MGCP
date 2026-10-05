@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - The `feature-development` workflow gains `fit` after `plan` and `simplify` after `test`. `bug-fix` gains `simplify`. Existing step IDs are unchanged, because stored workflow state resolves a step by ID.
 - Six lessons added to `bootstrap_data/dev/code-quality.yaml`, one per banned pattern not already covered, and two existing lessons extended.
-- `hook_templates/VERSION` moves to 20. Installed hooks upgrade on the next `mgcp-init` run, and the gates do nothing until then. The counter has to change in the same commit as any hook edit: `install_global_hooks` re-copies only when it differs from the installed marker, so a hook change that leaves it alone does not deploy and `mgcp-init` still reports success. That happened once during this work and is why the note is here.
+- `hook_templates/VERSION` moves to 21. Installed hooks upgrade on the next `mgcp-init` run, and the gates do nothing until then. The counter has to change in the same commit as any hook edit: `install_global_hooks` re-copies only when it differs from the installed marker, so a hook change that leaves it alone does not deploy and `mgcp-init` still reports success. That happened once during this work and is why the note is here.
 
 
 ### Added: the doctor reports leftover server processes

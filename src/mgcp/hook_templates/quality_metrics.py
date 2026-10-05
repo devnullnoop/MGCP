@@ -76,6 +76,22 @@ ALLOW_BROAD_EXCEPT = "mgcp: allow-broad-except"
 # passing a misspelled check silently looks for nothing.
 BANNED_CHECKS = ("swallowed_error", "pass_through_wrapper")
 
+# Declares one function deliberately large, on its def line, with a reason:
+#
+#     def main():  # mgcp: allow-size a build script is one linear sequence
+#
+# Some work is honestly one long function. A build script, an installer, an
+# argparse dispatcher: each branch is a flag, the sequence is flat, and splitting
+# it into eight helpers called once would scatter a procedure that reads top to
+# bottom. Those functions still measure large, and the ratchet would refuse the
+# next edit that adds a branch, which is a refusal with nothing wrong behind it.
+#
+# The escape needs a reason, because an exemption nobody justified is a hole. A
+# bare marker does not exempt anything. Exempt functions are COUNTED and NAMED in
+# the report rather than hidden, so the list stays something a person decided
+# rather than something that drifted.
+ALLOW_SIZE = "mgcp: allow-size"
+
 
 # ---------------------------------------------------------------------------
 # Measurement
@@ -146,6 +162,7 @@ def measure_source(source: str, path: str = "<string>") -> dict:
         return {}
 
     functions: dict[str, dict] = {}
+    source_lines = source.splitlines()
 
     def visit(node: ast.AST, prefix: str) -> None:
         for child in ast.iter_child_nodes(node):
@@ -164,6 +181,7 @@ def measure_source(source: str, path: str = "<string>") -> dict:
                         "params": _params(child),
                         "lineno": child.lineno,
                         "is_mcp_tool": _is_mcp_tool(child),
+                        "size_exempt": _size_exemption(child, source_lines),
                     }
                 visit(child, f"{prefix}{child.name}.")
             else:
@@ -278,6 +296,30 @@ def _only_forwards(node) -> bool:
     return passed == own
 
 
+def _size_exemption(node, source_lines: list[str]) -> str:
+    """The stated reason this function is deliberately large, else "".
+
+    Read from the ``def`` line, from any decorator line, and from the comment
+    line directly above, so the marker can sit wherever it fits. The line above
+    is not a convenience: a signature long enough to need the exemption is
+    often already at the line length limit, so the def line has no room for it.
+
+    A marker with no reason after it returns "", which exempts nothing. An
+    exemption nobody justified is a hole.
+    """
+    first = min([node.lineno] + [d.lineno for d in node.decorator_list])
+    for lineno in range(max(1, first - 1), (node.lineno or first) + 1):
+        if lineno > len(source_lines):
+            break
+        line = source_lines[lineno - 1]
+        if ALLOW_SIZE not in line:
+            continue
+        reason = line.split(ALLOW_SIZE, 1)[1].strip(" #:\t")
+        if reason:
+            return reason
+    return ""
+
+
 def banned_patterns(source: str, checks: list[str]) -> list[dict]:
     """Banned patterns in one file. Empty when the source does not parse."""
     try:
@@ -333,9 +375,13 @@ def _metric_applies(metric: str, now: dict) -> bool:
     File length is a property of the file and handled once. A function
     registered as an MCP tool is exempt from the parameter count, because its
     parameters are a wire schema the model fills in rather than a signature that
-    wants splitting.
+    wants splitting. A function carrying the allow-size marker with a reason is
+    exempt from all four, because some work is honestly one long sequence and
+    the ratchet would otherwise refuse the next branch added to it.
     """
     if metric == "file_lines":
+        return False
+    if now.get("size_exempt"):
         return False
     return not (metric == "params" and now.get("is_mcp_tool"))
 
@@ -458,22 +504,23 @@ def _git(args: list[str], cwd: str = ".") -> tuple[int, str]:
         return 1, ""
 
 
-def _report(paths: list[str], limits: dict) -> int:
-    """Print the current distribution. Always exits 0; this is information."""
-    import statistics
-    from pathlib import Path
+def _measure_tree(paths: list[str]) -> list:
+    """Every function under these paths, as (metrics, label) pairs."""
+    from pathlib import Path as _Path
 
     rows = []
     for root in paths:
-        for p in sorted(Path(root).rglob("*.py")):
+        for p in sorted(_Path(root).rglob("*.py")):
             m = measure_source(p.read_text(errors="replace"), str(p))
             for name, f in m.get("functions", {}).items():
                 rows.append((f, f"{p}:{name}"))
-    if not rows:
-        print("no Python files found")
-        return 0
+    return rows
 
-    print(f"{len(rows)} functions\n")
+
+def _print_distribution(rows: list, limits: dict) -> None:
+    """Median, p90, max and the over-limit count for each metric."""
+    import statistics
+
     print(f"  {'metric':12s} {'median':>7} {'p90':>7} {'max':>7} {'over limit':>11}")
     for metric in ("cyclomatic", "length", "depth", "params"):
         vals = sorted(f[metric] for f, _ in rows)
@@ -481,9 +528,46 @@ def _report(paths: list[str], limits: dict) -> int:
         over = sum(1 for v in vals if v > limits[metric])
         print(f"  {metric:12s} {statistics.median(vals):>7.0f} {p90:>7} "
               f"{max(vals):>7} {over:>11}")
+
+
+def _print_exemptions(rows: list) -> None:
+    """The functions declared deliberately large, with the stated reason.
+
+    Named rather than hidden. An exemption list nobody can see is one that
+    drifts, and the point of requiring a reason is that someone reads it.
+    """
+    exempt = [(f, n) for f, n in rows if f.get("size_exempt")]
+    if not exempt:
+        return
+    print(f"\n  declared deliberately large ({len(exempt)}), with the reason given:")
+    for f, name in sorted(exempt, key=lambda r: -r[0]["cyclomatic"]):
+        print(f"    CC {f['cyclomatic']:3d}  {f['length']:4d} lines  {name}")
+        print(f"             {f['size_exempt']}")
+
+
+def _report(paths: list[str], limits: dict) -> int:
+    """Print the current distribution. Always exits 0; this is information."""
+    rows = _measure_tree(paths)
+    if not rows:
+        print("no Python files found")
+        return 0
+
+    print(f"{len(rows)} functions\n")
+    _print_distribution(rows, limits)
+
+    # "Over limit" is not "refused". The ratchet holds an existing function at
+    # its current size and only refuses it getting worse, so a large legacy
+    # function blocks nothing. Saying so here stops the count reading as a
+    # backlog of failures.
+    print("\n  Over limit is not refused. The ratchet holds these at their")
+    print("  current size and refuses only a change that makes one worse.")
+
     print("\n  worst by cyclomatic complexity:")
     for f, name in sorted(rows, key=lambda r: -r[0]["cyclomatic"])[:5]:
-        print(f"    CC {f['cyclomatic']:3d}  {f['length']:4d} lines  {name}")
+        mark = "  exempt" if f.get("size_exempt") else ""
+        print(f"    CC {f['cyclomatic']:3d}  {f['length']:4d} lines  {name}{mark}")
+
+    _print_exemptions(rows)
     return 0
 
 

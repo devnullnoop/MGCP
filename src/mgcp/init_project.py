@@ -551,6 +551,7 @@ def detect_installed_clients() -> list[str]:
     return installed
 
 
+# mgcp: allow-size the same ordered install sequence, per project rather than global
 def init_claude_hooks(project_dir: Path, dry_run: bool = False, force: bool = False) -> dict:
     """
     Initialize Claude Code v2 hooks in a project directory.
@@ -674,6 +675,7 @@ def init_claude_hooks(project_dir: Path, dry_run: bool = False, force: bool = Fa
     return results
 
 
+# mgcp: allow-size an installer is one ordered sequence, and every step reports
 def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
     """
     Deploy MGCP hooks globally so they fire in every Claude Code session.
@@ -784,8 +786,7 @@ def init_global_hooks(dry_run: bool = False, force: bool = False) -> dict:
                     json.dumps(default_config().model_dump(), indent=2) + "\n"
                 )
                 results.setdefault("created", []).append(str(enforcement_path))
-        except Exception:
-            # Never break hook install if enforcement seeding fails.
+        except Exception:  # mgcp: allow-broad-except seeding rules must not break the hook install
             pass
 
     # Build settings with absolute paths (hooks + permissions only)
@@ -1268,7 +1269,7 @@ def _print_hook_results(hook_results: dict) -> None:
             print("\n    Hook upgrade pending (dry-run). Re-run without --dry-run to apply.")
 
 
-def main():
+def main():  # mgcp: allow-size a CLI entry point: 12 flags, flat dispatch on each
     """CLI entry point for mgcp-init."""
     import argparse
 

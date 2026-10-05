@@ -795,3 +795,106 @@ def test_the_enforcing_hook_has_no_unexplained_swallowed_errors():
     hook = HOOK_DIR / "pre-tool-dispatcher.py"
     found = qm.banned_patterns(hook.read_text(), list(qm.BANNED_CHECKS))
     assert found == [], f"unexplained swallowed errors at {[f['lineno'] for f in found]}"
+
+
+EXEMPT_SOURCE = '''def build(a):  # mgcp: allow-size a build script is one ordered sequence
+    if a == 1:
+        return 1
+    if a == 2:
+        return 2
+    if a == 3:
+        return 3
+    if a == 4:
+        return 4
+    if a == 5:
+        return 5
+    if a == 6:
+        return 6
+    if a == 7:
+        return 7
+    if a == 8:
+        return 8
+    if a == 9:
+        return 9
+    if a == 10:
+        return 10
+    if a == 11:
+        return 11
+    return None
+'''
+
+
+def test_a_declared_large_function_may_grow():
+    """The point of the escape: a build script can gain another branch.
+
+    Some work is honestly one long sequence. Without this, adding a ninth
+    supported client to an installer's argparse dispatch would be refused for
+    taking cyclomatic complexity from 59 to 60, which is a refusal with nothing
+    wrong behind it.
+    """
+    before = qm.measure_source(EXEMPT_SOURCE, "build.py")
+    grown = EXEMPT_SOURCE.replace(
+        "    return None\n", "    if a == 12:\n        return 12\n    return None\n")
+    after = qm.measure_source(grown, "build.py")
+
+    assert after["functions"]["build"]["cyclomatic"] > \
+        before["functions"]["build"]["cyclomatic"]
+    assert qm.compare(before, after) == []
+
+
+def test_the_same_growth_is_refused_without_the_marker():
+    """The exemption is what permits it, not the shape of the code."""
+    plain = EXEMPT_SOURCE.replace(
+        "  # mgcp: allow-size a build script is one ordered sequence", "")
+    before = qm.measure_source(plain, "build.py")
+    grown = plain.replace(
+        "    return None\n", "    if a == 12:\n        return 12\n    return None\n")
+    found = qm.compare(before, qm.measure_source(grown, "build.py"))
+    assert [v["metric"] for v in found] == ["cyclomatic"]
+
+
+def test_a_marker_without_a_reason_exempts_nothing():
+    """An exemption nobody justified is a hole, so a bare marker does not count."""
+    bare = EXEMPT_SOURCE.replace(
+        "# mgcp: allow-size a build script is one ordered sequence",
+        "# mgcp: allow-size")
+    measured = qm.measure_source(bare, "build.py")
+    assert measured["functions"]["build"]["size_exempt"] == ""
+
+    grown = bare.replace(
+        "    return None\n", "    if a == 12:\n        return 12\n    return None\n")
+    assert qm.compare(measured, qm.measure_source(grown, "build.py")) != []
+
+
+def test_the_marker_is_read_from_the_line_above_the_def():
+    """A signature long enough to need the exemption has no room for it."""
+    source = (
+        "# mgcp: allow-size an installer is one ordered sequence\n"
+        + EXEMPT_SOURCE.replace(
+            "  # mgcp: allow-size a build script is one ordered sequence", "")
+    )
+    measured = qm.measure_source(source, "build.py")
+    assert measured["functions"]["build"]["size_exempt"].startswith("an installer")
+
+
+def test_the_declared_exemptions_are_the_ones_we_chose():
+    """The exemption list is a decision, so it is pinned.
+
+    Three functions in init_project.py are declared deliberately large: a CLI
+    entry point and two install sequences, all flat dispatch at depth 4. The
+    deeply nested functions in server.py are NOT exempt, because depth 10 in 94
+    lines is not one ordered sequence by any reading.
+    """
+    exempt = {}
+    for path in sorted((REPO_ROOT / "src").rglob("*.py")):
+        for name, f in qm.measure_source(
+                path.read_text(), str(path)).get("functions", {}).items():
+            if f.get("size_exempt"):
+                exempt[f"{path.relative_to(REPO_ROOT)}:{name}"] = f["size_exempt"]
+
+    assert sorted(exempt) == [
+        "src/mgcp/init_project.py:init_claude_hooks",
+        "src/mgcp/init_project.py:init_global_hooks",
+        "src/mgcp/init_project.py:main",
+    ], sorted(exempt)
+    assert all(len(reason) > 20 for reason in exempt.values())

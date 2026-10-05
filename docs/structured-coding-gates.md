@@ -313,9 +313,61 @@ The last two rows are the outcome the system is for. If they do not move after e
 
 - **`server.py` and the file-length ratchet.** At 3,399 lines it is over the 1,000-line limit, so the ratchet blocks any new MCP tool there. Either split `server.py` by tool group (lessons, catalogue, workflows, enforcement, REM) before Phase 3 enforces, or exempt it and accept that it keeps growing.
 - **Limits.** CC 10, 80 lines, depth 4 and 6 parameters are starting values. The history replay sets the real ones.
+- ~~**Large functions.**~~ Settled 2026-10-05: a function that is legitimately one long sequence declares itself with `# mgcp: allow-size <reason>` rather than being split. See "Declaring a function deliberately large".
 - **Diff budget size.** 300 added lines and 8 files is a guess at one reviewable sitting. Audit data decides.
 - **Simplifier enforcement.** Seeded disabled. Turn it on only if audit shows step 7 skipped on large changes.
 - **Scope beyond Python.** The dashboard JavaScript in `static/app/` gets Gate 1 and Gate 3 but no complexity ratchet. Adding one means a non-stdlib parser, which the hook cannot import.
+
+
+## Declaring a function deliberately large
+
+Some work is honestly one long function. A build script, an installer, an
+argparse dispatcher: each branch is a flag, the sequence is flat, and splitting
+it into eight helpers called once would scatter a procedure that reads top to
+bottom.
+
+Write the marker on the `def` line, on a decorator, or on the line directly
+above, and that function is exempt from all four function limits:
+
+```python
+def main():  # mgcp: allow-size a CLI entry point: 12 flags, flat dispatch on each
+```
+
+The line above is not a convenience. A signature long enough to need the
+exemption is often already at the line length limit, so the `def` line has no
+room for the marker.
+
+Three rules keep this from becoming a hole:
+
+1. **A marker with no reason exempts nothing.** The reason is the point.
+2. **Exempt functions are counted and named** in `--report`, each with its
+   reason, so the list is something a person decided rather than something that
+   drifted.
+3. **A test pins the list.** Adding an exemption changes that test, so it
+   happens on purpose.
+
+Three functions carry it today, all in `init_project.py` and all depth 4:
+`main` at cyclomatic complexity 59, `init_global_hooks` at 35 and
+`init_claude_hooks` at 24.
+
+The deeply nested functions in `server.py` do not. `remove_catalogue_item` is
+depth 10 in 94 lines, which is not one ordered sequence by any reading. The
+ratchet holds those at their current size instead.
+
+### Why the escape is needed at all
+
+The ratchet never asked anyone to split a large legacy function. It refuses only
+a change that makes one worse. But that is exactly the problem for a build
+script: adding a ninth supported LLM client to that argparse dispatch takes
+cyclomatic complexity from 59 to 60, and the ratchet refuses the commit. That is
+a refusal with nothing wrong behind it.
+
+### Over limit is not refused
+
+Around 100 functions here exceed a limit. None of them is refused, and the
+report says so in its own output. A count of over-limit functions reads like a
+backlog of failures, and it is not one. It is the starting position the ratchet
+holds.
 
 
 ## What changed between this plan and the code

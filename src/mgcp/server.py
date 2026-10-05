@@ -3080,16 +3080,52 @@ async def list_enforcement_rules() -> str:
     config = load_config()
     if not config.rules:
         return "No enforcement rules configured."
+    auditing = [r.name for r in config.rules if r.enabled and r.mode == "audit"]
     lines = [f"# Enforcement rules ({len(config.rules)})", ""]
+    if auditing:
+        # Without this, a rule in audit mode reads as "enabled" and a reader
+        # concludes it is refusing calls. It is refusing nothing.
+        lines += [
+            f"{len(auditing)} of these are ON in AUDIT mode. They record what "
+            "they would have refused and refuse nothing. Read those rows in the "
+            "dashboard's Enforcement view, then promote one with "
+            "update_enforcement_rule(mode='enforce').",
+            "",
+        ]
     for r in config.rules:
-        status = "enabled" if r.enabled else "disabled"
-        trig = r.trigger.tool_name
-        if r.trigger.command_match:
-            trig += f" [{r.trigger.command_match.type}]"
-        lines.append(f"- **{r.name}** ({status}) — trigger: `{trig}`, bypass_scope: `{r.bypass_scope}`")
+        types = ", ".join(p.type for p in r.preconditions) or "none"
+        lines.append(
+            f"- **{r.name}** ({_rule_status(r)}) — trigger: `{_rule_trigger(r)}`, "
+            f"checks: `{types}`, bypass_scope: `{r.bypass_scope}`"
+        )
         if r.description:
             lines.append(f"  - {r.description}")
     return "\n".join(lines)
+
+
+def _rule_status(rule) -> str:
+    """Whether a rule refuses anything, in words.
+
+    An audit rule is "enabled" in the data, and printing that alone made a rule
+    refusing nothing read as a rule refusing calls.
+    """
+    if not rule.enabled:
+        return "disabled"
+    if rule.mode == "audit":
+        return "ON, audit only, refuses nothing"
+    return "ON, enforcing"
+
+
+def _rule_trigger(rule) -> str:
+    """What a rule matches, including tool_names.
+
+    Reading tool_name alone printed an empty trigger for a rule that covers
+    Edit, Write and MultiEdit, which reads as misconfigured.
+    """
+    trig = rule.trigger.tool_name or ", ".join(rule.trigger.tool_names) or "(any)"
+    if rule.trigger.command_match:
+        trig += f" [{rule.trigger.command_match.type}]"
+    return trig
 
 
 @mcp.tool()

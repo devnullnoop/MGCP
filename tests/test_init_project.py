@@ -1,7 +1,9 @@
 """Comprehensive tests for mgcp-init functionality."""
 
+import collections
 import json
 import os
+import re
 import shlex
 import stat
 import subprocess
@@ -2088,3 +2090,89 @@ class TestFindMgcpServerProcesses:
         monkeypatch.setattr(init_project, "GLOBAL_CLAUDE_JSON_PATH", tmp_path / "c.json")
         results = init_project.diagnose_claude_code()
         assert not any("mgcp.server processes" in i for i in results["issues"])
+
+
+REPO_ROOT = Path(__file__).parent.parent
+
+
+class TestPythonRuntimeCeiling:
+    """The supported Python version is a property of the hardware.
+
+    MGCP needs sentence-transformers, which needs PyTorch, so PyTorch sets the
+    ceiling. On an Intel Mac, PyTorch 2.2.2 is the last release with an x86_64
+    wheel and its newest interpreter tag is cp312, so 3.12 is permanent there.
+    Everywhere else, including Apple Silicon, PyTorch ships wheels past 3.12.
+
+    A single cap at 3.13 punished every modern machine for a limit only Intel
+    Macs have. These tests pin both halves, because the Intel Mac half cannot be
+    reached on the machine this is developed on.
+    """
+
+    def _problem(self, monkeypatch, version, platform_name, machine):
+        import platform as platform_mod
+
+        import mgcp
+
+        # A plain tuple has no .major, and the guard reads version_info.major
+        # when it builds the message a person sees.
+        fake = collections.namedtuple(
+            "version_info", "major minor micro releaselevel serial")
+        monkeypatch.setattr(sys, "version_info",
+                            fake(*version, 0, "final", 0), raising=False)
+        monkeypatch.setattr(sys, "platform", platform_name, raising=False)
+        monkeypatch.setattr(platform_mod, "machine", lambda: machine)
+        return mgcp._unsupported_python()
+
+    def test_apple_silicon_supports_313(self, monkeypatch):
+        assert self._problem(monkeypatch, (3, 13), "darwin", "arm64") == ""
+
+    def test_linux_supports_313(self, monkeypatch):
+        assert self._problem(monkeypatch, (3, 13), "linux", "x86_64") == ""
+
+    def test_intel_mac_is_refused_at_313(self, monkeypatch):
+        problem = self._problem(monkeypatch, (3, 13), "darwin", "x86_64")
+        assert problem, "an Intel Mac on 3.13 has no PyTorch wheel"
+        assert "Intel Mac" in problem
+        assert "permanent" in problem
+        assert "3.12" in problem
+
+    def test_intel_mac_supports_312(self, monkeypatch):
+        assert self._problem(monkeypatch, (3, 12), "darwin", "x86_64") == ""
+
+    def test_an_untested_version_warns_without_claiming_breakage(self, monkeypatch):
+        problem = self._problem(monkeypatch, (3, 14), "darwin", "arm64")
+        assert "not been tested" in problem
+        assert "may work" in problem
+        assert "Intel" not in problem
+
+    def test_the_declared_cap_matches_the_code(self):
+        """pyproject and the runtime guard must agree.
+
+        Two places state the ceiling. If the cap says one thing and the warning
+        says another, one of them is lying to whoever reads it.
+        """
+        import mgcp
+
+        pyproject = (REPO_ROOT / "pyproject.toml").read_text()
+        match = re.search(r'requires-python\s*=\s*"[^"]*<(\d+)\.(\d+)"', pyproject)
+        assert match, "requires-python upper bound not found"
+        declared = (int(match.group(1)), int(match.group(2)))
+
+        # requires-python is exclusive, so <3.14 means 3.13 is the top supported.
+        assert declared == (mgcp.PYTHON_CEILING[0], mgcp.PYTHON_CEILING[1] + 1), (
+            f"pyproject caps below {declared} but the guard allows up to "
+            f"{mgcp.PYTHON_CEILING}"
+        )
+
+    def test_the_doctor_reports_the_interpreter(self):
+        from mgcp.init_project import diagnose_python_runtime
+
+        runtime = diagnose_python_runtime()
+        assert runtime["running"] == f"{sys.version_info.major}.{sys.version_info.minor}"
+        assert runtime["executable"] == sys.executable
+        assert runtime["machine"]
+        assert runtime["ceiling"]
+        assert runtime["intel_mac"] is (
+            sys.platform == "darwin"
+            and __import__("platform").machine() in ("x86_64", "i386")
+        )

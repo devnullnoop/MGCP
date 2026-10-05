@@ -12,7 +12,10 @@ jobs:
     timeout-minutes: 15
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        # 3.13 is supported everywhere PyTorch still ships wheels. An
+        # Intel Mac caps at 3.12, which the runtime guard reports, and CI
+        # runs on Linux so it cannot reach that case.
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v5

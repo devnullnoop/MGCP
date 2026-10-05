@@ -19,7 +19,7 @@ Avoid ASCII art diagrams in documentation. HTML visuals are easier to digest for
 
 ## Technology Stack
 
-- Python 3.11+ with virtual environment (`.venv/`)
+- Python 3.11, 3.12 or 3.13, with a virtual environment (`.venv/`). The ceiling is a property of the hardware, not of MGCP: sentence-transformers needs PyTorch, and PyTorch stopped shipping macOS x86_64 wheels after 2.2.2, whose newest interpreter tag is `cp312`. So an Intel Mac caps at 3.12 permanently while every other platform reaches 3.13. `requires-python` cannot vary by architecture, so the cap sits at the highest tested version and `mgcp/__init__.py` applies the Intel Mac ceiling separately. `mgcp-init --doctor` prints which interpreter is in use and this machine's ceiling.
 - FastMCP for MCP server framework
 - NetworkX for graph operations
 - Qdrant for vector storage (lessons + catalogue + workflows)

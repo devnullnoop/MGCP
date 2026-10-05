@@ -3,7 +3,7 @@
 **Persistent context for stateless LLMs.**
 
 [![License](https://img.shields.io/badge/License-O'Saasy-blue.svg)](https://osaasy.dev/)
-[![Python](https://img.shields.io/badge/Python-3.11%20|%203.12-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/Python-3.11%20|%203.12%20|%203.13-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
 > **Alpha Software** - Actively dogfooding as we build. Working, but APIs may change.
@@ -299,15 +299,41 @@ to lower the score, raises it by 6.3 points on raw messages.
 
 ### 1. Install
 
-**Requires Python 3.11 or 3.12.** Python 3.13 is not supported (PyTorch has no wheels for it on Intel Macs).
+**Python 3.11, 3.12 or 3.13.** On an Intel Mac the ceiling is 3.12, and that is
+permanent. See [Python version](#python-version) for the reason.
 
 ```bash
 git clone https://github.com/devnullnoop/MGCP.git
 cd MGCP
-python3.12 -m venv .venv
+python3 -m venv .venv          # on an Intel Mac use python3.12 instead
 source .venv/bin/activate
 pip install -e .
 ```
+
+Your system default can be any version. The virtual environment decides what
+MGCP runs under, and `mgcp-init` writes absolute paths into your client config,
+so the hooks keep using this interpreter whatever your shell defaults to.
+
+`mgcp-init --doctor` prints which interpreter is in use and this machine's
+ceiling.
+
+#### Python version
+
+MGCP needs sentence-transformers, which needs PyTorch, so PyTorch decides the
+ceiling and it differs by hardware.
+
+| Machine | Supported | Why |
+|---|---|---|
+| Apple Silicon, Linux, Windows | 3.11, 3.12, 3.13 | PyTorch ships wheels for all three |
+| Intel Mac (x86_64) | 3.11, 3.12 | See below |
+
+On an Intel Mac, PyTorch 2.2.2 is the last release with any x86_64 wheel, and
+its newest interpreter tag is `cp312`. PyTorch dropped the platform after that
+release, so this is not a version to wait for. 3.12 is the ceiling for as long
+as MGCP needs PyTorch.
+
+3.14 is untested rather than known broken. If you try it, the install goes ahead
+and a warning says it is untested.
 
 ### 2. Configure Your LLM Client
 

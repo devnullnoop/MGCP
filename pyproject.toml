@@ -3,7 +3,7 @@ name = "mgcp"
 version = "3.0.0"
 description = "Memory Graph Core Primitives - Persistent graph-based memory for LLM interactions via MCP"
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.11,<3.14"
 license = {file = "LICENSE.md"}
 keywords = ["mcp", "llm", "memory", "graph", "ai", "claude", "anthropic"]
 classifiers = [
@@ -13,6 +13,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [

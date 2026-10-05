@@ -1103,6 +1103,48 @@ def find_mgcp_server_processes() -> dict:
     return result
 
 
+def diagnose_python_runtime() -> dict:
+    """Which interpreter is running MGCP, and whether this machine supports it.
+
+    The ceiling is a property of the hardware. On an Intel Mac, PyTorch stopped
+    shipping x86_64 wheels after 2.2.2 and that release supports nothing past
+    Python 3.12, so 3.12 is permanent there. Everywhere else, including Apple
+    Silicon, PyTorch ships wheels well past 3.12.
+    """
+    import platform as _platform
+
+    from . import INTEL_MAC_PYTHON_CEILING, PYTHON_CEILING, _unsupported_python
+
+    running = sys.version_info[:2]
+    intel_mac = sys.platform == "darwin" and _platform.machine() in ("x86_64", "i386")
+    ceiling = INTEL_MAC_PYTHON_CEILING if intel_mac else PYTHON_CEILING
+    return {
+        "running": f"{running[0]}.{running[1]}",
+        "executable": sys.executable,
+        "machine": _platform.machine(),
+        "intel_mac": intel_mac,
+        "ceiling": f"{ceiling[0]}.{ceiling[1]}",
+        "permanent": intel_mac,
+        "problem": _unsupported_python(),
+    }
+
+
+def _report_python_runtime(results: dict) -> None:
+    """Record an interpreter this machine cannot support.
+
+    Worth its own check because the failure it prevents happens at pip install
+    time, with a message about wheels that names neither MGCP nor the real cause.
+    """
+    runtime = results["python"]
+    if not runtime["problem"]:
+        return
+    results["issues"].append(runtime["problem"])
+    results["suggestions"].append(
+        "Create a supported environment: python3.12 -m venv .venv, then "
+        "pip install -e ."
+    )
+
+
 def diagnose_claude_code() -> dict:
     """
     Diagnose Claude Code MGCP configuration issues.
@@ -1162,6 +1204,8 @@ def diagnose_claude_code() -> dict:
     # settings.json points at copies under ~/.mgcp/hooks by absolute path, and
     # only mgcp-init rewrites those. So the state right after a pull is new
     # rules and new code read by an old hook, and nothing said so until now.
+    results["python"] = diagnose_python_runtime()
+    _report_python_runtime(results)
     results["hooks"] = diagnose_hook_deployment()
     _report_hook_drift(results)
     results["servers"] = find_mgcp_server_processes()
@@ -1396,6 +1440,21 @@ Project-local hooks (--local):
         else:
             print(f"    ! {g['status']}")
         print(f"      {g['path']}")
+
+        # Interpreter. Printed even when fine, because "which python is this
+        # actually running under" is the first thing to establish when an
+        # import fails, and a venv makes it non-obvious.
+        rt = results.get("python") or {}
+        print("\n  Python:")
+        print(f"    {rt.get('running', '?')} on {rt.get('machine', '?')}")
+        print(f"      {rt.get('executable', '?')}")
+        if rt.get("problem"):
+            print(f"    ✗ {rt['ceiling']} is the ceiling on this machine"
+                  + (" and that is permanent" if rt.get("permanent") else ""))
+        else:
+            print(f"    ✓ supported (ceiling {rt.get('ceiling', '?')}"
+                  + (", permanent on Intel Macs" if rt.get("intel_mac") else "")
+                  + ")")
 
         # Running servers. One connected client needs one; a reconnect starts
         # another and leaves the first alive, so they stack up unnoticed.

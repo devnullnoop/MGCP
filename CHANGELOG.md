@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed: Python 3.13 is supported, and the ceiling is per machine
+- **`requires-python` moves from `>=3.11,<3.13` to `>=3.11,<3.14`.** The full
+  suite passes on 3.13 on Apple Silicon, 1256 tests, the same result as 3.12.
+  Measured against torch 2.14.1 rather than assumed.
+- **The old cap was right for one platform and wrong for every other.** It was
+  set because PyTorch had no Python 3.13 wheel for Intel Macs. That is still
+  true, and it is worse than a missing version: PyTorch 2.2.2 is the last release
+  with any macOS x86_64 wheel, and its newest interpreter tag is `cp312`. The
+  platform was dropped after that, so 3.12 is permanent on Intel hardware. A
+  single cap made every Apple Silicon, Linux and Windows user wait for something
+  that had already arrived for them.
+- **`requires-python` cannot vary by architecture, so the check moved into the
+  code.** `mgcp/__init__.py` now reads the machine type and applies the Intel Mac
+  ceiling of 3.12 separately from the project ceiling of 3.13. A version above
+  the project ceiling warns that it is untested rather than claiming it is
+  broken, because untested and broken are different claims.
+- **`mgcp-init --doctor` prints the interpreter, its path and this machine's
+  ceiling**, every run and not only on failure. Which interpreter is actually in
+  use is the first question when an import fails, and a virtual environment
+  makes it non-obvious.
+- A test pins both halves, including the Intel Mac case, which cannot be reached
+  on the hardware this is developed on or in CI. Another test fails if
+  `pyproject.toml` and the runtime guard ever disagree about the ceiling.
+- CI runs 3.11, 3.12 and 3.13.
+
 ### Added: structured coding gates, all shipped switched off
 - **Four new precondition types turn code structure into something the PreToolUse hook checks, instead of something a prompt asks for.** A diff budget on every edit, a complexity ratchet on every commit, a required `Why:` paragraph, and a required catalogue decision when a commit adds a module. Design, decisions and measurements are in [docs/structured-coding-gates.md](docs/structured-coding-gates.md).
 - **Every new rule ships disabled AND in audit mode.** An audit rule records what it would have refused and allows the call. Two switches rather than one, because `mode` is a key an older deployed hook ignores rather than rejecting, and ignoring it means enforcing. That is the state after a git pull and before `mgcp-init`.

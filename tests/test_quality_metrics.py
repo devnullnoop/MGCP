@@ -671,3 +671,68 @@ def test_base_with_an_unresolvable_ref_exits_non_zero(tmp_path, capsys):
 
     assert qm.main(["--base", "no-such-ref-xyz", "--cwd", str(tmp_path)]) != 0
     assert "no-such-ref-xyz" in capsys.readouterr().err
+
+
+def _commit(path: Path, message: str) -> None:
+    """A commit that does not depend on the machine's git identity."""
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+    }
+    subprocess.run(["git", "-C", str(path), "commit", "-qm", message],
+                   check=True, env=env)
+
+
+def test_an_untracked_new_file_is_measured(tmp_path, capsys):
+    """A file git does not track yet still faces the limits.
+
+    A new file is the one case where the limits apply in full, because there is
+    no base version to ratchet against. git diff cannot see an untracked file,
+    so leaving them out printed "no Python changed" for code the gate had never
+    read. That is how a module above the limit reached a commit here: it was
+    measured before being staged, and the clean result was about nothing.
+    """
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    (tmp_path / "tracked.py").write_text("x = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
+    _commit(tmp_path, "base")
+
+    (tmp_path / "fresh.py").write_text(branchy("f", 16))
+    assert qm.main(["--base", "HEAD", "--cwd", str(tmp_path)]) == 1
+    out = capsys.readouterr().out
+    assert "fresh.py" in out
+    assert "new function starts over the limit" in out
+
+
+def test_an_untracked_file_under_the_limit_still_passes(tmp_path, capsys):
+    """Seeing untracked files must not turn every new file into a violation."""
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    (tmp_path / "tracked.py").write_text("x = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
+    _commit(tmp_path, "base")
+
+    (tmp_path / "fresh.py").write_text(branchy("f", 3))
+    assert qm.main(["--base", "HEAD", "--cwd", str(tmp_path)]) == 0
+    assert "no violations" in capsys.readouterr().out
+
+
+def test_the_ruler_passes_its_own_limits():
+    """quality_metrics.py meets the limits it enforces.
+
+    New code must meet the limits, and this module was new. It shipped with four
+    functions above them, including compare at 24 cyclomatic complexity against
+    a limit of 10. The CLI could not catch it, because the file was untracked
+    when it was measured.
+    """
+    source = Path(qm.__file__).read_text()
+    measured = qm.measure_source(source, "quality_metrics.py")
+    limits = {k: v for k, v in qm.DEFAULT_LIMITS.items() if k != "file_lines"}
+
+    over = {
+        name: {m: f[m] for m, limit in limits.items() if f[m] > limit}
+        for name, f in measured["functions"].items()
+    }
+    over = {name: bad for name, bad in over.items() if bad}
+    assert over == {}, f"the ruler exceeds its own limits: {over}"
+    assert qm.banned_patterns(source, list(qm.BANNED_CHECKS)) == []

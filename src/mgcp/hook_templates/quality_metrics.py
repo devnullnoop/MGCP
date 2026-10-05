@@ -72,6 +72,10 @@ _FUNC_NODES = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 ALLOW_BROAD_EXCEPT = "mgcp: allow-broad-except"
 
+# Every banned pattern this module can look for. Named once, because a caller
+# passing a misspelled check silently looks for nothing.
+BANNED_CHECKS = ("swallowed_error", "pass_through_wrapper")
+
 
 # ---------------------------------------------------------------------------
 # Measurement
@@ -189,29 +193,44 @@ def _swallowed_handlers(tree: ast.AST, source_lines: list[str]) -> list[dict]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.ExceptHandler):
             continue
-        broad = node.type is None or (
-            isinstance(node.type, ast.Name) and node.type.id in ("Exception", "BaseException")
-        )
-        if not broad:
+        if not (_catches_broadly(node) and _body_discards(node)):
             continue
-        body = node.body
-        if len(body) != 1:
-            continue
-        stmt = body[0]
-        discards = (
-            isinstance(stmt, ast.Pass)
-            or isinstance(stmt, ast.Continue)
-            or (isinstance(stmt, ast.Return) and (
-                stmt.value is None or isinstance(stmt.value, ast.Constant)))
-        )
-        if not discards:
-            continue
-        line = source_lines[node.lineno - 1] if node.lineno <= len(source_lines) else ""
-        if ALLOW_BROAD_EXCEPT in line:
+        if _allowed_on_its_line(node, source_lines):
             continue
         out.append({"pattern": "swallowed_error", "lineno": node.lineno,
                     "detail": "broad except whose body discards the error"})
     return out
+
+
+def _catches_broadly(handler: ast.ExceptHandler) -> bool:
+    """True for a bare except, or one naming Exception or BaseException."""
+    if handler.type is None:
+        return True
+    return (isinstance(handler.type, ast.Name)
+            and handler.type.id in ("Exception", "BaseException"))
+
+
+def _body_discards(handler: ast.ExceptHandler) -> bool:
+    """True when the handler's whole body throws the error away.
+
+    One statement, and that statement is pass, continue, or a return of nothing
+    or a constant. Logging the error, re-raising, or returning something built
+    from it all read as handling it.
+    """
+    if len(handler.body) != 1:
+        return False
+    stmt = handler.body[0]
+    if isinstance(stmt, (ast.Pass, ast.Continue)):
+        return True
+    return (isinstance(stmt, ast.Return)
+            and (stmt.value is None or isinstance(stmt.value, ast.Constant)))
+
+
+def _allowed_on_its_line(handler: ast.ExceptHandler, source_lines: list[str]) -> bool:
+    """True when the handler line carries the escape comment."""
+    if handler.lineno > len(source_lines):
+        return False
+    return ALLOW_BROAD_EXCEPT in source_lines[handler.lineno - 1]
 
 
 def _pass_through_wrappers(tree: ast.AST) -> list[dict]:
@@ -223,23 +242,40 @@ def _pass_through_wrappers(tree: ast.AST) -> list[dict]:
     """
     out = []
     for node in ast.walk(tree):
-        if not isinstance(node, _FUNC_NODES):
-            continue
-        body = [s for s in node.body if not isinstance(s, ast.Expr)
-                or not isinstance(s.value, ast.Constant)]  # drop the docstring
-        if len(body) != 1 or not isinstance(body[0], ast.Return):
-            continue
-        call = body[0].value
-        if not isinstance(call, ast.Call):
-            continue
-        own = [a.arg for a in node.args.posonlyargs + node.args.args]
-        if not own:
-            continue
-        passed = [a.id for a in call.args if isinstance(a, ast.Name)]
-        if passed == own and not call.keywords:
+        if isinstance(node, _FUNC_NODES) and _only_forwards(node):
             out.append({"pattern": "pass_through_wrapper", "lineno": node.lineno,
                         "detail": f"{node.name} only forwards its parameters"})
     return out
+
+
+def _sole_returned_call(node) -> ast.Call | None:
+    """The call this function returns, if its body is only that return.
+
+    The docstring is dropped first, so a documented one-line wrapper still
+    reads as one statement.
+    """
+    body = [s for s in node.body
+            if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))]
+    if len(body) != 1 or not isinstance(body[0], ast.Return):
+        return None
+    call = body[0].value
+    return call if isinstance(call, ast.Call) else None
+
+
+def _only_forwards(node) -> bool:
+    """True when the function returns a call passing its own parameters in order.
+
+    Any reorder, rename, default or keyword means the wrapper is doing work, so
+    it is not reported.
+    """
+    call = _sole_returned_call(node)
+    if call is None or call.keywords:
+        return False
+    own = [a.arg for a in node.args.posonlyargs + node.args.args]
+    if not own:
+        return False
+    passed = [a.id for a in call.args if isinstance(a, ast.Name)]
+    return passed == own
 
 
 def banned_patterns(source: str, checks: list[str]) -> list[dict]:
@@ -280,60 +316,110 @@ def compare(before: dict, after: dict, limits: dict | None = None,
     for name, now in after.get("functions", {}).items():
         was = old_funcs.get(name)
         for metric, limit in limits.items():
-            if metric == "file_lines":
-                continue
-            if metric == "params" and now.get("is_mcp_tool"):
-                continue
-            value = now[metric]
-            if was is None:
-                if value > limit:
-                    out.append({
-                        "name": name, "metric": metric, "before": None,
-                        "after": value, "limit": limit, "lineno": now["lineno"],
-                        "reason": "new function starts over the limit",
-                    })
-            else:
-                prior = was[metric]
-                worse = value > prior
-                over = value > limit
-                # Already over and getting worse, or newly crossing.
-                if over and (worse or prior <= limit):
-                    if worse or prior <= limit < value:
-                        out.append({
-                            "name": name, "metric": metric, "before": prior,
-                            "after": value, "limit": limit, "lineno": now["lineno"],
-                            "reason": "crossed the limit" if prior <= limit
-                                      else "already over the limit and got worse",
-                        })
+            if _metric_applies(metric, now):
+                found = _metric_violation(name, metric, limit, now, was)
+                if found:
+                    out.append(found)
 
-    # File length ratchets on net growth once over the limit.
-    file_limit = None if skip_file_length else limits.get("file_lines")
-    if file_limit:
-        now_lines = after.get("file_lines", 0)
-        was_lines = (before or {}).get("file_lines")
-        if now_lines > file_limit and (was_lines is None or now_lines > was_lines):
-            out.append({
-                "name": after.get("path", "<file>"), "metric": "file_lines",
-                "before": was_lines, "after": now_lines, "limit": file_limit,
-                "lineno": 1,
-                "reason": "new file over the limit" if was_lines is None
-                          else "already over the limit and grew",
-            })
+    found = _file_length_violation(before, after, limits, skip_file_length)
+    if found:
+        out.append(found)
     return out
 
 
+def _metric_applies(metric: str, now: dict) -> bool:
+    """Whether one metric is measured for one function.
+
+    File length is a property of the file and handled once. A function
+    registered as an MCP tool is exempt from the parameter count, because its
+    parameters are a wire schema the model fills in rather than a signature that
+    wants splitting.
+    """
+    if metric == "file_lines":
+        return False
+    return not (metric == "params" and now.get("is_mcp_tool"))
+
+
+def _metric_violation(name, metric, limit, now, was):
+    """One violation for one function and metric, or None.
+
+    A new function is held to the full limit. An existing one is refused when it
+    crosses the limit, or when it was already over and got worse. An existing
+    function that improves while still over the limit is allowed, which is the
+    whole point of a ratchet.
+    """
+    value = now[metric]
+    if was is None:
+        if value <= limit:
+            return None
+        return {"name": name, "metric": metric, "before": None, "after": value,
+                "limit": limit, "lineno": now["lineno"],
+                "reason": "new function starts over the limit"}
+
+    prior = was[metric]
+    if value <= limit or value <= prior:
+        return None
+    return {
+        "name": name, "metric": metric, "before": prior, "after": value,
+        "limit": limit, "lineno": now["lineno"],
+        "reason": ("crossed the limit" if prior <= limit
+                   else "already over the limit and got worse"),
+    }
+
+
+def _file_length_violation(before, after, limits, skip):
+    """The file-length violation for this change, or None.
+
+    Once a file is over the limit it may not grow NET. Shrinking it while still
+    over the limit is allowed.
+    """
+    limit = None if skip else limits.get("file_lines")
+    if not limit:
+        return None
+    now_lines = after.get("file_lines", 0)
+    was_lines = (before or {}).get("file_lines")
+    if now_lines <= limit:
+        return None
+    if was_lines is not None and now_lines <= was_lines:
+        return None
+    return {
+        "name": after.get("path", "<file>"), "metric": "file_lines",
+        "before": was_lines, "after": now_lines, "limit": limit, "lineno": 1,
+        "reason": ("new file over the limit" if was_lines is None
+                   else "already over the limit and grew"),
+    }
+
+
 def format_violations(violations: list[dict]) -> str:
-    """One line per violation, with before and after."""
-    lines = []
-    for v in violations:
-        label = METRIC_LABELS.get(v["metric"], v["metric"])
-        if v["before"] is None:
-            lines.append(f"  {v['name']}: {label} {v['after']} (limit {v['limit']}), "
-                         f"{v['reason']}")
-        else:
-            lines.append(f"  {v['name']}: {label} {v['before']} -> {v['after']} "
-                         f"(limit {v['limit']}), {v['reason']}")
-    return "\n".join(lines)
+    """One line per violation, naming the file, the line and the change.
+
+    The file name is not optional. This text is the deny reason the hook shows,
+    and a report reading "f: CC 17 (limit 10)" does not say which file holds f,
+    so a commit touching several files gave no way to find the offender.
+    """
+    return "\n".join(f"  {_violation_label(v)}: {_violation_change(v)}"
+                      for v in violations)
+
+
+def _violation_label(v: dict) -> str:
+    """Where the violation is: path, line and name, as much as is known."""
+    where = v.get("path") or ""
+    lineno = v.get("lineno")
+    if where and lineno:
+        where = f"{where}:{lineno}"
+    name = v.get("name") or ""
+    if where and name and not name.startswith(where):
+        return f"{where} {name}"
+    return where or name or "<unknown>"
+
+
+def _violation_change(v: dict) -> str:
+    """What the metric did, and why that is refused."""
+    label = METRIC_LABELS.get(v["metric"], v["metric"])
+    if v["before"] is None:
+        return f"{label} {v['after']} (limit {v['limit']}), {v['reason']}"
+    return (f"{label} {v['before']} -> {v['after']} "
+            f"(limit {v['limit']}), {v['reason']}")
 
 
 def excluded(path: str, globs: list[str]) -> bool:
@@ -401,6 +487,52 @@ def _report(paths: list[str], limits: dict) -> int:
     return 0
 
 
+def _changed_python(base: str, cwd: str) -> tuple[list[str], int]:
+    """Python paths differing from the base ref, and an exit code.
+
+    An exit code of 2 means the question could not be answered, which is not the
+    same as an answer of none. Untracked files are included and read as new,
+    because git diff cannot see them and a new file is the one case where the
+    limits apply in full. Leaving them out reported "no Python changed" for code
+    this had never looked at.
+    """
+    rc, out = _git(["diff", "--name-only", "--diff-filter=ACMR", base, "--", "*.py"], cwd)
+    if rc != 0:
+        print(f"git diff against {base!r} failed", file=sys.stderr)
+        return [], 2
+    changed = [p for p in out.splitlines() if p.strip()]
+    rc_u, out_u = _git(["ls-files", "--others", "--exclude-standard", "--", "*.py"], cwd)
+    if rc_u == 0:
+        changed += [p for p in out_u.splitlines() if p.strip() and p not in changed]
+    return changed, 0
+
+
+def _violations_for_path(path, base, cwd, limits, checks, length_exempt):
+    """Every violation one file contributes, metric and banned pattern alike.
+
+    A file that cannot be read contributes nothing rather than failing the run,
+    because a path git lists and the filesystem does not have is a race with a
+    concurrent checkout, not a code defect.
+    """
+    rc_b, before_src = _git(["show", f"{base}:{path}"], cwd)
+    try:
+        with open(f"{cwd}/{path}", errors="replace") as fh:
+            after_src = fh.read()
+    except OSError:
+        return []
+
+    before = measure_source(before_src, path) if rc_b == 0 else {}
+    found = compare(before, measure_source(after_src, path), limits,
+                    excluded(path, length_exempt or []))
+    for v in found:
+        v["path"] = path
+    for b in banned_patterns(after_src, checks):
+        b.update(path=path, name="", metric=b["pattern"], before=None,
+                 after=b["detail"], limit="banned", reason="banned pattern")
+        found.append(b)
+    return found
+
+
 def _ratchet_against_base(base: str, cwd: str, limits: dict,
                           exclude: list[str], checks: list[str],
                           length_exempt: list[str] | None = None) -> int:
@@ -411,40 +543,18 @@ def _ratchet_against_base(base: str, cwd: str, limits: dict,
               f"base reports nothing and must not report success.", file=sys.stderr)
         return 2
 
-    rc, out = _git(["diff", "--name-only", "--diff-filter=ACMR", base, "--", "*.py"], cwd)
+    changed, rc = _changed_python(base, cwd)
     if rc != 0:
-        print(f"git diff against {base!r} failed", file=sys.stderr)
-        return 2
-    changed = [p for p in out.splitlines() if p.strip()]
+        return rc
     if not changed:
         print(f"no Python changed against {base}")
         return 0
 
     total = []
     for path in changed:
-        if excluded(path, exclude):
-            continue
-        rc_b, before_src = _git(["show", f"{base}:{path}"], cwd)
-        try:
-            with open(f"{cwd}/{path}", errors="replace") as fh:
-                after_src = fh.read()
-        except OSError:
-            continue
-        before = measure_source(before_src, path) if rc_b == 0 else {}
-        after = measure_source(after_src, path)
-        viol = compare(before, after, limits,
-                       excluded(path, length_exempt or []))
-        for v in viol:
-            v["path"] = path
-        total += viol
-        for b in banned_patterns(after_src, checks):
-            b["path"] = path
-            b["name"] = f"{path}:{b['lineno']}"
-            b["metric"] = b["pattern"]
-            b["before"] = None
-            b["after"] = b["detail"]
-            b["limit"] = "banned"
-            total.append(b)
+        if not excluded(path, exclude):
+            total += _violations_for_path(path, base, cwd, limits, checks,
+                                          length_exempt)
 
     if not total:
         print(f"{len(changed)} changed Python file(s), no violations against {base}")

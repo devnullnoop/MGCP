@@ -56,3 +56,93 @@ lessons:
     rationale: "File operations silently fail or crash without path verification"
     parent_id: verification
     tags: [verification, files]
+
+  - id: a-vacuous-check-reads-as-a-pass
+    trigger: "When writing or reviewing any check, gate, linter, scanner, audit, or test, and whenever a tool reports no findings, nothing to do, no changes, or looks healthy. Also when a check is about to be trusted, promoted from advisory to enforcing, or cited as evidence that something is safe."
+    action: >-
+      A check that examined nothing prints the same thing as a check that
+      examined everything and found it clean. Treat "no findings" as unverified
+      until you know the denominator. Three shapes cause it, and each has its own
+      fix.
+
+      EMPTY INPUT. The check ran over an empty set and said nothing was wrong.
+      Fix: report the denominator, not just the verdict. Print "measured 14 files,
+      no violations" rather than "no violations", and assert the input is
+      non-empty when zero is impossible for a real run. Watch for inputs a tool
+      cannot see: git diff cannot see an untracked file, and an exclude list can
+      grow until it covers the thing you care about.
+
+      THE CHECK CRASHED AND THE CRASH READ AS SUCCESS. A broad except that means
+      "proceed" converts any error inside the check into a pass, and an exit code
+      of 0 after an error message does the same. Fix: distinguish "measured and
+      fine" from "could not measure". Record the second case rather than
+      swallowing it. Where fail-open is the right policy, still write a row
+      saying the check was skipped, so an inert check is visible rather than
+      looking clean.
+
+      THE CHECK WAS NEVER WIRED. Nothing validated the references, claims, or
+      registrations that something else relies on. Fix: test the wiring itself.
+      For every reference, assert the target exists.
+
+      The one habit that catches all three: verify a check by BREAKING the thing
+      it checks, then confirm it fails and says something useful. A check nobody
+      has ever seen fail is a check nobody has tested. Before trusting any
+      result, ask what would have had to happen for this to report a failure. If
+      the answer is "nothing could have", you learned nothing.
+    rationale: >-
+      Four instances of this on one project in a single day, each found by
+      accident rather than by the check itself. A complexity gate printed "no
+      Python changed" and exited 0 for a brand new file, because the file was
+      untracked and git diff cannot see one, so the module implementing the gate
+      reached a commit with four functions over the limits it enforces. A
+      refactor gave a new helper the name of an existing function, Python
+      accepted the redefinition silently, a precondition handler called the wrong
+      one, and that handler's except Exception turned the TypeError into
+      "precondition satisfied", so the gate allowed a commit it existed to
+      refuse. A dependency scanner failed to resolve its input, printed an error,
+      and exited 0, which reads exactly like a clean audit. And 48 workflow
+      references to knowledge items were validated by nothing, so one pointing at
+      an item that shipped nowhere looked correct in the source and arrived
+      empty on every fresh install.
+
+      The cost is asymmetric. A check that reports a false failure gets fixed
+      within minutes, because someone is blocked. A check that reports a false
+      pass is never fixed, because everybody believes it.
+    tags: [meta, verification, testing, quality, tooling, false-negative, ci]
+    parent_id: verification
+    examples:
+      - label: bad
+        code: |
+          changed = git("diff", "--name-only", base).splitlines()
+          if not changed:
+              print("no files changed")     # also true when the walk is broken
+              return 0
+          ...
+          print("no violations")            # over how many files? unknown
+
+          try:
+              ok = check(thing)
+          except Exception:
+              ok = True                     # an error is now a pass
+        explanation: "Three vacuous passes: an empty set reads as clean, the verdict carries no denominator, and a crash inside the check becomes success"
+      - label: good
+        code: |
+          changed = tracked_changes(base) + untracked_files()
+          assert changed or allow_empty, "measured nothing, which is a broken run"
+
+          try:
+              ok, detail = check(thing)
+          except CheckUnavailable as exc:
+              record({"event": "skipped_check", "reason": str(exc)})
+              ok, detail = True, ""         # fail open, but on the record
+
+          print(f"measured {len(changed)} files, {len(violations)} violations")
+        explanation: "The denominator is printed, untracked input is included, and a check that could not run is recorded instead of looking clean"
+      - label: good
+        code: |
+          # Prove the check works by breaking what it checks.
+          def test_the_guard_fails_when_the_rule_is_broken(tmp_path):
+              write_file_that_violates_the_rule(tmp_path)
+              assert run_check(tmp_path) != 0, "the guard did not fire"
+              assert "over the limit" in capsys.readouterr().out
+        explanation: "A check nobody has seen fail is a check nobody has tested"

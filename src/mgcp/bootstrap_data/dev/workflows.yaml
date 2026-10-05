@@ -176,6 +176,8 @@ workflows:
           - "Error cases handled gracefully"
           - "Edge cases covered (empty, null, boundary)"
           - "Error messages are informative"
+          - "Each new check was seen to FAIL once, by breaking what it checks"
+          - "No check reports success over an empty input set"
           - "No regressions in existing functionality"
         outputs:
           - "passing tests"
@@ -186,6 +188,9 @@ workflows:
             priority: 1
           - lesson_id: test-known-inputs
             relevance: "Known pairs make changes obvious"
+            priority: 1
+          - lesson_id: a-vacuous-check-reads-as-a-pass
+            relevance: "Break what the test checks and confirm the test fails"
             priority: 1
           - lesson_id: test-edge-cases
             relevance: "Edge cases cause most bugs"

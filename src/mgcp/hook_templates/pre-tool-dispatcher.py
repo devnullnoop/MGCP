@@ -72,7 +72,7 @@ def _audit(event: dict) -> None:
         GATE_AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(GATE_AUDIT_FILE, "a") as f:
             f.write(json.dumps(event) + "\n")
-    except Exception:
+    except Exception:  # mgcp: allow-broad-except the audit log must never fail the hook it records
         pass
 
 
@@ -184,25 +184,39 @@ def _detect_git_subcommand(command: str, subcommands: list) -> bool:
             if _scan_git_subcommand_raw(line, subcommands):
                 return True
             continue
-        at_command_start = True
-        for i, tok in enumerate(tokens):
-            if tok in SHELL_SEPARATORS:
-                at_command_start = True
-                continue
-            if at_command_start and tok.rsplit("/", 1)[-1] == "git":
-                if _subcommand_after_git(tokens, i) in subcommands:
-                    return True
-            # The boundary survives anything the shell itself treats as
-            # preamble: a `VAR=value` assignment, a wrapper like `sudo` or
-            # `env`, and a wrapper's own flags. Dropping it on the first
-            # token meant one word in front of the command -- `sudo git
-            # push`, `env git commit`, or just the absolute path -- walked
-            # straight through the gate with nothing malformed about it.
-            at_command_start = (
-                _ASSIGNMENT_RE.match(tok) is not None
-                or tok.rsplit("/", 1)[-1] in _COMMAND_WRAPPERS
-                or (at_command_start and tok.startswith("-"))
-            )
+        if _line_runs_git_subcommand(tokens, subcommands):
+            return True
+    return False
+
+
+def _starts_a_command(tok: str, at_command_start: bool) -> bool:
+    """Whether the NEXT token begins a command, given this one.
+
+    The boundary survives anything the shell itself treats as preamble: a
+    ``VAR=value`` assignment, a wrapper such as ``sudo`` or ``env``, and a
+    wrapper's own flags. Dropping it on the first token meant one word in front
+    of the command, like ``sudo git push``, ``env git commit``, or just the
+    absolute path, walked straight through the gate with nothing malformed
+    about it.
+    """
+    return (
+        _ASSIGNMENT_RE.match(tok) is not None
+        or tok.rsplit("/", 1)[-1] in _COMMAND_WRAPPERS
+        or (at_command_start and tok.startswith("-"))
+    )
+
+
+def _line_runs_git_subcommand(tokens: list, subcommands: list) -> bool:
+    """True when one tokenised line runs git with one of these subcommands."""
+    at_command_start = True
+    for i, tok in enumerate(tokens):
+        if tok in SHELL_SEPARATORS:
+            at_command_start = True
+            continue
+        if at_command_start and tok.rsplit("/", 1)[-1] == "git":
+            if _subcommand_after_git(tokens, i) in subcommands:
+                return True
+        at_command_start = _starts_a_command(tok, at_command_start)
     return False
 
 
@@ -272,6 +286,76 @@ def _apology_match(text: str) -> tuple:
     return "", ""
 
 
+def _transcript_entries_reversed(transcript_path: str):
+    """Parsed transcript entries, newest first.
+
+    A line that is blank, unparseable, or not an object is skipped rather than
+    ending the walk, because one corrupt line must not hide the apology above
+    it. A file that cannot be read yields nothing, which allows the call.
+    """
+    if not transcript_path:
+        return
+    try:
+        with open(transcript_path) as f:
+            lines = f.readlines()
+    except OSError:
+        return
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(entry, dict):
+            yield entry
+
+
+def _is_real_user_prompt(entry: dict) -> bool:
+    """True for a prompt the person sent, False for a tool result.
+
+    Tool results are recorded as type=="user" entries whose content is a list of
+    tool_result blocks. Treating those as the turn boundary lets any tool call,
+    even a denied one, clear the apology from view and reopen the gate. Only
+    string content, or a list containing a text block, ends the current turn.
+    """
+    content = (entry.get("message") or {}).get("content")
+    if isinstance(content, str):
+        return True
+    return isinstance(content, list) and any(
+        isinstance(b, dict) and b.get("type") == "text" for b in content)
+
+
+def _assistant_blocks(entry: dict) -> list:
+    """The content blocks of one assistant entry, oldest first."""
+    content = (entry.get("message") or {}).get("content")
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    if isinstance(content, list):
+        return [b for b in content if isinstance(b, dict)]
+    return []
+
+
+def _scan_assistant_entry(entry: dict, answered: bool) -> tuple:
+    """Search one assistant message for an apology, newest block first.
+
+    Blocks are walked in reverse within the entry as well as across entries,
+    because a message can apologize in a text block and call ``add_lesson`` in a
+    later block of the same message. Returns ``(pattern, sentence, answered)``,
+    where an empty pattern means keep walking.
+    """
+    for block in reversed(_assistant_blocks(entry)):
+        btype = block.get("type")
+        if btype == "tool_use" and block.get("name") == ADD_LESSON_TOOL:
+            answered = True
+        elif btype == "text":
+            pattern, sentence = _apology_match(block.get("text") or "")
+            if pattern:
+                return pattern, sentence, answered
+    return "", "", answered
+
+
 def _latest_apology(transcript_path: str) -> tuple:
     """The most recent apology since the last user prompt, and whether it was answered.
 
@@ -301,67 +385,21 @@ def _latest_apology(transcript_path: str) -> tuple:
     nothing in the transcript, so an apology already paid for still reads as
     answered.
 
-    Blocks are walked in reverse within each entry as well as across entries,
-    because an assistant message can apologize in a text block and call
-    ``add_lesson`` in a later block of the same message.
-
     Falls back to no match on any read or parse error, which allows the call.
     Enforcement here is a net rather than a tripwire.
     """
-    if not transcript_path:
-        return "", "", False
-    try:
-        with open(transcript_path) as f:
-            lines = f.readlines()
-    except (OSError, IOError):
-        return "", "", False
-
     answered = False
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(entry, dict):
-            continue
+    for entry in _transcript_entries_reversed(transcript_path):
         etype = entry.get("type")
         if etype == "user":
-            # Tool results are recorded as type=="user" entries whose content
-            # is a list of tool_result blocks. Breaking on those lets any tool
-            # call (even a denied one) clear the apology from view and reopen
-            # the gate. Only a genuine user prompt (string content, or a list
-            # containing a text block) ends the current turn.
-            content = (entry.get("message") or {}).get("content")
-            is_real_prompt = isinstance(content, str) or (
-                isinstance(content, list)
-                and any(
-                    isinstance(b, dict) and b.get("type") == "text"
-                    for b in content
-                )
-            )
-            if is_real_prompt:
+            if _is_real_user_prompt(entry):
                 break
             continue
         if etype != "assistant":
             continue
-        content = (entry.get("message") or {}).get("content")
-        if isinstance(content, str):
-            blocks = [{"type": "text", "text": content}]
-        elif isinstance(content, list):
-            blocks = [b for b in content if isinstance(b, dict)]
-        else:
-            continue
-        for block in reversed(blocks):
-            btype = block.get("type")
-            if btype == "tool_use" and block.get("name") == ADD_LESSON_TOOL:
-                answered = True
-            elif btype == "text":
-                pattern, sentence = _apology_match(block.get("text") or "")
-                if pattern:
-                    return pattern, sentence, answered
+        pattern, sentence, answered = _scan_assistant_entry(entry, answered)
+        if pattern:
+            return pattern, sentence, answered
     return "", "", False
 
 
@@ -399,7 +437,7 @@ def _check_coupling(staged, when_staged, require_one_of):
 def _safe_fnmatch(value: str, pattern: str) -> bool:
     try:
         return fnmatch.fnmatch(value, pattern)
-    except Exception:
+    except Exception:  # mgcp: allow-broad-except an unreadable pattern is not evidence the path matches
         return False
 
 
@@ -430,6 +468,7 @@ class EvalContext:
         payload = hook_input or {}
         self.tool_name = payload.get("tool_name", "")
         self.tool_input = payload.get("tool_input") or {}
+        self.session_id = payload.get("session_id", "")
         self._transcript_path = payload.get("transcript_path", "")
         # Every command runs with -C the repository root, and every path is
         # made relative to it. Rules compare globs like "tests/**" against
@@ -489,6 +528,16 @@ class EvalContext:
         if p.startswith("/"):
             return ""     # absolute, and not under this repository
         return p          # already relative, so it is this repository's
+
+    @property
+    def transcript_path(self):
+        """The raw transcript path from the payload, "" when absent.
+
+        The apology gate reads the file itself rather than this object's parsed
+        ``transcript`` accessor, because it scans assistant text rather than
+        tool uses.
+        """
+        return self._transcript_path
 
     def has_base(self):
         """True when HEAD is a commit with a non-empty tree.
@@ -903,7 +952,7 @@ def _h_transcript_tool_called(pre, state, ctx):
     write it. The transcript is per session and it cannot.
     """
     want = pre.get("tool_name", "")
-    if not _rule_applies(ctx, want, pre.get("when_staged_added", [])):
+    if not _precondition_has_work(ctx, want, pre.get("when_staged_added", [])):
         return True, ""
     if not ctx.transcript():
         # No readable transcript means the question cannot be answered, not
@@ -921,8 +970,15 @@ def _h_transcript_tool_called(pre, state, ctx):
     return False, _missing_call_detail(want, wanted)
 
 
-def _rule_applies(ctx, want, gate_globs):
-    """True when this rule has something to check."""
+def _precondition_has_work(ctx, want, gate_globs):
+    """True when this precondition has something to check.
+
+    Named for the question it answers. It was called _rule_applies, which reads
+    like "is this rule enabled and triggered", and a later helper took that name
+    for that other question. Python allowed the redefinition silently, the
+    handler here called the wrong function, and the broad except turned the
+    resulting TypeError into a precondition that passed. Two tests caught it.
+    """
     if ctx is None or not want:
         return False
     return _gate_applies(ctx, gate_globs or [])
@@ -1120,17 +1176,18 @@ def _load_state() -> dict:
     touched the file.
     """
     try:
-        if STATE_FILE.exists():
-            with open(STATE_FILE) as f:
-                loaded = json.load(f)
-            if isinstance(loaded, dict):
-                for key in ("turn_tools_called", "turn_bypass_scopes"):
-                    if key in loaded and not isinstance(loaded[key], list):
-                        loaded[key] = []
-                return loaded
+        if not STATE_FILE.exists():
+            return {}
+        with open(STATE_FILE) as f:
+            loaded = json.load(f)
     except (json.JSONDecodeError, OSError):
-        pass
-    return {}
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    for key in ("turn_tools_called", "turn_bypass_scopes"):
+        if key in loaded and not isinstance(loaded[key], list):
+            loaded[key] = []
+    return loaded
 
 
 def _allow():
@@ -1171,15 +1228,159 @@ def _deny(reasons: list, audit: dict | None = None):
 # ---------------------------------------------------------------------------
 
 
+def _adjudication_applies(state, session_id):
+    """True when this session contested the gate and the verdict stands.
+
+    An adjudication speaks only for the session that recorded it, because
+    workflow_state.json is shared across concurrent sessions and an unscoped
+    verdict would open every one of them.
+
+    Every read is defensive. This file is agent-writable, and a crash here
+    means exit 1 with empty stdout, which the harness reads as ALLOW, so a
+    malformed value must read as "no adjudication" and keep the gate shut.
+    """
+    adjudication = state.get("turn_apology_adjudication")
+    if not isinstance(adjudication, dict):
+        return False
+    if adjudication.get("verdict") != "not_apology":
+        return False
+    recorded = adjudication.get("session_id")
+    if not isinstance(recorded, str):
+        recorded = ""
+    # Exact match only. Treating "" as "applies to everyone" is reachable by
+    # type confusion from a forged session_id. The single-session case still
+    # works, because both sides are then "".
+    return recorded == (session_id if isinstance(session_id, str) else "")
+
+
+def _record_apology_compliance(ctx, state):
+    """Note on the record that an apology was answered with a lesson.
+
+    A compliance is a label too: it says this fire was accepted. Without the
+    sentence it would be an unexaminable vote.
+    """
+    if ADD_LESSON_TOOL in (state.get("turn_tools_called") or []):
+        return
+    matched_pattern, flagged_sentence, answered = _latest_apology(ctx.transcript_path)
+    if matched_pattern and not answered:
+        _audit({"event": "comply", "gate": "apology",
+                "session_id": ctx.session_id,
+                "pattern": matched_pattern,
+                "flagged_sentence": flagged_sentence,
+                "lesson_id": (ctx.tool_input or {}).get("id", "")})
+
+
+def _deny_unless_apology_answered(ctx, state):
+    """Refuse this tool call while an apology in this turn is unanswered."""
+    if _adjudication_applies(state, ctx.session_id):
+        return
+    matched_pattern, flagged_sentence, answered = _latest_apology(ctx.transcript_path)
+    if not matched_pattern or answered:
+        return
+    _deny([
+        "[apology-requires-add-lesson] You apologized in this "
+        "turn. Two exits: (1) COMPLY -- call "
+        "mcp__mgcp__add_lesson capturing what you should do "
+        "differently next time; or (2) CONTEST -- call "
+        "mcp__mgcp__adjudicate_apology_gate with the flagged "
+        "text, a verdict and your reasoning, which goes on the "
+        "audit record. Bypass: include MGCP_BYPASS:apology in "
+        "the next user prompt."
+    ], audit={"gate": "apology", "tool_denied": ctx.tool_name,
+              "session_id": ctx.session_id,
+              "pattern": matched_pattern,
+              "flagged_sentence": flagged_sentence})
+
+
+def _apology_gate(ctx, state, bypass_scopes):
+    """The gate whose trigger is assistant text rather than a tool argument.
+
+    While it is armed, the only permitted calls are add_lesson, the
+    adjudication tool and the three discovery tools. Gating discovery would
+    gate the exits themselves. It runs independently of
+    enforcement_rules.json, because a data rule matches on tool arguments and
+    this one reads what the assistant said.
+
+    It enforces the rule that an apology triggers a knowledge write
+    immediately, promoted from a passive note to a refusal.
+    """
+    if APOLOGY_BYPASS_SCOPE in bypass_scopes:
+        return
+    if ctx.tool_name == ADD_LESSON_TOOL:
+        _record_apology_compliance(ctx, state)
+        return
+    if ctx.tool_name == ADJUDICATE_TOOL or ctx.tool_name in DISCOVERY_TOOLS:
+        return
+    _deny_unless_apology_answered(ctx, state)
+
+
+def _rule_matches_call(rule, ctx, bypass_scopes):
+    """Whether this rule should be checked against this tool call.
+
+    A malformed rule reads as not applying, because enforcement is a net rather
+    than a tripwire and one bad entry must not take the others down.
+    """
+    try:
+        if not rule.get("enabled", True):
+            return False
+        if rule.get("bypass_scope", "") in bypass_scopes:
+            return False
+        return _trigger_matches(rule.get("trigger") or {}, ctx.tool_name,
+                                ctx.tool_input)
+    except Exception:  # mgcp: allow-broad-except a malformed rule must not take the other rules down
+        return False
+
+
+def _unsatisfied_preconditions(rule, state, ctx):
+    """The detail text of every precondition this call fails.
+
+    A precondition that raises counts as satisfied. This hook allows a call it
+    cannot measure.
+    """
+    unsatisfied = []
+    for pre in rule.get("preconditions") or []:
+        try:
+            ok, detail = _evaluate_precondition(pre or {}, state, ctx=ctx)
+        except Exception:
+            ok, detail = True, ""
+        if not ok:
+            unsatisfied.append(detail)
+    return unsatisfied
+
+
+def _rule_denials(rules, state, ctx, bypass_scopes):
+    """One deny message per rule this tool call violates.
+
+    A rule in audit mode records what it would have refused and contributes no
+    message. Every new rule ships that way and is promoted on evidence, so a
+    limit that is wrong costs a log row rather than a blocked session.
+    would_deny is counted separately from deny in the dashboard, because a
+    projection is not an action.
+    """
+    denials = []
+    for rule in rules:
+        if not _rule_matches_call(rule, ctx, bypass_scopes):
+            continue
+        unsatisfied = _unsatisfied_preconditions(rule, state, ctx)
+        if not unsatisfied:
+            continue
+        name = rule.get("name", "?")
+        details = "\n".join(unsatisfied)
+        if rule.get("mode") == "audit":
+            _audit({"event": "would_deny", "gate": "rules",
+                    "tool_denied": ctx.tool_name, "session_id": ctx.session_id,
+                    "rules": [name], "detail": details[:1000]})
+            continue
+        reason = rule.get("deny_reason") or f"Rule '{name}' violated"
+        denials.append(f"[{name}] {reason}\n{details}")
+    return denials
+
+
 def main():
     try:
         hook_input = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         _allow()
-
-    tool_name = hook_input.get("tool_name", "")
-    tool_input = hook_input.get("tool_input", {}) or {}
-    project_dir = hook_input.get("cwd") or os.getcwd()
 
     rules = _load_rules()
     state = _load_state()
@@ -1187,128 +1388,22 @@ def main():
     if BYPASS_ALL in bypass_scopes:
         _allow()
 
-    # Apology gate: if this turn's assistant text contains an apology and
-    # add_lesson hasn't been called yet, the only permitted tool is
-    # add_lesson itself. Rationale: MEMORY.md rule that apologies must
-    # immediately trigger a knowledge write, promoted from passive note
-    # to hard enforcement. Bypass with MGCP_BYPASS:apology. Runs
-    # independently of enforcement_rules.json — this is a first-class
-    # gate, not a data rule, because its trigger is assistant text not a
-    # tool arg.
-    session_id = hook_input.get("session_id", "")
-    # Whether an apology was already paid for is read from the transcript, not
-    # from turn_tools_called. That list lives in a shared, agent-writable file,
-    # so it answered for every concurrent session at once and the gated agent
-    # could edit it. _latest_apology decides it from the transcript instead.
-    if (
-        tool_name not in (ADD_LESSON_TOOL, ADJUDICATE_TOOL)
-        and tool_name not in DISCOVERY_TOOLS
-        and APOLOGY_BYPASS_SCOPE not in bypass_scopes
-    ):
-        # An adjudication speaks only for the session that recorded it:
-        # workflow_state.json is shared across concurrent sessions, so an
-        # unscoped verdict would open every one of them.
-        # Defensive: workflow_state.json is agent-writable, and a crash here
-        # means rc=1 with empty stdout, which the harness reads as ALLOW --
-        # a silent, unaudited bypass. A malformed value must read as "no
-        # adjudication" (fail closed: keep denying), never as an exception.
-        adjudication = state.get("turn_apology_adjudication")
-        if not isinstance(adjudication, dict):
-            adjudication = {}
-        adj_session = adjudication.get("session_id")
-        if not isinstance(adj_session, str):
-            adj_session = ""
-        # Exact match only. A lenient "" means "applies to everyone", which a
-        # forged or malformed session_id could reach by type confusion; the
-        # single-session case still works because both sides are then "".
-        adj_applies = (
-            adjudication.get("verdict") == "not_apology"
-            and adj_session == (session_id if isinstance(session_id, str) else "")
-        )
-        if not adj_applies:
-            transcript_path = hook_input.get("transcript_path", "")
-            matched_pattern, flagged_sentence, answered = _latest_apology(transcript_path)
-            if matched_pattern and not answered:
-                _deny([
-                    "[apology-requires-add-lesson] You apologized in this "
-                    "turn. Two exits: (1) COMPLY -- call "
-                    "mcp__mgcp__add_lesson capturing what you should do "
-                    "differently next time; or (2) CONTEST -- call "
-                    "mcp__mgcp__adjudicate_apology_gate with the flagged "
-                    "text, a verdict and your reasoning, which goes on the "
-                    "audit record. Bypass: include MGCP_BYPASS:apology in "
-                    "the next user prompt."
-                ], audit={"gate": "apology", "tool_denied": tool_name,
-                          "session_id": session_id,
-                          "pattern": matched_pattern,
-                          "flagged_sentence": flagged_sentence})
-    elif (
-        tool_name == ADD_LESSON_TOOL
-        and APOLOGY_BYPASS_SCOPE not in bypass_scopes
-        and ADD_LESSON_TOOL not in (state.get("turn_tools_called") or [])
-    ):
-        transcript_path = hook_input.get("transcript_path", "")
-        matched_pattern, flagged_sentence, answered = _latest_apology(transcript_path)
-        if matched_pattern and not answered:
-            # A compliance is a label too: it says this fire was accepted.
-            # Without the sentence it is an unexaminable vote.
-            _audit({"event": "comply", "gate": "apology",
-                    "session_id": session_id,
-                    "pattern": matched_pattern,
-                    "flagged_sentence": flagged_sentence,
-                    "lesson_id": (tool_input or {}).get("id", "")})
-
-    if not rules:
-        _allow()
-
-    denials = []
     # One context for the whole tool call. Every accessor on it is lazy and
     # caches, so a rule that needs the staged diff costs one subprocess and a
     # rule that needs nothing costs none. This replaced three separate lazy
     # variables that each had to be threaded through the evaluator.
     ctx = EvalContext(hook_input)
 
-    for rule in rules:
-        try:
-            if not rule.get("enabled", True):
-                continue
-            scope = rule.get("bypass_scope", "")
-            if scope in bypass_scopes:
-                continue
-            trigger = rule.get("trigger") or {}
-            if not _trigger_matches(trigger, tool_name, tool_input):
-                continue
-        except Exception:
-            continue  # malformed rule -> fail open
+    _apology_gate(ctx, state, bypass_scopes)
 
-        unsatisfied = []
-        for pre in rule.get("preconditions") or []:
-            try:
-                ok, detail = _evaluate_precondition(pre or {}, state, ctx=ctx)
-            except Exception:
-                ok, detail = True, ""
-            if not ok:
-                unsatisfied.append(detail)
+    if not rules:
+        _allow()
 
-        if unsatisfied:
-            name = rule.get("name", "?")
-            reason = rule.get("deny_reason") or f"Rule '{name}' violated"
-            details = "\n".join(unsatisfied)
-            # Audit mode records what the rule WOULD have refused and allows
-            # the call. Every new rule ships this way and is promoted on
-            # evidence, so a limit that is wrong costs a log row rather than a
-            # blocked session. would_deny is counted separately from deny in
-            # the dashboard, because a projection is not an action.
-            if rule.get("mode") == "audit":
-                _audit({"event": "would_deny", "gate": "rules",
-                        "tool_denied": tool_name, "session_id": session_id,
-                        "rules": [name], "detail": details[:1000]})
-                continue
-            denials.append(f"[{name}] {reason}\n{details}")
-
+    denials = _rule_denials(rules, state, ctx, bypass_scopes)
     if denials:
         _deny(denials, audit={
-            "gate": "rules", "tool_denied": tool_name, "session_id": session_id,
+            "gate": "rules", "tool_denied": ctx.tool_name,
+            "session_id": ctx.session_id,
             "rules": [d.split("]")[0].lstrip("[") for d in denials]})
     _allow()
 

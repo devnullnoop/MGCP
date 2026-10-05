@@ -9,6 +9,7 @@ evaluator module that the MCP tools use — the two share semantics.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import shlex
@@ -1996,3 +1997,40 @@ class TestStructuredCodingGates:
                             "content": "\n".join(str(i) for i in range(50))}},
             repo)
         assert decision == "allow"
+
+
+class TestNoShadowedDefinitions:
+    """No module in the hook payload may define one name twice.
+
+    Python accepts a redefinition silently and the last one wins. In this file
+    that is a silent ALLOW: a helper named _rule_applies was added for one
+    question while a function of that name already answered a different one, so
+    a precondition handler called the wrong function, the broad except turned
+    the TypeError into "satisfied", and the gate let the call through. The hook
+    is stdlib-only with no import-time checker, and ruff's F811 does not fire
+    across the whole file for module-level defs that differ in arity, so the
+    guard lives here.
+    """
+
+    def _duplicate_names(self, path: Path) -> dict:
+        tree = ast.parse(path.read_text())
+        seen, dupes = {}, {}
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                     ast.ClassDef)):
+                continue
+            if node.name in seen:
+                dupes.setdefault(node.name, [seen[node.name]]).append(node.lineno)
+            seen[node.name] = node.lineno
+        return dupes
+
+    def test_the_dispatcher_defines_each_name_once(self):
+        dupes = self._duplicate_names(HOOK_PATH)
+        assert dupes == {}, f"redefined in the enforcing hook: {dupes}"
+
+    def test_every_hook_template_defines_each_name_once(self):
+        templates = sorted(HOOK_PATH.parent.glob("*.py"))
+        assert len(templates) >= 5, "hook templates not found"
+        offenders = {p.name: self._duplicate_names(p) for p in templates}
+        offenders = {name: d for name, d in offenders.items() if d}
+        assert offenders == {}, f"redefined names: {offenders}"

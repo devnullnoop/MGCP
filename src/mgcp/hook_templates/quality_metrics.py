@@ -578,6 +578,12 @@ def main(argv: list[str] | None = None) -> int:
               "callers must agree or a commit passes in one and fails in the "
               "other."),
     )
+    ap.add_argument(
+        "--checks", nargs="*", default=list(BANNED_CHECKS), metavar="NAME",
+        choices=list(BANNED_CHECKS),
+        help=("banned patterns to look for. Defaults to all of them, so this "
+              "matches the hook rule, whose banned field names the same two."),
+    )
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
@@ -587,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             print(json.dumps({"base": args.base}))
         return _ratchet_against_base(args.base, args.cwd, DEFAULT_LIMITS,
-                                     args.exclude, list(METRIC_LABELS),
+                                     args.exclude, args.checks,
                                      args.file_length_exempt)
     ap.print_help()
     return 0

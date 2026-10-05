@@ -736,3 +736,62 @@ def test_the_ruler_passes_its_own_limits():
     over = {name: bad for name, bad in over.items() if bad}
     assert over == {}, f"the ruler exceeds its own limits: {over}"
     assert qm.banned_patterns(source, list(qm.BANNED_CHECKS)) == []
+
+
+def test_the_cli_looks_for_banned_patterns(tmp_path, capsys):
+    """The CLI and the hook must run the same banned-pattern checks.
+
+    The CLI passed the METRIC label names as the check list, so every lookup
+    compared "swallowed_error" against "cyclomatic" and matched nothing. CI runs
+    the CLI and the hook reads its own rule, so the two callers of one module
+    disagreed and CI never ran these checks at all.
+    """
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    (tmp_path / "keep.py").write_text("x = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
+    _commit(tmp_path, "base")
+
+    (tmp_path / "keep.py").write_text(
+        "def f():\n"
+        "    try:\n"
+        "        return 1\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    assert qm.main(["--base", "HEAD", "--cwd", str(tmp_path)]) == 1
+    assert "swallowed_error" in capsys.readouterr().out
+
+
+def test_the_escape_comment_still_exempts_a_fail_open(tmp_path, capsys):
+    """A handler that states its reason is allowed.
+
+    The hook's own fail-open handlers need this escape, and a check that refused
+    the code implementing fail-open would be self-defeating.
+    """
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    (tmp_path / "keep.py").write_text("x = 1\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
+    _commit(tmp_path, "base")
+
+    (tmp_path / "keep.py").write_text(
+        "def f():\n"
+        "    try:\n"
+        "        return 1\n"
+        f"    except Exception:  # {qm.ALLOW_BROAD_EXCEPT} measured, on purpose\n"
+        "        pass\n"
+    )
+    assert qm.main(["--base", "HEAD", "--cwd", str(tmp_path)]) == 0
+    assert "no violations" in capsys.readouterr().out
+
+
+def test_the_enforcing_hook_has_no_unexplained_swallowed_errors():
+    """Every fail-open in the gate states why it is one.
+
+    The gate is allowed to discard errors, because it allows a call it cannot
+    measure. It is not allowed to do so silently, since a swallowed error there
+    is an unaudited allow. This caught three handlers once the CLI started
+    running the check it had been passing the wrong argument for.
+    """
+    hook = HOOK_DIR / "pre-tool-dispatcher.py"
+    found = qm.banned_patterns(hook.read_text(), list(qm.BANNED_CHECKS))
+    assert found == [], f"unexplained swallowed errors at {[f['lineno'] for f in found]}"

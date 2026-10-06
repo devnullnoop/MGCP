@@ -310,6 +310,13 @@ source .venv/bin/activate
 pip install -e .
 ```
 
+`mgcp-init` in the next step starts a local Qdrant server and points MGCP at it.
+That is the default because the alternative does not survive normal use: embedded
+Qdrant takes an EXCLUSIVE lock on its storage directory, one client per path, so a
+second session or the dashboard is locked out of search. The server is loopback
+only with telemetry off, downloads about 27 MB once, and needs no container. Pass
+`mgcp-init --embedded` if you want a single session and no server.
+
 Your system default can be any version. The virtual environment decides what
 MGCP runs under, and `mgcp-init` writes absolute paths into your client config,
 so the hooks keep using this interpreter whatever your shell defaults to.
@@ -363,12 +370,16 @@ Supports: Claude Code, Claude Desktop, Cursor, Windsurf, Zed, Continue, Cline, S
 Restart your LLM client. MGCP tools are now available.
 
 ```bash
-# Optional: seed starter lessons and workflows
+# Seed starter lessons and workflows
 mgcp-bootstrap
 
-# Optional: start the web dashboard
+# Start the web dashboard
 mgcp-dashboard
 ```
+
+The dashboard and your sessions share one store, because `mgcp-init` put this
+machine on server mode. On `--embedded` they cannot: whichever starts first holds
+the exclusive lock and the other loses semantic search.
 
 ### 4. Updating an existing install
 
@@ -402,10 +413,17 @@ It reports which interpreter is in use and this machine's Python ceiling, a
 deployed hook payload behind the package, any missing hook file, and leftover
 `mgcp.server` processes.
 
-One more thing, if you run the dashboard. A `mgcp-dashboard` process started
-before the pull keeps serving the code it loaded at start, so new API fields are
-absent while the files on disk have them. Stop it and start it again after
-updating.
+Two more things.
+
+A `mgcp-dashboard` process started before the pull keeps serving the code it
+loaded at start, so new API fields are absent while the files on disk have them.
+Stop it and start it again after updating.
+
+If this machine is still on embedded Qdrant, `mgcp-init` moves it to server mode
+and rebuilds the search index from `lessons.db`, which is the source of truth
+either way. That rebuild is why the step is not instant. `mgcp-init --doctor`
+reports which mode you are on, and names the process holding the embedded lock
+when something cannot connect.
 
 ### What lives where
 

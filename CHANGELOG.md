@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed: server mode is the default
+- **`mgcp-init` now installs and starts a local Qdrant server, and points MGCP at
+  it.** Embedded Qdrant takes an exclusive lock on its storage directory, one
+  client per path, so the embedded default failed the moment a second session or
+  the dashboard wanted the store. The operator hit this on a second machine and
+  could not connect at all.
+- **The fix existed and was opt-in, which is why it did not help.** Server mode
+  shipped in v3 behind `--multi-session`. The lesson
+  `degrade-per-store-not-per-server`, written five days earlier, already said the
+  rule: an escape hatch nobody turns on does not stop the lock killing access.
+  Treat an opt-in fix as not yet a fix.
+- `mgcp-init --embedded` opts out and explains the constraint. `--multi-session`
+  still works and now says it is the default.
+- **The index is rebuilt for you.** The server keeps its data in its own
+  directory, so switching starts with an empty index while `lessons.db` still
+  holds everything. Leaving `mgcp-migrate --force` as a printed next step is how
+  someone ends up on server mode with search returning nothing.
+- A failed setup, from no network or an unsupported platform, falls back to
+  embedded with the reason printed. It never fails the install.
+- **`mgcp-init --doctor` now reports the store mode and names the process holding
+  the embedded lock.** `server.py` has had that lookup on its error path all
+  along; the doctor could not answer the one question someone asks when they
+  cannot connect. The implementation moved to `qdrant_vector_store` so both call
+  one copy.
+
 ### Changed: Python 3.13 is supported, and the ceiling is per machine
 - **`requires-python` moves from `>=3.11,<3.13` to `>=3.11,<3.14`.** The full
   suite passes on 3.13 on Apple Silicon, 1256 tests, the same result as 3.12.

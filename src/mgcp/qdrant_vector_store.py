@@ -42,6 +42,55 @@ def string_to_uuid(s: str) -> str:
     return str(uuid.uuid5(MGCP_NAMESPACE, s))
 
 
+def describe_lock_holder() -> str:
+    """Name the processes holding the embedded Qdrant lock, or "".
+
+    Embedded Qdrant takes an EXCLUSIVE lock on its storage directory: one client
+    per path. So a second MGCP process, a dashboard, or a stale server from a
+    previous session locks everyone else out, and the symptom is an error about
+    storage already being accessed that names nobody.
+
+    Returns "" when the lock is irrelevant or the holder cannot be determined:
+    server mode has no such lock, and `lsof` is absent on some systems. This is a
+    diagnostic, so it never raises. A diagnostic that can fail the call it is
+    diagnosing is worse than no diagnostic.
+    """
+    if get_qdrant_url():
+        return ""
+    lock_file = Path(get_default_qdrant_path()) / ".lock"
+    if not lock_file.exists():
+        return ""
+    try:
+        import os
+        import subprocess
+
+        pids = subprocess.run(
+            ["lsof", "-t", str(lock_file)],
+            capture_output=True, text=True, timeout=3,
+        ).stdout.split()
+        # Never report ourselves. A failed open leaves this process holding the
+        # lock file briefly, so lsof lists it, and naming the caller as the
+        # culprit points at the wrong process to stop.
+        own = str(os.getpid())
+        pids = [pid for pid in pids if pid != own]
+        if not pids:
+            return ""
+        described = []
+        for pid in pids[:3]:
+            cmd = subprocess.run(
+                ["ps", "-o", "command=", "-p", pid],
+                capture_output=True, text=True, timeout=3,
+            ).stdout.strip()
+            if cmd:
+                short = " ".join(Path(part).name for part in cmd.split()[:3])
+                described.append(f"PID {pid} ({short})")
+            else:
+                described.append(f"PID {pid}")
+        return " Currently held by: " + "; ".join(described) + "."
+    except Exception:  # mgcp: allow-broad-except a diagnostic must not raise
+        return ""
+
+
 def get_default_qdrant_path() -> str:
     """Get the default Qdrant path, respecting MGCP_DATA_DIR env var."""
     data_dir = os.environ.get("MGCP_DATA_DIR")

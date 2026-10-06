@@ -2176,3 +2176,114 @@ class TestPythonRuntimeCeiling:
             sys.platform == "darwin"
             and __import__("platform").machine() in ("x86_64", "i386")
         )
+
+
+class TestServerModeIsTheDefault:
+    """mgcp-init puts a machine on server mode unless asked not to.
+
+    Embedded Qdrant takes an exclusive lock on its storage directory, one client
+    per path. So the embedded default failed the moment a second session or the
+    dashboard wanted the store, and the capability that removes the constraint
+    shipped in v3 behind an opt-in flag. An escape hatch nobody turned on did not
+    stop the lock from killing access, which is what these tests pin.
+    """
+
+    def test_the_embedded_flag_exists_and_server_is_not_opt_in(self):
+        """--multi-session is kept for old scripts; --embedded is the opt-out."""
+        import subprocess
+
+        out = subprocess.run(
+            [sys.executable, "-m", "mgcp.init_project", "--help"],
+            capture_output=True, text=True,
+        ).stdout
+        assert "--embedded" in out, "no way to opt out of server mode"
+        assert "--multi-session" in out, "the old flag must keep working"
+        assert "now the default" in out, "the old flag should say it is the default"
+
+    def test_a_migration_with_errors_does_not_report_success(self, monkeypatch):
+        """The failure must not read as a pass.
+
+        The first version returned True while the migration it ran printed
+        "Errors encountered", so a half-built index looked finished.
+        """
+        from mgcp import init_project
+
+        async def fake_migrate(**kwargs):
+            return {"lessons_count": 10, "errors": ["Catalogue count mismatch: 263 vs 0"]}
+
+        monkeypatch.setattr("mgcp.migration.migrate", fake_migrate)
+        assert init_project._rebuild_index_if_empty() is None
+
+    def test_a_clean_migration_reports_what_it_indexed(self, monkeypatch):
+        from mgcp import init_project
+
+        async def fake_migrate(**kwargs):
+            return {"lessons_count": 301, "workflows_count": 3, "errors": []}
+
+        monkeypatch.setattr("mgcp.migration.migrate", fake_migrate)
+        assert init_project._rebuild_index_if_empty() is True
+
+    def test_a_boolean_in_the_results_is_not_counted_as_a_record(self, monkeypatch):
+        """bool is a subclass of int.
+
+        A plain isinstance(value, int) filter counted `success: True` as one
+        record and printed "indexed 1 records" over a result of all zeros.
+        """
+        from mgcp import init_project
+
+        async def fake_migrate(**kwargs):
+            return {"lessons_count": 0, "success": True, "errors": []}
+
+        monkeypatch.setattr("mgcp.migration.migrate", fake_migrate)
+        assert init_project._rebuild_index_if_empty() is False
+
+    def test_a_failed_setup_falls_back_to_embedded_instead_of_failing(self, monkeypatch):
+        """A machine that cannot run the server must still get a working MGCP."""
+        from mgcp import init_project
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("no network")
+
+        monkeypatch.setattr("mgcp.qdrant_server.status",
+                            lambda *a, **k: {"configured_url": None, "answering": False})
+        monkeypatch.setattr("mgcp.qdrant_server.setup", boom)
+        result = init_project._configure_vector_store()
+        assert result["mode"] == "embedded"
+        assert "no network" in (result["error"] or "")
+
+    def test_an_already_answering_server_is_left_alone(self, monkeypatch):
+        """Re-running init must not reinstall or restart a healthy server."""
+        from mgcp import init_project
+
+        called = []
+        monkeypatch.setattr(
+            "mgcp.qdrant_server.status",
+            lambda *a, **k: {"configured_url": "http://127.0.0.1:6333",
+                             "answering": True})
+        monkeypatch.setattr("mgcp.qdrant_server.setup",
+                            lambda *a, **k: called.append("setup"))
+        result = init_project._configure_vector_store()
+        assert result["mode"] == "server"
+        assert called == [], "setup ran against a server that was already answering"
+
+    def test_the_doctor_names_what_holds_the_embedded_lock(self, monkeypatch):
+        """The question someone asks when they cannot connect at all."""
+        from mgcp.init_project import diagnose_vector_store
+
+        monkeypatch.setattr(
+            "mgcp.qdrant_server.status",
+            lambda *a, **k: {"configured_url": None, "answering": False})
+        monkeypatch.setattr(
+            "mgcp.qdrant_vector_store.describe_lock_holder",
+            lambda: " Currently held by: PID 123 (python mgcp.server).")
+        store = diagnose_vector_store()
+        assert store["mode"] == "embedded"
+        assert "PID 123" in store["lock_holder"]
+
+        results = {"vector_store": store, "issues": [], "suggestions": []}
+        from mgcp.init_project import _report_vector_store
+
+        _report_vector_store(results)
+        assert results["issues"], "embedded mode was not reported as an issue"
+        assert "PID 123" in results["issues"][0]
+        assert any("mgcp-qdrant setup" in s for s in results["suggestions"])

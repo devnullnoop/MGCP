@@ -1145,6 +1145,53 @@ def _report_python_runtime(results: dict) -> None:
     )
 
 
+def diagnose_vector_store() -> dict:
+    """Which vector store this machine uses, and who holds the embedded lock.
+
+    Embedded Qdrant takes an EXCLUSIVE lock on its storage directory, one client
+    per path, so a second session or the dashboard is locked out and the error
+    names nobody. server.py has been able to name the holder on its error path
+    since that path was written, and the doctor could not, which is backwards:
+    the doctor is where someone looks when they cannot connect at all.
+    """
+    out = {"mode": None, "url": None, "answering": None, "lock_holder": "",
+           "error": None}
+    try:
+        from .qdrant_server import status as qdrant_status
+        from .qdrant_vector_store import describe_lock_holder
+
+        state = qdrant_status()
+        out["url"] = state.get("configured_url")
+        out["answering"] = state.get("answering")
+        out["mode"] = "server" if state.get("configured_url") else "embedded"
+        out["lock_holder"] = describe_lock_holder()
+    except Exception as exc:  # mgcp: allow-broad-except a diagnostic must not raise
+        out["error"] = str(exc)
+    return out
+
+
+def _report_vector_store(results: dict) -> None:
+    """Record a store that cannot be reached, and name what is holding it."""
+    store = results["vector_store"]
+    if store["mode"] == "server" and store["answering"] is False:
+        results["issues"].append(
+            f"Server mode is configured ({store['url']}) but nothing answers "
+            "there, so every search tool fails while context and the journal "
+            "keep working."
+        )
+        results["suggestions"].append("Run `mgcp-qdrant start`")
+    if store["mode"] == "embedded":
+        results["issues"].append(
+            "This machine is on embedded Qdrant, which takes an exclusive lock "
+            "on its storage directory, one client per path. A second session or "
+            "the dashboard is locked out of search."
+            + (f"{store['lock_holder']}" if store["lock_holder"] else "")
+        )
+        results["suggestions"].append(
+            "Run `mgcp-init` again, or `mgcp-qdrant setup`, to share one store"
+        )
+
+
 def diagnose_claude_code() -> dict:
     """
     Diagnose Claude Code MGCP configuration issues.
@@ -1206,6 +1253,8 @@ def diagnose_claude_code() -> dict:
     # rules and new code read by an old hook, and nothing said so until now.
     results["python"] = diagnose_python_runtime()
     _report_python_runtime(results)
+    results["vector_store"] = diagnose_vector_store()
+    _report_vector_store(results)
     results["hooks"] = diagnose_hook_deployment()
     _report_hook_drift(results)
     results["servers"] = find_mgcp_server_processes()
@@ -1410,9 +1459,19 @@ Project-local hooks (--local):
         "--multi-session",
         action="store_true",
         help=(
-            "Install and start a local Qdrant server so several sessions can share "
-            "one store (same as `mgcp-qdrant setup`). Embedded single-session is "
-            "the default and needs none of this."
+            "Deprecated and now the default. Kept so existing scripts and "
+            "documentation keep working."
+        ),
+    )
+
+    parser.add_argument(
+        "--embedded",
+        action="store_true",
+        help=(
+            "Stay on embedded Qdrant instead of running a local server. Embedded "
+            "takes an EXCLUSIVE lock on its storage directory, one client per "
+            "path, so a second session or the dashboard is locked out. Use this "
+            "only for a single session that never runs the dashboard."
         ),
     )
 
@@ -1643,35 +1702,140 @@ Project-local hooks (--local):
     else:
         print("\n  Embedding model: would verify/download if needed")
 
-    # Multi-session: report which store this machine uses, and set it up on request.
-    # init used to say nothing at all here, which is why a shipped feature was
-    # unreachable -- the only route to it was a container the docs mentioned once.
+    # Vector store. Server mode is the default, because embedded takes an
+    # EXCLUSIVE lock on its storage directory, one client per path, so the
+    # default used to fail as soon as a second session or the dashboard wanted
+    # the store. `--embedded` keeps the old behaviour.
     if not dry_run:
         print("\n  Vector store:\n")
-        try:
-            from .qdrant_server import setup as qdrant_setup
-            from .qdrant_server import status as qdrant_status
-
-            if args.multi_session:
-                qdrant_setup()
-            else:
-                state = qdrant_status()
-                if state["configured_url"]:
-                    answering = "answering" if state["answering"] else "NOT answering"
-                    print(f"    = server mode: {state['configured_url']} ({answering})")
-                    print("      every session on this machine shares one store")
-                else:
-                    print("    = embedded, single session (the default; needs no server)")
-                    print("      a second session keeps everything SQLite-backed —")
-                    print("      context, journal, workflows — but not semantic search")
-                    print("      run `mgcp-init --multi-session` to share one store")
-        except Exception as exc:  # pragma: no cover - never fail init over a report
-            print(f"    ! could not determine vector store mode: {exc}")
+        _configure_vector_store(embedded=args.embedded)
 
     if dry_run:
         print("\n  Dry run complete. Run without --dry-run to apply changes.\n")
     else:
         print("\n  Done! Restart your LLM client for changes to take effect.\n")
+
+
+def _configure_vector_store(embedded: bool = False) -> dict:
+    """Put this machine on server mode, or report embedded when asked.
+
+    Server mode is the default. Embedded Qdrant takes an exclusive lock on its
+    storage directory, one client per path, so two sessions or a session plus the
+    dashboard cannot both use it. The second one loses semantic search entirely.
+
+    Never fails the install. No network, an unsupported platform or a port
+    already taken all fall back to embedded with the reason printed, because a
+    machine that cannot run the server must still get a working MGCP.
+    """
+    result = {"mode": None, "url": None, "migrated": None, "error": None}
+    try:
+        from .qdrant_server import setup as qdrant_setup
+        from .qdrant_server import status as qdrant_status
+    except Exception as exc:  # mgcp: allow-broad-except never fail init over this
+        print(f"    ! could not load the Qdrant server support: {exc}")
+        print("    = embedded, single session")
+        result.update(mode="embedded", error=str(exc))
+        return result
+
+    if embedded:
+        _teardown_to_embedded(qdrant_status)
+        result["mode"] = "embedded"
+        return result
+
+    try:
+        state = qdrant_status()
+    except Exception as exc:  # mgcp: allow-broad-except status is a diagnostic
+        state = {"configured_url": None, "answering": False}
+        result["error"] = str(exc)
+
+    if state.get("configured_url") and state.get("answering"):
+        print(f"    = server mode: {state['configured_url']} (answering)")
+        print("      every session on this machine shares one store")
+        result.update(mode="server", url=state["configured_url"])
+        return result
+
+    print("    setting up a local Qdrant server so sessions can share one store")
+    print("    (loopback only, telemetry off, no container)")
+    try:
+        state = qdrant_setup()
+    except Exception as exc:  # mgcp: allow-broad-except embedded must still work
+        print(f"    ! could not start the server: {exc}")
+        print("    = embedded, single session, which locks to one client per path")
+        print("      `mgcp-qdrant setup` retries this when the cause is fixed")
+        result.update(mode="embedded", error=str(exc))
+        return result
+
+    result.update(mode="server", url=state.get("configured_url"))
+    print(f"    = server mode: {state.get('configured_url')}")
+    result["migrated"] = _rebuild_index_if_empty()
+    return result
+
+
+def _teardown_to_embedded(qdrant_status) -> None:
+    """Honour --embedded, including when the server is already configured."""
+    try:
+        state = qdrant_status()
+    except Exception:  # mgcp: allow-broad-except a diagnostic must not raise
+        state = {}
+    if state.get("configured_url"):
+        from .qdrant_server import teardown as qdrant_teardown
+
+        print("    stopping the server and returning to embedded, as asked")
+        try:
+            qdrant_teardown()
+        except Exception as exc:  # mgcp: allow-broad-except
+            print(f"    ! could not stop it cleanly: {exc}")
+    print("    = embedded, single session")
+    print("      this takes an exclusive lock on its directory, one client per")
+    print("      path, so a second session or the dashboard is locked out")
+
+
+def _rebuild_index_if_empty() -> bool | None:
+    """Rebuild the search index from SQLite when the server has none.
+
+    The server keeps its data in its own directory, so switching to it starts
+    with an empty index while lessons.db still holds everything. Leaving this as
+    a printed next step is how someone ends up on server mode with semantic
+    search returning nothing, which looks exactly like the feature not working.
+
+    Returns True when it rebuilt, False when there was nothing to do, and None
+    when it could not run. Never raises.
+    """
+    try:
+        import asyncio
+
+        from .migration import migrate
+
+        print("    rebuilding the search index from lessons.db, the source of truth")
+        results = asyncio.run(migrate(force=True, dry_run=False))
+        # bool is a subclass of int, so a plain isinstance(v, int) filter counted
+        # `success: True` as one record and printed "indexed 1 records" over a
+        # result of all zeros. Read the named counts only.
+        counts = {
+            key: value for key, value in (results or {}).items()
+            if key.endswith("_count") and isinstance(value, int)
+            and not isinstance(value, bool)
+        }
+        total = sum(counts.values())
+        # A migration that reported errors is not a migration that worked. The
+        # first version of this returned True while the run below it printed
+        # "Errors encountered", which is the failure reading as a pass.
+        errors = [e for e in (results or {}).get("errors") or []]
+        if errors:
+            print(f"    ! indexed {total} records, with {len(errors)} problem(s):")
+            for err in errors[:3]:
+                print(f"      {err}")
+            print("      run `mgcp-migrate --force` to retry, and read its summary")
+            return None
+        if total:
+            print(f"    = indexed {total} records {counts}")
+            return True
+        print("    = nothing to index yet, which is normal on a fresh install")
+        return False
+    except Exception as exc:  # mgcp: allow-broad-except the install still worked
+        print(f"    ! could not rebuild the index: {exc}")
+        print("      run `mgcp-migrate --force` to finish it")
+        return None
 
 
 def ensure_embedding_model() -> dict:

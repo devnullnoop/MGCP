@@ -493,10 +493,42 @@ class TestRealDataTriggers:
 
         MGCP_LIVE_DATA_DIR is the operator's real install; conftest points
         MGCP_DATA_DIR at a sandbox, and a sandbox has no corpus to test.
+
+        Server mode is checked FIRST, and is now the default, so these four
+        tests kept working when the embedded directory stopped existing. They
+        skipped on this machine for exactly that reason, and would have skipped
+        for everyone once `mgcp-init` started configuring a server: four tests
+        turning into decoration with nothing to say so. Reading from the server
+        needs no copy, because these tests only query.
         """
-        live = Path(os.environ.get("MGCP_LIVE_DATA_DIR") or Path.home() / ".mgcp") / "qdrant"
+        import json
+
+        data_dir = Path(os.environ.get("MGCP_LIVE_DATA_DIR") or Path.home() / ".mgcp")
+        config = data_dir / "config.json"
+        url = ""
+        if config.exists():
+            try:
+                url = (json.loads(config.read_text()).get("qdrant_url") or "").strip()
+            except (json.JSONDecodeError, OSError):
+                url = ""
+        if url:
+            # get_qdrant_url reads the environment first, and conftest sandboxes
+            # MGCP_DATA_DIR so the real config file is invisible to it.
+            os.environ["MGCP_QDRANT_URL"] = url
+            try:
+                store = QdrantVectorStore()
+                if store.count() > 0:
+                    return store
+            except Exception:  # noqa: BLE001 - fall through to the embedded copy
+                pass
+            os.environ.pop("MGCP_QDRANT_URL", None)
+
+        live = data_dir / "qdrant"
         if not live.exists():
-            pytest.skip(f"No MGCP corpus at {live}")
+            pytest.skip(
+                f"No MGCP corpus: no qdrant_url in {config} and no embedded store "
+                f"at {live}. Run `mgcp-init` or `mgcp-bootstrap` first."
+            )
 
         copy = tmp_path_factory.mktemp("live-corpus") / "qdrant"
         shutil.copytree(live, copy)

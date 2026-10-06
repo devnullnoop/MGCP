@@ -121,51 +121,13 @@ class VectorStoreUnavailableError(RuntimeError):
 def _describe_lock_holder() -> str:
     """Name the process holding the embedded Qdrant lock, if it can be found.
 
-    Best-effort and never raises: this runs only on an error path, and a
-    diagnostic that can fail the call it is diagnosing is worse than no
-    diagnostic. `lsof` is absent on some systems and may be slow on others,
-    hence the short timeout.
+    Thin wrapper so the import stays lazy: server.py must not import the vector
+    store at module level. The implementation lives in qdrant_vector_store, which
+    owns the path, so the doctor and this error path cannot drift apart.
     """
-    from .qdrant_vector_store import get_default_qdrant_path, get_qdrant_url
+    from .qdrant_vector_store import describe_lock_holder
 
-    if get_qdrant_url():
-        return ""
-    lock_file = Path(get_default_qdrant_path()) / ".lock"
-    if not lock_file.exists():
-        return ""
-    try:
-        import subprocess
-
-        pids = subprocess.run(
-            ["lsof", "-t", str(lock_file)],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        ).stdout.split()
-        # Never report ourselves. A failed open leaves this process holding the
-        # lock file briefly, so lsof lists it. A message naming the caller as
-        # the culprit points at the wrong process to kill.
-        own = str(os.getpid())
-        pids = [pid for pid in pids if pid != own]
-        if not pids:
-            return ""
-        described = []
-        for pid in pids[:3]:
-            cmd = subprocess.run(
-                ["ps", "-o", "command=", "-p", pid],
-                capture_output=True,
-                text=True,
-                timeout=3,
-            ).stdout.strip()
-            # The executable's absolute path is noise; the tail identifies it.
-            if cmd:
-                short = " ".join(Path(part).name for part in cmd.split()[:3])
-                described.append(f"PID {pid} ({short})")
-            else:
-                described.append(f"PID {pid}")
-        return " Currently held by: " + "; ".join(described) + "."
-    except Exception:  # pragma: no cover - diagnostics are never load-bearing
-        return ""
+    return describe_lock_holder()
 
 
 async def _ensure_initialized() -> tuple[LessonStore, LessonGraph, TelemetryLogger]:

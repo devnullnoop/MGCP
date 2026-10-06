@@ -102,11 +102,17 @@ class TestWriteRejection:
             await store.add_lesson(lesson)
 
         message = str(excinfo.value)
-        # The message is a UI for a model: it must name the field, quote the
-        # offending fragment, and say what to send instead.
+        # The message is a UI for a model, so it is asserted on content rather
+        # than on one phrasing. It must name the field, quote the fragment that
+        # got absorbed, point at the real cause, and say that rewording the prose
+        # will not help. Three writes were lost on 2026-10-06 to a mistyped
+        # OPENING tag while the message talked only about closing tags, so the
+        # reader rewrote the text repeatedly and the shape stayed wrong.
         assert "action" in message
         assert 'parameter name="rationale"' in message
-        assert "Re-send this field as plain text" in message
+        assert "OPENING tag" in message, "the message does not name the usual cause"
+        assert "Rewording the content will not fix it" in message
+        assert "LAST parameter" in message, "no guidance on ordering the fields"
         assert "backticks" in message
         assert "clean_tool_call_envelopes.py" in message
         # And nothing was written.

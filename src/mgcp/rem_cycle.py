@@ -106,6 +106,42 @@ def _query_times() -> list[datetime] | None:
     return out
 
 
+def _duplicate_finding(pair: dict) -> RemFinding:
+    """One trigger collision, named with the words both lessons answer to."""
+    first = pair.get("lesson_1") or {}
+    second = pair.get("lesson_2") or {}
+    id_a, id_b = first.get("id", "?"), second.get("id", "?")
+    overlap = pair.get("trigger_overlap") or 0.0
+    shared = ", ".join(pair.get("shared_words") or [])
+    return RemFinding(
+        operation="duplicate_detection",
+        title=f"Same retrieval ({overlap:.0%}): {id_a} / {id_b}",
+        description=(
+            f"'{id_a}' and '{id_b}' share {overlap:.0%} of their trigger words, "
+            f"so a query matching one tends to match the other. Shared: "
+            f"{shared}.\n\n"
+            f"A: {first.get('trigger', '')[:120]}\n"
+            f"B: {second.get('trigger', '')[:120]}"
+        ),
+        options=[
+            {"label": "Merge into one",
+             "description": ("refine the lesson you keep so its trigger absorbs "
+                             "the other's words, then delete the other")},
+            {"label": "Narrow one trigger",
+             "description": "they are different rules that answer to the same words"},
+            {"label": "Keep both", "description": "the overlap is harmless here"},
+        ],
+        # An identical trigger word set is a collision by construction, so
+        # merging is the recommendation. Below that it is a judgement, and the
+        # shared words are the evidence for making it.
+        recommended=0 if overlap >= 0.9 else 1,
+        metadata={"lesson_a": id_a, "lesson_b": id_b,
+                  "trigger_overlap": overlap,
+                  "shared_words": pair.get("shared_words") or [],
+                  "similarity": pair.get("similarity")},
+    )
+
+
 def _link_finding(lesson, neighbours: list[tuple[str, float]]) -> RemFinding:
     """One proposal: this isolated lesson, and what it is nearest to."""
     listed = ", ".join(f"{other} ({score:.2f})" for other, score in neighbours)
@@ -450,6 +486,7 @@ class RemEngine:
             return []
 
         lessons = await self.store.get_all_lessons()
+        by_id = {le.id: le for le in lessons}
         parents = {le.parent_id for le in lessons if le.parent_id}
         orphans = [
             le for le in lessons
@@ -458,7 +495,7 @@ class RemEngine:
 
         findings = []
         for lesson in orphans[:MAX_LINK_FINDINGS]:
-            neighbours = self._nearest(vector_store, lesson)
+            neighbours = self._nearest(vector_store, lesson, by_id)
             if neighbours:
                 findings.append(_link_finding(lesson, neighbours))
 
@@ -466,17 +503,36 @@ class RemEngine:
             findings.append(_overflow_finding(len(orphans)))
         return findings
 
-    def _nearest(self, vector_store, lesson) -> list[tuple[str, float]]:
-        """The closest other lessons by meaning, above the link score floor."""
-        query = f"{lesson.trigger} {lesson.action}"
+    def _nearest(self, vector_store, lesson, by_id) -> list[tuple[str, float]]:
+        """The closest other lessons by meaning, above the link score floor.
+
+        A candidate whose trigger already collides with this lesson's is left
+        out. That pair is a duplicate, which duplicate_detection reports, and
+        linking it would paper over the duplication rather than surface it.
+        This operation proposed exactly that for two copies of one rule on its
+        first run.
+        """
+        from .data_ops import DEFAULT_TRIGGER_OVERLAP, trigger_overlap
+
         try:
             hits = vector_store.search(
-                query, limit=LINK_CANDIDATE_POOL, min_score=LINK_MIN_SCORE)
+                f"{lesson.trigger} {lesson.action}",
+                limit=LINK_CANDIDATE_POOL, min_score=LINK_MIN_SCORE)
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Could not search for neighbours of {lesson.id}: {exc}")
             return []
-        return [(other, score) for other, score in hits
-                if other != lesson.id][:LINKS_PER_LESSON]
+
+        out = []
+        for other, score in hits:
+            if other == lesson.id:
+                continue
+            twin = by_id.get(other)
+            if twin is not None:
+                share, _shared = trigger_overlap(lesson.trigger, twin.trigger)
+                if share >= DEFAULT_TRIGGER_OVERLAP:
+                    continue
+            out.append((other, score))
+        return out[:LINKS_PER_LESSON]
 
     async def _resolve_vector_store(self):
         """The vector store, opened now if the caller gave a way to open it.
@@ -497,15 +553,21 @@ class RemEngine:
         return self.vector_store
 
     async def _duplicate_detection(self) -> list[RemFinding]:
-        """Find semantically similar lessons."""
+        """Find lessons that compete for the same retrieval.
+
+        Ranked by trigger overlap and NOT by semantic similarity, which cannot
+        answer this. Two lessons carrying the same rule in different words
+        scored 0.739 against the old 0.85 gate, so they were never reported and
+        sat in the store for nine months. By trigger overlap that pair ranked
+        6th of 1,537.
+
+        It needs no vector store now, so a duplicate scan no longer takes the
+        Qdrant lock. The similarity column went with the gate.
+        """
         from .data_ops import find_duplicates
 
         try:
-            pairs = await find_duplicates(
-                threshold=0.85,
-                store=self.store,
-                vector_store=await self._resolve_vector_store(),
-            )
+            pairs = await find_duplicates(store=self.store)
         except Exception as e:
             # Returning [] here read as "no duplicates found", which the report
             # renders as "Knowledge base looks healthy" — a clean bill of health
@@ -516,7 +578,7 @@ class RemEngine:
                 title="Duplicate scan could not run",
                 description=(
                     f"find_duplicates raised: {e}\n\n"
-                    "This is not a statement about duplicates — the scan did not "
+                    "This says nothing about duplicates. The scan did not "
                     "complete, so the corpus is unverified. Run `mgcp-duplicates` "
                     "out of process to check."
                 ),
@@ -527,33 +589,7 @@ class RemEngine:
                 metadata={"error": str(e)},
             )]
 
-        findings = []
-        for pair in pairs:
-            similarity = pair.get("similarity", 0)
-            # find_duplicates returns nested {"lesson_1": {id, trigger}, ...}
-            lesson_1 = pair.get("lesson_1") or {}
-            lesson_2 = pair.get("lesson_2") or {}
-            id_a = lesson_1.get("id", "?")
-            id_b = lesson_2.get("id", "?")
-
-            findings.append(RemFinding(
-                operation="duplicate_detection",
-                title=f"Potential duplicates ({similarity:.0%}): {id_a} / {id_b}",
-                description=(
-                    f"Lessons '{id_a}' and '{id_b}' have {similarity:.0%} semantic similarity.\n\n"
-                    f"A: {lesson_1.get('trigger', '')[:100]}\n"
-                    f"B: {lesson_2.get('trigger', '')[:100]}"
-                ),
-                options=[
-                    {"label": "Merge", "description": "Combine into one lesson"},
-                    {"label": "Keep both", "description": "They're different enough"},
-                    {"label": "Delete one", "description": "Remove the weaker lesson"},
-                ],
-                recommended=0 if similarity > 0.92 else 1,
-                metadata={"lesson_a": id_a, "lesson_b": id_b, "similarity": similarity},
-            ))
-
-        return findings
+        return [_duplicate_finding(pair) for pair in pairs]
 
     async def _community_detection(self) -> list[RemFinding]:
         """Detect topic clusters and suggest linking orphans."""

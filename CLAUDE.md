@@ -72,9 +72,9 @@ mgcp-import lessons.json             # Import lessons (skips duplicates)
 mgcp-import data.json --merge overwrite  # Overwrite duplicates
 mgcp-import data.json --dry-run      # Preview import without changes
 
-# Find duplicate lessons
-mgcp-duplicates                      # Find similar lessons (0.85 threshold)
-mgcp-duplicates -t 0.90              # Higher threshold for stricter matching
+# Find lessons that compete for the same retrieval
+mgcp-duplicates                      # Ranked by trigger overlap (0.4 floor)
+mgcp-duplicates -t 0.6 -n 10         # Stricter floor, fewer pairs
 
 # Bootstrap lessons and workflows
 mgcp-bootstrap                       # Seed all (core + dev)
@@ -222,7 +222,9 @@ unchanged.
 - `save_community_summary` - Persist LLM-generated summary for a community
 - `search_communities` - Semantic search across community summaries
 
-**REM opens the vector store only when it needs one.** Five of the seven operations need no vectors. `rem_run` hands the engine a factory rather than an open store, and `_duplicate_detection` and `_link_suggestions` await it. Opening one up front took the Qdrant lock on every cycle, including the cycles `rem-required-before-commit` forces when nothing is due, so a session that never searched anything held the lock for the rest of its life and blocked the dashboard and any second session. A failed open leaves the other five operations running.
+**REM opens the vector store only when it needs one.** Six of the seven operations need no vectors. `rem_run` hands the engine a factory rather than an open store, and only `_link_suggestions` awaits it. Opening one up front took the Qdrant lock on every cycle, including the cycles `rem-required-before-commit` forces when nothing is due, so a session that never searched anything held the lock for the rest of its life and blocked the dashboard and any second session. A failed open leaves the other six operations running. `_duplicate_detection` needed one until 2026-10-09 for a similarity gate that could not find a real duplicate anyway.
+
+**Duplicate detection ranks trigger overlap, not semantic similarity.** `find_duplicates` reports the pairs whose TRIGGERS share the most words, because two lessons that fire on the same words are always returned together and one is redundant by construction. That question has an exact answer and "do these mean the same thing" does not. Two copies of the attribution rule sat in the store for nine months: they scored 0.739 against the old 0.85 similarity gate, and lowering the gate would not have helped, because the pair ranked 110th of 581 candidates by similarity behind 109 mostly complementary pairs. By trigger overlap it ranked 6th of 1,537. `DEFAULT_TRIGGER_OVERLAP` is 0.4, where 26 of those 1,537 pairs survive, and a pair must share at least two words because two one-word triggers sharing their word reach an overlap of 1.0 for no reason. `similarity` is still reported when a vector store is passed, as context for the reader, and it is never the decision. `_link_suggestions` skips a candidate whose trigger collides, because linking a duplicate pair papers over it, which is what that operation did on its first run.
 
 **A cycle keeps what it found, not only how many things it found.** `rem_findings` is keyed by project and operation, and a run REPLACES its own rows, because the same unused lesson found in four cycles is one problem and not four. Only `{"finding_count": N}` used to survive a run: a cycle found 105 unused lessons, printed the recommended fix for each, and discarded every one. The next run found the same 105 and discarded them again, and nothing between runs could show the list. `/api/rem/findings` and the REM view read the table, and `rem_report` names the worst three per operation.
 
@@ -235,7 +237,7 @@ unchanged.
 **The operation dispatch is a table, not an if/elif chain.** Python reads each `elif` as an `If` nested in the previous one's `else`, so a flat seven-way dispatch measured as nesting depth 7 and the eighth operation would have been refused by this project's own complexity gate. A test asserts every name in `DEFAULT_SCHEDULES` dispatches, because a scheduled name with no handler used to write a `rem_state` row and report health.
 
 **REM Cycle (3):** Three tools over seven operations. All three take an optional `project_path` (empty = `CLAUDE_PROJECT_DIR`, else cwd) and report an error rather than a guess when that project has no saved context.
-- `rem_run` - Run consolidation operations (staleness, duplicates, communities)
+- `rem_run` - Run consolidation operations (staleness, duplicates, communities, links)
 - `rem_report` - Per-operation last run, next due and the worst three stored findings for this project. A run that predates stored findings shows only its count, labelled as such
 - `rem_status` - Show schedule state and what's due for this project
 

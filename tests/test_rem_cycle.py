@@ -572,9 +572,19 @@ class TestLinkSuggestions:
             self.queries.append(query)
             return self.hits
 
-    async def _orphan(self, store, lesson_id):
+    # Distinct words per lesson. Giving every orphan the same trigger made them
+    # collide with each other, and the duplicate filter below then removed
+    # every proposal, so the test measured the filter instead of the cap.
+    WORDS = ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf",
+             "hotel", "india", "juliet", "kilo", "lima", "mike", "november",
+             "oscar", "papa", "quebec", "romeo", "sierra", "tango", "uniform",
+             "victor", "whiskey", "xray", "yankee", "zulu", "zero", "one",
+             "two", "three", "four", "five", "six", "seven", "eight", "nine")
+
+    async def _orphan(self, store, lesson_id, index=None):
+        word = self.WORDS[index % len(self.WORDS)] if index is not None else lesson_id
         await store.add_lesson(Lesson(
-            id=lesson_id, trigger=f"{lesson_id} trigger", action="Act",
+            id=lesson_id, trigger=f"{word} {lesson_id}", action="Act",
             tags=["test"],
         ))
 
@@ -627,6 +637,31 @@ class TestLinkSuggestions:
         assert "the-child" not in flagged
 
     @pytest.mark.asyncio
+    async def test_a_trigger_twin_is_not_proposed_as_a_link(self, store):
+        """Linking a duplicate pair papers over the duplication.
+
+        This operation did exactly that on its first run: it proposed a link
+        between two lessons that carried the same rule. A pair whose triggers
+        collide belongs to duplicate_detection, which reports it for merging.
+        """
+        await self._orphan(store, "twin-a")
+        await store.add_lesson(Lesson(
+            id="twin-b", trigger="twin-a twin-b", action="Act", tags=["test"]))
+        await store.add_lesson(Lesson(
+            id="unrelated", trigger="kubernetes helm rollout", action="Act",
+            tags=["test"]))
+        vectors = self._Store([("twin-b", 0.95), ("unrelated", 0.70)])
+        engine = RemEngine(store, project_id=PROJECT, vector_store=vectors)
+
+        findings = await engine._link_suggestions()
+        mine = [f for f in findings if f.metadata.get("lesson_id") == "twin-a"]
+        assert len(mine) == 1
+        targets = [link["target_id"] for link in mine[0].metadata["proposed_links"]]
+        assert "twin-b" not in targets, \
+            "the highest scoring neighbour was a duplicate and was proposed anyway"
+        assert "unrelated" in targets
+
+    @pytest.mark.asyncio
     async def test_no_vector_store_means_no_findings_not_a_crash(self, store):
         await self._orphan(store, "alone")
         engine = RemEngine(store, project_id=PROJECT)
@@ -645,7 +680,7 @@ class TestLinkSuggestions:
         from mgcp.rem_cycle import MAX_LINK_FINDINGS
 
         for i in range(MAX_LINK_FINDINGS + 4):
-            await self._orphan(store, f"alone-{i}")
+            await self._orphan(store, f"alone-{i}", index=i)
         vectors = self._Store([("alone-0", 0.7), ("alone-1", 0.7)])
         engine = RemEngine(store, project_id=PROJECT, vector_store=vectors)
 

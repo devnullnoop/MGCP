@@ -180,14 +180,14 @@ lessons:
       - label: bad
         code: |
           try:
-              pairs = await find_duplicates(threshold=0.85, store=self.store)
+              pairs = await find_duplicates(store=self.store)
           except Exception:
               return []
         explanation: "The caller cannot tell a clean scan from a scan that never ran"
       - label: good
         code: |
           try:
-              pairs = await find_duplicates(threshold=0.85, store=self.store)
+              pairs = await find_duplicates(store=self.store)
           except Exception as e:
               logger.warning(f'Duplicate detection failed: {e}')
               return [RemFinding(

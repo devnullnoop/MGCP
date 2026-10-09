@@ -8,6 +8,7 @@ actually runs.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from pydantic import ValidationError
@@ -380,3 +381,44 @@ class TestLoadConfigMigration:
         rule["preconditions"][0]["max_nett_lines"] = 300
         with pytest.raises(Exception):
             load_config(self._written(tmp_path, [rule]))
+
+
+class TestTheRatchetListsDoNotDrift:
+    """CI and the hook must measure the same files with the same exemptions.
+
+    ci.yml carries a comment saying these lists mirror the rule and that drift
+    makes a commit pass the hook and fail the pull request "for a reason nobody
+    can reproduce locally". Nothing checked it. This is that check: the comment
+    asked for a test and did not have one.
+    """
+
+    def _ratchet_precondition(self):
+        from mgcp.enforcement import STRUCTURE_RULES
+
+        for rule in STRUCTURE_RULES:
+            if rule.name == "commit-complexity-ratchet":
+                return rule.preconditions[0]
+        raise AssertionError("commit-complexity-ratchet is not a shipped rule")
+
+    def _ci_flag(self, flag):
+        """The quoted values the CI step passes to one flag."""
+        from pathlib import Path
+
+        text = (Path(__file__).resolve().parents[1]
+                / ".github" / "workflows" / "ci.yml").read_text()
+        start = text.index(f"--{flag} ")
+        # The argument list ends at the next flag or the end of the run block.
+        tail = text[start + len(flag) + 3:]
+        stop = min((i for i in (tail.find("--"), tail.find("\n\n"))
+                    if i != -1), default=len(tail))
+        return set(re.findall(r"'([^']+)'", tail[:stop]))
+
+    def test_the_file_length_exemptions_match(self):
+        rule = set(self._ratchet_precondition().file_length_exempt)
+        assert rule, "the rule exempts nothing, so this test proves nothing"
+        assert self._ci_flag("file-length-exempt") == rule
+
+    def test_the_exclude_globs_match(self):
+        rule = set(self._ratchet_precondition().exclude_globs)
+        assert rule, "the rule excludes nothing, so this test proves nothing"
+        assert self._ci_flag("exclude") == rule

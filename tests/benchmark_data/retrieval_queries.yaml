@@ -85,7 +85,7 @@ queries:
     query: "writing the commit message for this change"
     paraphrase: "composing the git commit text for this work"
     gold: no-claude-attribution-in-commits
-    relevant: [no-claude-attribution-in-commits, no-coauthor-attribution, git-practices, mgcp-save-before-commit]
+    relevant: [no-claude-attribution-in-commits, git-practices, mgcp-save-before-commit]
     kind: positive
 
   - id: explain-register

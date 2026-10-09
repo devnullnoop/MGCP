@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed: duplicate detection ranks trigger overlap, not similarity
+
+- **Two copies of one rule sat in the store for nine months.**
+  `no-coauthor-attribution` and `no-claude-attribution-in-commits` carried the
+  same instruction. The duplicate scan gated on 0.85 cosine similarity and the
+  pair scored 0.739, so it was never reported.
+- **Lowering the gate would not have found them.** That pair ranked 110th of
+  581 candidates by similarity. The 109 above it were mostly complementary
+  rather than duplicate: two lessons about commit prose score 0.835 and should
+  both exist. The score does not separate a duplicate from a near neighbour on
+  this corpus, so no threshold over it would have worked.
+- **`find_duplicates` now ranks by how much two triggers share.** Two lessons
+  that fire on the same words are always returned together and one of them is
+  redundant by construction. That question has an exact answer. The merged pair
+  ranks 6th of 1,537 by this measure, and the top entry is two lessons with
+  identical trigger word sets.
+- The floor is 0.4, where 26 of those 1,537 pairs survive. A pair must share at
+  least two words, because two one-word triggers sharing their word reach an
+  overlap of 1.0 for no reason.
+- **It no longer needs a vector store**, so a duplicate scan does not take the
+  Qdrant lock. Six of the seven REM operations now need no vectors. Similarity
+  is still reported when a store is passed, as context for the reader, and a
+  failure to score it cannot hide a collision the words already proved.
+- `mgcp-duplicates` takes `--min-overlap` and `--limit` in place of
+  `--threshold`, and prints the shared words as the evidence for each pair.
+- **`link_suggestions` skips a candidate whose trigger collides.** Linking a
+  duplicate pair papers over it. That operation proposed exactly that for the
+  two attribution lessons on its first run.
+- The two lessons are merged. The surviving one absorbed the words "coauthor"
+  and "co-authored-by" from the deleted one, which its trigger lacked.
+- `src/mgcp/rem_cycle.py` joins the file-length exemption list at 1,019 lines.
+  The alternative was a new module holding the finding builders, created to
+  satisfy a line count rather than to serve a reader.
+- **A test now pins the two ratchet lists together.** `ci.yml` carried a
+  comment saying its exclude and exemption lists mirror the rule, and that
+  drift makes a commit pass the hook and fail the pull request. Nothing checked
+  it.
+
 ### Changed: REM keeps what it finds, and finds it sooner
 
 Hook payload 23.

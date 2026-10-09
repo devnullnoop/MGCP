@@ -114,7 +114,7 @@ jobs:
             --exclude 'tests/**' 'docs/**' '*.md' '**/bootstrap_data/**' \
             --file-length-exempt 'src/mgcp/server.py' \
               'src/mgcp/init_project.py' 'src/mgcp/web_server.py' \
-              'src/mgcp/persistence.py' \
+              'src/mgcp/persistence.py' 'src/mgcp/rem_cycle.py' \
               'src/mgcp/hook_templates/pre-tool-dispatcher.py'
 
   audit:

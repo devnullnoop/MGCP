@@ -443,6 +443,12 @@ STRUCTURE_RULES: list[EnforcementRule] = [
                     "src/mgcp/web_server.py",
                     "src/mgcp/persistence.py",
                     "src/mgcp/hook_templates/pre-tool-dispatcher.py",
+                    # Every REM operation. Added as the seventh operation took
+                    # the file past 1,000 lines. The alternative was a new
+                    # module holding the finding builders, created to satisfy a
+                    # line count rather than to serve a reader, which is what
+                    # the paragraph above says this gate must not force.
+                    "src/mgcp/rem_cycle.py",
                 ],
             ),
         ],

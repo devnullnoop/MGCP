@@ -521,7 +521,7 @@ project settles. You can change the schedules, and the defaults work well.
 
 | Tool | Purpose |
 |------|---------|
-| `rem_run` | Run consolidation cycle (staleness, duplicates, communities) |
+| `rem_run` | Run consolidation cycle (staleness, duplicates, communities, links) |
 | `rem_report` | Per-operation last run, next due, and finding count |
 | `rem_status` | Show schedule state and what's due |
 
@@ -976,7 +976,7 @@ Every release before 3.0, from 1.0 to 2.13, is in [CHANGELOG.md](CHANGELOG.md).
 | `mgcp-dashboard` | Start web UI |
 | `mgcp-export` | Export lessons/projects to JSON |
 | `mgcp-import` | Import lessons from JSON |
-| `mgcp-duplicates` | Find semantically similar lessons |
+| `mgcp-duplicates` | Find notes that compete for the same retrieval, ranked by shared trigger words |
 | `mgcp-backup` | Backup/restore all MGCP data |
 | `mgcp-migrate` | Rebuild the Qdrant index from `lessons.db` |
 | `mgcp-qdrant` | Local Qdrant server for multi-session: `setup`, `status`, `start`, `stop`, `teardown` |

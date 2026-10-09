@@ -353,8 +353,27 @@ class TestVectorStoreOpensOnlyWhenNeeded:
             return None  # the scan then reports that it could not run
 
         engine._vector_store_factory = factory
+        await engine.run(session_number=10, operations=["link_suggestions"])
+        assert opened == [1], "the operation that needs vectors must open them"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_detection_does_not_open_it(self, tmp_path):
+        """Duplicate detection ranks trigger words, which needs no vectors.
+
+        It used to open the store for a similarity gate that could not find a
+        real duplicate anyway, and the commit gate forces a cycle before every
+        commit, so the lock was taken on work that never needed it.
+        """
+        engine, _store = _engine(tmp_path)
+        opened = []
+
+        async def factory():
+            opened.append(1)
+            return None
+
+        engine._vector_store_factory = factory
         await engine.run(session_number=10, operations=["duplicate_detection"])
-        assert opened == [1], "the one operation that needs vectors must open them"
+        assert opened == [], "a duplicate scan must not take the Qdrant lock"
 
     @pytest.mark.asyncio
     async def test_the_factory_is_called_once(self, tmp_path):
@@ -366,20 +385,13 @@ class TestVectorStoreOpensOnlyWhenNeeded:
             return None
 
         engine._vector_store_factory = factory
-        await engine.run(session_number=10, operations=["duplicate_detection"])
+        await engine.run(session_number=10, operations=["link_suggestions"])
         await engine._resolve_vector_store()
         assert opened == [1], "a failed open must not be retried inside one cycle"
 
     @pytest.mark.asyncio
     async def test_a_failing_factory_does_not_stop_the_other_operations(self, tmp_path):
-        """Six of the seven operations need no vectors and must still run.
-
-        What duplicate_detection then reports depends on the machine. With the
-        factory refusing, find_duplicates falls back to opening its own client,
-        which succeeds in a clean temp directory and fails against a real lock.
-        Both outcomes are fine here. What must hold is that the cycle finishes
-        and the operations that need no vectors still run.
-        """
+        """Six of the seven operations need no vectors and must still run."""
         engine, _store = _engine(tmp_path)
         tried = []
 
@@ -389,11 +401,11 @@ class TestVectorStoreOpensOnlyWhenNeeded:
 
         engine._vector_store_factory = factory
         report = await engine.run(
-            session_number=10, operations=["duplicate_detection", "staleness_scan"]
+            session_number=10, operations=["link_suggestions", "staleness_scan"]
         )
         assert tried == [1], "the failure path was not exercised"
         assert "staleness_scan" in report.operations_run
-        assert "duplicate_detection" in report.operations_run
+        assert "link_suggestions" in report.operations_run
 
     @pytest.mark.asyncio
     async def test_an_explicit_store_still_wins(self, tmp_path):

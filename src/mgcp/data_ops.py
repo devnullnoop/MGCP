@@ -1,8 +1,10 @@
 """Data operations for MGCP - export, import, and maintenance."""
 
 import asyncio
+import itertools
 import json
 import logging
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -257,72 +259,123 @@ async def export_projects(output_path: Path | None = None) -> dict:
         return {"status": "success", "count": len(contexts)}
 
 
+# Words that appear in so many triggers that sharing one proves nothing.
+_TRIGGER_NOISE = frozenset({
+    "a", "an", "the", "to", "of", "in", "on", "for", "and", "or", "is", "are",
+    "be", "it", "this", "that", "with", "when", "your", "you", "not", "do",
+    "if", "as", "at", "by", "any", "use", "new", "all", "before", "after",
+})
+
+# The minimum share of trigger words two lessons must have in common.
+#
+# Measured on a 322-lesson corpus: 1,537 pairs share two or more trigger words
+# and 26 clear 0.4, which is a list short enough to read. The two known
+# duplicate pairs sit at 0.60 and 1.00.
+DEFAULT_TRIGGER_OVERLAP = 0.4
+
+# One shared word gives an overlap of 1.0 when both triggers are one word long,
+# which is an artifact rather than evidence.
+MIN_SHARED_TRIGGER_WORDS = 2
+
+
+def trigger_words(trigger: str) -> set[str]:
+    """The words a trigger can match on, minus noise and short tokens."""
+    return {
+        word for word in re.findall(r"[a-z0-9]+", (trigger or "").lower())
+        if len(word) > 2 and word not in _TRIGGER_NOISE
+    }
+
+
+def trigger_overlap(a: str, b: str) -> tuple[float, list[str]]:
+    """(shared share, the shared words) between two triggers.
+
+    The share is the intersection over the union, so a pair of long triggers
+    needs to agree on more words than a pair of short ones.
+    """
+    words_a, words_b = trigger_words(a), trigger_words(b)
+    if not words_a or not words_b:
+        return 0.0, []
+    shared = words_a & words_b
+    return len(shared) / len(words_a | words_b), sorted(shared)
+
+
 async def find_duplicates(
-    threshold: float = 0.85,
+    min_overlap: float = DEFAULT_TRIGGER_OVERLAP,
     store: LessonStore | None = None,
     vector_store: QdrantVectorStore | None = None,
+    limit: int = 25,
 ) -> list[dict]:
-    """
-    Find potentially duplicate lessons using semantic similarity.
+    """Lessons that compete for the same retrieval, most overlap first.
+
+    Ranked by how much their TRIGGERS share, not by how similar their text is.
+    Two lessons that fire on the same words are always returned together and one
+    of them is redundant by construction. That question has an exact answer, and
+    "do these two mean the same thing" does not.
+
+    Embedding similarity cannot answer it. Measured on a 322-lesson corpus, two
+    lessons carrying the same rule in different words scored 0.739 against the
+    old 0.85 gate, so they were never reported and sat in the store for nine
+    months. Lowering the gate would not have helped: that pair ranked 110th of
+    581 candidates by similarity, behind 109 pairs that were mostly
+    complementary rather than duplicate. By trigger overlap the same pair ranks
+    6th of 1,537.
+
+    ``similarity`` is reported when a vector store is given, as context for
+    whoever reads the pair, and it is never the decision. No vector store means
+    no similarity column and no Qdrant lock.
 
     Args:
-        threshold: Similarity threshold (0-1) for considering duplicates
-        store: Existing LessonStore to reuse. Required from any caller that
-            already holds one (the MCP server, REM).
-        vector_store: Existing QdrantVectorStore to reuse. Required from any
-            in-process caller — local Qdrant permits one client per path.
+        min_overlap: the least share of trigger words a reported pair has.
+        store: an existing LessonStore. Required from any caller that holds one.
+        vector_store: an existing QdrantVectorStore, for the similarity column
+            only. Local Qdrant permits one client per path, so an in-process
+            caller must pass its own or pass nothing.
+        limit: how many pairs to return, after ranking.
 
     Returns:
-        List of duplicate pairs with similarity scores
+        Ranked pairs, each with both lessons, the overlap, the shared words and
+        an optional similarity.
     """
-    # Callers already inside a process that holds the Qdrant lock MUST pass
-    # their live instances: local-mode Qdrant allows one client per path, so
-    # constructing our own here raises for every in-process caller. Defaults
-    # keep the `mgcp-duplicates` CLI a one-liner.
     store = store or LessonStore()
-    vector_store = vector_store or QdrantVectorStore()
-
     lessons = await store.get_all_lessons()
-    lessons_by_id = {l.id: l for l in lessons}
-    duplicates = []
 
-    # Compare each lesson against others
-    checked = set()
-    for lesson in lessons:
-        if lesson.id in checked:
+    ranked = []
+    for first, second in itertools.combinations(lessons, 2):
+        share, shared = trigger_overlap(first.trigger, second.trigger)
+        if len(shared) < MIN_SHARED_TRIGGER_WORDS or share < min_overlap:
             continue
+        ranked.append((share, len(shared), first, second))
+    ranked.sort(key=lambda row: (-row[0], -row[1], row[2].id))
 
-        # Search for similar lessons (returns list of (id, score) tuples)
-        similar = vector_store.search(
-            f"{lesson.trigger} {lesson.action}",
-            limit=5,
-            min_score=threshold
-        )
+    out = []
+    for share, _count, first, second in ranked[:max(1, limit)]:
+        _share, shared = trigger_overlap(first.trigger, second.trigger)
+        out.append({
+            "lesson_1": {"id": first.id, "trigger": first.trigger[:80]},
+            "lesson_2": {"id": second.id, "trigger": second.trigger[:80]},
+            "trigger_overlap": round(share, 3),
+            "shared_words": shared,
+            "similarity": _pair_similarity(vector_store, first, second),
+        })
+    return out
 
-        for match_id, score in similar:
-            if match_id == lesson.id:
-                continue
-            if match_id in checked:
-                continue
-            if score >= threshold:
-                match_lesson = lessons_by_id.get(match_id)
-                duplicates.append({
-                    "lesson_1": {
-                        "id": lesson.id,
-                        "trigger": lesson.trigger[:50]
-                    },
-                    "lesson_2": {
-                        "id": match_id,
-                        "trigger": match_lesson.trigger[:50] if match_lesson else ""
-                    },
-                    "similarity": round(score, 3)
-                })
 
-        checked.add(lesson.id)
+def _pair_similarity(vector_store, first, second) -> float | None:
+    """Cosine similarity between two lessons, or None when it cannot be had.
 
-    # Sort by similarity descending
-    duplicates.sort(key=lambda x: x["similarity"], reverse=True)
-    return duplicates
+    Context for the reader, never the ranking. A failure here must not hide a
+    trigger collision that was already proven by the words themselves.
+    """
+    if vector_store is None:
+        return None
+    try:
+        hits = dict(vector_store.search(
+            f"{first.trigger} {first.action}", limit=50, min_score=0.0))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Could not score {first.id} against {second.id}: {exc}")
+        return None
+    score = hits.get(second.id)
+    return round(score, 3) if score is not None else None
 
 
 def main_export():
@@ -422,27 +475,36 @@ def main_duplicates():
     """CLI entry point for finding duplicates."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Find duplicate lessons")
+    parser = argparse.ArgumentParser(
+        description="Find lessons that compete for the same retrieval")
     parser.add_argument(
-        "-t", "--threshold",
+        "-t", "--min-overlap",
         type=float,
-        default=0.85,
-        help="Similarity threshold (0-1, default: 0.85)"
+        default=DEFAULT_TRIGGER_OVERLAP,
+        help=(f"least share of trigger words a reported pair has "
+              f"(0-1, default: {DEFAULT_TRIGGER_OVERLAP})")
+    )
+    parser.add_argument(
+        "-n", "--limit", type=int, default=25,
+        help="how many pairs to report, after ranking (default: 25)"
     )
 
     args = parser.parse_args()
 
     async def run():
-        print(f"Searching for duplicates (threshold: {args.threshold})...\n")
-        duplicates = await find_duplicates(args.threshold)
+        print(f"Ranking trigger collisions (min overlap: {args.min_overlap})...\n")
+        duplicates = await find_duplicates(args.min_overlap, limit=args.limit)
 
         if not duplicates:
-            print("No duplicates found.")
+            print(f"No pair shares {args.min_overlap:.0%} of its trigger words.")
+            print("That is a statement about trigger overlap only. Two lessons "
+                  "can still say the same thing in different words.")
             return
 
-        print(f"Found {len(duplicates)} potential duplicates:\n")
+        print(f"{len(duplicates)} pair(s), most overlap first:\n")
         for dup in duplicates:
-            print(f"  Similarity: {dup['similarity']}")
+            shared = ", ".join(dup["shared_words"])
+            print(f"  overlap {dup['trigger_overlap']:.0%} on: {shared}")
             print(f"    1: [{dup['lesson_1']['id']}] {dup['lesson_1']['trigger']}")
             print(f"    2: [{dup['lesson_2']['id']}] {dup['lesson_2']['trigger']}")
             print()

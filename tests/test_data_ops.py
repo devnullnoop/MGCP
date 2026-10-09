@@ -580,100 +580,142 @@ class TestImportLessons:
 
 
 class TestFindDuplicates:
-    """Tests for duplicate detection functionality."""
+    """Duplicate detection ranks trigger collisions, not semantic similarity.
+
+    Two lessons that fire on the same words are always returned together and
+    one of them is redundant by construction. The old version gated on 0.85
+    cosine similarity, and two lessons carrying the same rule in different
+    words scored 0.739, so they sat in the store for nine months. Lowering the
+    gate would not have helped: that pair ranked 110th of 581 candidates by
+    similarity. By trigger overlap it ranks 6th of 1,537.
+
+    These use a real store rather than mocks, because the thing under test is
+    arithmetic over triggers and a mock would be asserting my own sums back.
+    """
+
+    @pytest.fixture
+    def store(self, temp_db):
+        from mgcp.persistence import LessonStore
+
+        return LessonStore(temp_db)
+
+    async def _add(self, store, lesson_id, trigger):
+        from mgcp.models import Lesson
+
+        await store.add_lesson(Lesson(
+            id=lesson_id, trigger=trigger, action="Do the thing", tags=["t"]))
 
     @pytest.mark.asyncio
-    async def test_find_duplicates_returns_pairs(self, sample_lessons):
-        """Test that duplicates are returned as pairs."""
-        with (
-            patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
-        ):
-            mock_store = MagicMock()
-            mock_store.get_all_lessons = AsyncMock(return_value=sample_lessons)
-            MockStore.return_value = mock_store
+    async def test_an_identical_trigger_is_reported(self, store):
+        await self._add(store, "first", "git push, pushing code, push to remote")
+        await self._add(store, "second", "git push, pushing code, push to remote")
 
-            # Mock vector store to return similar lessons
-            mock_vector = MagicMock()
-            mock_vector.search = MagicMock(
-                return_value=[("lesson-1", 0.95), ("lesson-2", 0.90)]
-            )
-            MockVector.return_value = mock_vector
-
-            duplicates = await find_duplicates(threshold=0.85)
-
-        assert isinstance(duplicates, list)
-        for dup in duplicates:
-            assert "lesson_1" in dup
-            assert "lesson_2" in dup
-            assert "similarity" in dup
+        pairs = await find_duplicates(store=store)
+        assert len(pairs) == 1
+        assert {pairs[0]["lesson_1"]["id"], pairs[0]["lesson_2"]["id"]} == {
+            "first", "second"}
+        assert pairs[0]["trigger_overlap"] == 1.0
 
     @pytest.mark.asyncio
-    async def test_find_duplicates_respects_threshold(self, sample_lessons):
-        """Test that threshold filtering works."""
-        with (
-            patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
-        ):
-            mock_store = MagicMock()
-            mock_store.get_all_lessons = AsyncMock(return_value=sample_lessons)
-            MockStore.return_value = mock_store
+    async def test_the_shared_words_are_the_evidence(self, store):
+        """A pair with no reason attached is not actionable."""
+        await self._add(store, "first", "git commit, coauthor, attribution")
+        await self._add(store, "second", "git commit, coauthor, message")
 
-            mock_vector = MagicMock()
-            mock_vector.search = MagicMock(
-                return_value=[("lesson-2", 0.80)]  # Below threshold
-            )
-            MockVector.return_value = mock_vector
-
-            duplicates = await find_duplicates(threshold=0.85)
-
-        # No duplicates should be found since 0.80 < 0.85
-        assert len(duplicates) == 0
+        pairs = await find_duplicates(store=store)
+        assert pairs[0]["shared_words"] == ["coauthor", "commit", "git"]
 
     @pytest.mark.asyncio
-    async def test_find_duplicates_no_self_matches(self, sample_lessons):
-        """Test that a lesson doesn't match itself."""
-        with (
-            patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
-        ):
-            mock_store = MagicMock()
-            mock_store.get_all_lessons = AsyncMock(return_value=sample_lessons[:1])
-            MockStore.return_value = mock_store
+    async def test_one_shared_word_is_not_a_collision(self, store):
+        """Two one-word triggers sharing their word reach overlap 1.0.
 
-            mock_vector = MagicMock()
-            # Only returns itself
-            mock_vector.search = MagicMock(return_value=[("lesson-1", 1.0)])
-            MockVector.return_value = mock_vector
+        That is an artifact of the arithmetic, not evidence, which is why a
+        reported pair has to share at least two words.
+        """
+        await self._add(store, "first", "deployment")
+        await self._add(store, "second", "deployment")
 
-            duplicates = await find_duplicates()
-
-        assert len(duplicates) == 0
+        assert await find_duplicates(store=store) == []
 
     @pytest.mark.asyncio
-    async def test_find_duplicates_sorted_by_similarity(self, sample_lessons):
-        """Test that results are sorted by similarity descending."""
-        with (
-            patch("mgcp.data_ops.LessonStore") as MockStore,
-            patch("mgcp.data_ops.QdrantVectorStore") as MockVector,
-        ):
-            mock_store = MagicMock()
-            mock_store.get_all_lessons = AsyncMock(return_value=sample_lessons)
-            MockStore.return_value = mock_store
+    async def test_below_the_floor_is_not_reported(self, store):
+        await self._add(store, "first", "git commit, author, signature, trailer")
+        await self._add(store, "second",
+                        "git commit, author, deployment, kubernetes, helm, "
+                        "cluster, ingress, rollout")
 
-            def mock_search(query, limit=5, min_score=0):
-                if "python type hints" in query:
-                    return [("lesson-2", 0.90), ("lesson-3", 0.86)]
-                return []
+        assert await find_duplicates(store=store, min_overlap=0.9) == []
+        assert await find_duplicates(store=store, min_overlap=0.1)
 
-            mock_vector = MagicMock()
-            mock_vector.search = MagicMock(side_effect=mock_search)
-            MockVector.return_value = mock_vector
+    @pytest.mark.asyncio
+    async def test_most_overlap_comes_first(self, store):
+        await self._add(store, "exact-a", "alpha, beta, gamma")
+        await self._add(store, "exact-b", "alpha, beta, gamma")
+        await self._add(store, "partial", "alpha, beta, delta, epsilon")
 
-            duplicates = await find_duplicates(threshold=0.85)
+        pairs = await find_duplicates(store=store, min_overlap=0.3)
+        overlaps = [p["trigger_overlap"] for p in pairs]
+        assert overlaps == sorted(overlaps, reverse=True)
+        assert pairs[0]["trigger_overlap"] == 1.0
 
-        if len(duplicates) >= 2:
-            assert duplicates[0]["similarity"] >= duplicates[1]["similarity"]
+    @pytest.mark.asyncio
+    async def test_a_lesson_never_pairs_with_itself(self, store):
+        await self._add(store, "only", "git commit, coauthor, attribution")
+
+        assert await find_duplicates(store=store) == []
+
+    @pytest.mark.asyncio
+    async def test_no_vector_store_still_reports_the_collision(self, store):
+        """The decision must not depend on a store that holds a lock.
+
+        Similarity is context for the reader. Requiring it took the Qdrant lock
+        on every duplicate scan, including the ones the commit gate forces.
+        """
+        await self._add(store, "first", "git push, pushing code, push to remote")
+        await self._add(store, "second", "git push, pushing code, push to remote")
+
+        pairs = await find_duplicates(store=store, vector_store=None)
+        assert len(pairs) == 1
+        assert pairs[0]["similarity"] is None
+
+    @pytest.mark.asyncio
+    async def test_similarity_is_reported_when_a_store_is_given(self, store):
+        await self._add(store, "first", "git push, pushing code, push to remote")
+        await self._add(store, "second", "git push, pushing code, push to remote")
+
+        vectors = MagicMock()
+        vectors.search = MagicMock(return_value=[("second", 0.74), ("first", 1.0)])
+        pairs = await find_duplicates(store=store, vector_store=vectors)
+        assert pairs[0]["similarity"] == 0.74
+
+    @pytest.mark.asyncio
+    async def test_a_failing_vector_store_does_not_hide_the_collision(self, store):
+        """The words already proved it. A scoring failure cannot unprove it."""
+        await self._add(store, "first", "git push, pushing code, push to remote")
+        await self._add(store, "second", "git push, pushing code, push to remote")
+
+        vectors = MagicMock()
+        vectors.search = MagicMock(side_effect=RuntimeError("store is locked"))
+        pairs = await find_duplicates(store=store, vector_store=vectors)
+        assert len(pairs) == 1
+        assert pairs[0]["similarity"] is None
+
+    @pytest.mark.asyncio
+    async def test_the_limit_caps_the_report(self, store):
+        for i in range(6):
+            await self._add(store, f"l{i}", "alpha, beta, gamma")
+
+        assert len(await find_duplicates(store=store, limit=3)) == 3
+
+    @pytest.mark.asyncio
+    async def test_noise_words_do_not_make_a_collision(self, store):
+        """Sharing "the" and "a" is not sharing a trigger."""
+        from mgcp.data_ops import trigger_overlap
+
+        share, shared = trigger_overlap(
+            "the deployment of a cluster", "the migration of a database")
+        assert shared == []
+        assert share == 0.0
 
 
 # =============================================================================

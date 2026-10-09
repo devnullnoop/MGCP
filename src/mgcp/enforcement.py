@@ -138,7 +138,7 @@ class Precondition(BaseModel):
     # Shared by the three types that measure a change.
     exclude_globs: list[str] = Field(default_factory=list)
     # diff_budget
-    max_added_lines: int = 0
+    max_net_lines: int = 0
     max_files: int = 0
     # staged_python_complexity
     limits: dict = Field(default_factory=dict)
@@ -339,43 +339,57 @@ DEFAULT_RULES: list[EnforcementRule] = [
 
 
 # ----------------------------------------------------------------------------
-# Structured coding gates. Every one of these ships DISABLED and in audit mode.
+# Structured coding gates. A new one ships DISABLED and in audit mode, and is
+# promoted once its own audit rows say the limit is right.
+# commit-complexity-ratchet is promoted, and ships enabled and enforcing.
 #
-# Two switches, not one, on purpose. `mode="audit"` is honoured only by a hook
-# that knows the key, and a hook is a COPY under ~/.mgcp/hooks that `git pull`
-# does not refresh. So the state right after a pull is new rules read by an old
-# hook, which ignores `mode` and enforces. `enabled=False` is the one switch
-# every deployed hook version has always honoured, so it is what makes the pull
-# safe. Turn these on after `mgcp-init` installs the mode-aware hook, and after
-# audit data says the limits are right.
+# A rule still in audit carries two switches, not one. `mode="audit"` is
+# honoured only by a hook that knows the key, and a hook is a COPY under
+# ~/.mgcp/hooks that `git pull` does not refresh. So the state right after a
+# pull is a new rule read by an old hook, which ignores `mode` and enforces.
+# `enabled=False` is the one switch every deployed hook has always honoured, so
+# it is what makes the pull safe. Turn a rule on after `mgcp-init` installs the
+# mode-aware hook, and after audit data says the limits are right.
 # ----------------------------------------------------------------------------
 STRUCTURE_RULES: list[EnforcementRule] = [
     EnforcementRule(
-        name="edit-diff-budget",
+        name="commit-diff-budget",
         description=(
-            "Refuse an edit that would push this session's uncommitted work past "
-            "300 added lines or 8 touched files. It fires before the edit lands, "
-            "which is the only point where a large change is still cheap to "
-            "split. Deletions are free, so a simplification never trips it."
+            "Refuse a commit whose staged source grows by more than 300 net "
+            "lines, or touches more than 12 files. Net means added minus "
+            "removed, so a refactor that cuts 800 lines and adds 320 passes. "
+            "It replaced edit-diff-budget, which counted a session's additions "
+            "and latched: past the budget, every later edit was over it for the "
+            "rest of the session, deletions included."
         ),
         enabled=False,
         mode="audit",
-        trigger=Trigger(tool_name="", tool_names=["Edit", "Write", "MultiEdit"]),
+        trigger=Trigger(
+            tool_name="Bash",
+            command_match=CommandMatch(type="git_subcommand", subcommands=["commit"]),
+        ),
         preconditions=[
             Precondition(
                 type="diff_budget",
-                max_added_lines=300,
-                max_files=8,
+                max_net_lines=300,
+                max_files=12,
                 exclude_globs=[
                     "tests/**", "docs/**", "*.md", "**/bootstrap_data/**",
+                    # Regenerated, not written. One SBOM refresh is 3,543 added
+                    # lines, which would refuse the commit and swamp the trend
+                    # the dashboard draws from the same measurement.
+                    "sbom.cdx.json",
                 ],
             ),
         ],
         bypass_scope="size",
         deny_reason=(
-            "This edit would push the session past its diff budget.\n"
-            "Two exits: commit the part that is already coherent, which resets "
-            "the budget, or split the task.\n"
+            "This commit grows the source by more than its net budget.\n"
+            "Two exits: stage the part that is already coherent and commit "
+            "that, or state in the message why the growth is the smallest way "
+            "to get the result.\n"
+            "Deletions count in your favour, so removing the code this change "
+            "makes redundant is the cheapest exit of the three.\n"
             "Bypass with MGCP_BYPASS:size in your next prompt."
         ),
     ),
@@ -388,8 +402,12 @@ STRUCTURE_RULES: list[EnforcementRule] = [
             "getting worse. 58 of 463 functions here are already over CC 10, so "
             "an absolute limit would refuse every commit."
         ),
-        enabled=False,
-        mode="audit",
+        # Promoted from audit on 2026-10-09. Its audit rows held three findings
+        # and no false ones: one new function at cyclomatic 12, and two broad
+        # excepts that discarded the error. All three are fixed, so the gate
+        # now holds a line the code already meets.
+        enabled=True,
+        mode="enforce",
         trigger=Trigger(
             tool_name="Bash",
             command_match=CommandMatch(type="git_subcommand", subcommands=["commit"]),
@@ -594,6 +612,38 @@ def _config_path() -> Path:
     return Path(base) / ENFORCEMENT_CONFIG_FILENAME
 
 
+# Rules a shipped change replaced. They are dropped on load, because
+# `merge_missing_defaults` adds by name and never removes, so nothing else can
+# take one out of a file the operator already has. The PreToolUse hook holds
+# the same list, because it reads the file raw and is the half that denies.
+RETIRED_RULES = ("edit-diff-budget",)
+
+# Precondition keys a shipped change removed. `save_config` writes every schema
+# field, so a file saved before a field was removed carries that key on every
+# precondition, and `extra="forbid"` rejects it. Dropping the key on load is
+# what keeps that file parsing. Without this, deleting one field stops the
+# whole file loading, which takes every enforcement MCP tool and the dashboard
+# down with it.
+DROPPED_FIELDS = ("max_added_lines",)
+
+
+def _without_retired(data: dict) -> dict:
+    """The config with retired rules and removed keys taken out."""
+    rules = []
+    for rule in data.get("rules") or []:
+        if not isinstance(rule, dict):
+            rules.append(rule)      # not ours to repair; let validation report it
+            continue
+        if rule.get("name") in RETIRED_RULES:
+            continue
+        for pre in rule.get("preconditions") or []:
+            if isinstance(pre, dict):
+                for key in DROPPED_FIELDS:
+                    pre.pop(key, None)
+        rules.append(rule)
+    return {**data, "rules": rules}
+
+
 def load_config(path: Path | None = None) -> EnforcementConfig:
     """Load enforcement rules.
 
@@ -602,12 +652,18 @@ def load_config(path: Path | None = None) -> EnforcementConfig:
     there is how a write tool silently overwrites rules the hook is still
     enforcing from the very file it could not read. Let it raise; each MCP
     tool already turns the exception into a message the caller sees.
+
+    Retired rules and removed fields are taken out before validation, so a file
+    written by an older version still loads. That is a rename of nothing: the
+    next save writes the cleaned shape back.
     """
     p = path or _config_path()
     if not p.exists():
         return default_config()
     data = json.loads(p.read_text())
-    return EnforcementConfig.model_validate(data)
+    if not isinstance(data, dict):
+        return EnforcementConfig.model_validate(data)
+    return EnforcementConfig.model_validate(_without_retired(data))
 
 
 def _atomic_write(path: Path, text: str) -> None:

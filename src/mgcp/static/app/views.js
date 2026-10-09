@@ -517,15 +517,75 @@ async function graphView(main) {
 
 /* ============================================================== 6. REM ==== */
 
+/* Net lines per calendar month. Summing unrelated repositories would mix
+ * codebases, so the caller passes one project's commits. */
+function byMonth(commits) {
+  const buckets = new Map();
+  for (const c of commits) {
+    const month = (c.date || '').slice(0, 7);
+    if (!month) continue;
+    const row = buckets.get(month) || { month, added: 0, removed: 0, net: 0, commits: 0 };
+    row.added += c.added; row.removed += c.removed; row.net += c.net; row.commits += 1;
+    buckets.set(month, row);
+  }
+  return [...buckets.values()].sort((a, b) => a.month.localeCompare(b.month));
+}
+
+function medianOf(values) {
+  if (!values.length) return 0;
+  const s = [...values].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
+}
+
+/* The code-size card. One project at a time, with its own selector: the REM
+ * filter below picks a project to read a schedule for, and the two questions
+ * are not the same one. */
+function codeSize(size) {
+  const pick = size.projects.map((p, i) =>
+    `<option value="${i}">${esc(p.project)}</option>`).join('');
+  return card('Net source growth',
+    `Added minus removed per commit, so a change that cuts more than it writes reads below the
+     line. Excludes ${size.excluded.map((g) => `<code>${esc(g)}</code>`).join(', ')}, which is the
+     same list the <code>commit-diff-budget</code> gate does not count. Measured
+     ${size.measured} of ${size.tracked} tracked projects; the rest have no path on this machine
+     or are not git repositories.`,
+    `<div class="filters"><label>Project <select id="sizeproj">${pick}</select></label>
+       <span class="spacer"></span><span class="note" id="sizestat"></span></div>
+     <div id="c-size"></div>`);
+}
+
+function drawCodeSize(size) {
+  const el = document.getElementById('c-size');
+  if (!el) return;
+  const p = size.projects[Number(document.getElementById('sizeproj').value) || 0];
+  const nets = p.commits.map((c) => c.net);
+  const months = byMonth(p.commits);
+  const lo = Math.min(0, ...months.map((m) => m.net));
+  const hi = Math.max(0, ...months.map((m) => m.net));
+  document.getElementById('sizestat').innerHTML =
+    `${num(p.totals.commits)} commits, +${num(p.totals.added)} / -${num(p.totals.removed)},
+     net ${p.totals.net > 0 ? '+' : ''}${num(p.totals.net)} ·
+     median commit ${medianOf(nets) > 0 ? '+' : ''}${num(medianOf(nets))}`;
+  lineChart(el, months, {
+    x: 'month',
+    y: 'net',
+    yDomain: [lo * 1.1 || 0, hi * 1.1 || 1],
+    yFormat: (v) => (v > 0 ? '+' : '') + num(Math.round(v)),
+    label: 'net lines',
+  });
+}
+
 async function rem(main) {
-  const rows = await api('/api/rem/state');
+  const [rows, size] = await Promise.all([api('/api/rem/state'), api('/api/code-size')]);
   const overdue = rows.filter((r) => r.overdue);
   const projects = [...new Set(rows.map((r) => r.project))];
 
   main.innerHTML = `
-    ${head('REM', `Maintenance schedule. The cadence is per project — it follows that project's own
-      session count — while the corpus a cycle maintains is global. Both halves matter, which is
-      why every row carries its project's session count.`)}
+    ${head('REM', `Maintenance schedule, and whether the code it maintains is growing. The cadence
+      is per project. It follows that project's own session count, while the corpus a cycle
+      maintains is global. Both halves matter, which is why every row carries its project's
+      session count.`)}
 
     <div class="grid cols-4">
       ${tile({ label: 'Projects', value: num(projects.length) })}
@@ -546,7 +606,18 @@ async function rem(main) {
       <span class="note">a “never run” row is the truth, not a gap: REM has never been scheduled on that clock</span>
     </div>
 
+    <div class="grid" style="margin-top:1rem">
+      ${size.projects.length ? codeSize(size)
+        : card('Net source growth', '', '<div class="empty">No tracked project on this machine is a git repository.</div>')}
+    </div>
+
     <div class="grid">${card('Schedule', '', '<div id="t-rem"></div>')}</div>`;
+
+  if (size.projects.length) {
+    document.getElementById('sizeproj')
+      .addEventListener('change', () => drawCodeSize(size));
+    drawCodeSize(size);
+  }
 
   const cols = [
     { key: 'project', label: 'Project' },

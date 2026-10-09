@@ -40,7 +40,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # The exclude globs the seeded rules carry in update_plan.md. Test and
 # documentation churn is never what the gates are for, so counting it would
 # refuse the commits that fix the problem.
-EXCLUDE_GLOBS = ["tests/**", "docs/**", "*.md", "**/bootstrap_data/**"]
+EXCLUDE_GLOBS = ["tests/**", "docs/**", "*.md", "**/bootstrap_data/**",
+                 "sbom.cdx.json"]
 
 # server.py is 3,399 lines and holds all 50 MCP tools. The plan's open decision
 # is to split it or exempt it; until it is split, the complexity rule alone
@@ -50,14 +51,14 @@ COMPLEXITY_EXTRA_EXCLUDE = ["src/mgcp/server.py"]
 
 BANNED_CHECKS = ["swallowed_error", "pass_through_wrapper"]
 
-DIFF_BUDGET_ADDED = 300
+DIFF_BUDGET_NET = 300
 WHY_MIN_ADDED = 40
 WHY_PATTERN = r"(?ms)^Why:\s+\S.{39,}"
 
 GATES = ("complexity", "diff_budget", "why")
 GATE_LABELS = {
     "complexity": "commit-complexity-ratchet",
-    "diff_budget": f"edit-diff-budget (>{DIFF_BUDGET_ADDED} added)",
+    "diff_budget": f"commit-diff-budget (>{DIFF_BUDGET_NET} net)",
     "why": f"commit-requires-why (>{WHY_MIN_ADDED} added)",
 }
 
@@ -119,30 +120,31 @@ def _first_parent(repo: str, sha: str) -> str | None:
     return out.strip() or None
 
 
-def _added_lines(repo: str, parent: str, sha: str) -> tuple[int, list[str]]:
-    """Added lines and touched paths between two commits, excludes applied.
+def _diff_lines(repo: str, parent: str, sha: str) -> tuple[int, int, list[str]]:
+    """Added, removed and touched paths between two commits, excludes applied.
 
-    Only additions count. The plan's diff budget exists to keep a change
-    reviewable, and a commit that deletes 200 lines is not the problem it is
-    trying to catch.
+    Both counts, because the budget is net. Additions alone rank the commit
+    that removes 800 lines and adds 320 as the largest change of its week, and
+    that commit is the work the gate exists to encourage.
     """
     rc, out = _git(repo, ["diff", "--numstat", parent, sha])
     if rc != 0:
-        return 0, []
-    added = 0
+        return 0, 0, []
+    added = removed = 0
     paths = []
     for line in out.splitlines():
         parts = line.split("\t")
         if len(parts) != 3:
             continue
-        plus, _minus, path = parts
-        if plus == "-":
+        plus, minus, path = parts
+        if plus == "-" or minus == "-":
             continue  # binary file; numstat reports no line counts
         if qm.excluded(path, EXCLUDE_GLOBS):
             continue
         added += int(plus)
+        removed += int(minus)
         paths.append(path)
-    return added, paths
+    return added, removed, paths
 
 
 def _changed_python(repo: str, parent: str, sha: str) -> list[str]:
@@ -244,7 +246,8 @@ def replay(repo: str, limit: int) -> list[dict]:
         parent = _first_parent(repo, sha)
         if parent is None:
             continue  # the root commit has no baseline to ratchet against
-        added, _paths = _added_lines(repo, parent, sha)
+        added, removed, _paths = _diff_lines(repo, parent, sha)
+        net = added - removed
         rc, message = _git(repo, ["show", "-s", "--format=%B", sha])
         has_why = bool(why_re.search(message)) if rc == 0 else False
         violations = _complexity_violations(
@@ -253,11 +256,13 @@ def replay(repo: str, limit: int) -> list[dict]:
             "sha": sha,
             "subject": subject,
             "added": added,
+            "removed": removed,
+            "net": net,
             "has_why": has_why,
             "violations": violations,
             "refused": {
                 "complexity": bool(violations),
-                "diff_budget": added > DIFF_BUDGET_ADDED,
+                "diff_budget": net > DIFF_BUDGET_NET,
                 "why": added > WHY_MIN_ADDED and not has_why,
             },
             # A gate that does not apply to a commit is not evidence either way,
@@ -274,13 +279,13 @@ def replay(repo: str, limit: int) -> list[dict]:
 def _rank(rows: list[dict], gate: str) -> list[dict]:
     """The worst refusals first.
 
-    The complexity gate ranks by violation count, the other two by added lines,
+    The complexity gate ranks by violation count, the other two by size,
     because that is the number a reader has to judge against the limit.
     """
     refused = [r for r in rows if r["refused"][gate]]
     if gate == "complexity":
-        return sorted(refused, key=lambda r: (-len(r["violations"]), -r["added"]))
-    return sorted(refused, key=lambda r: -r["added"])
+        return sorted(refused, key=lambda r: (-len(r["violations"]), -r["net"]))
+    return sorted(refused, key=lambda r: -r["net"])
 
 
 def _print_counts(rows: list[dict]) -> None:
@@ -295,10 +300,10 @@ def _print_counts(rows: list[dict]) -> None:
     with_why = sum(1 for r in rows if r["has_why"])
     print(f"\n  Why: paragraph present in {with_why} of {len(rows)} commit messages")
     if rows:
-        added = sorted(r["added"] for r in rows)
-        median = added[len(added) // 2]
-        print(f"  added lines per commit: median {median}, max {max(added)} "
-              f"(budget {DIFF_BUDGET_ADDED})")
+        nets = sorted(r["net"] for r in rows)
+        median = nets[len(nets) // 2]
+        print(f"  net lines per commit: median {median}, max {max(nets)} "
+              f"(budget {DIFF_BUDGET_NET})")
 
 
 def _print_offenders(rows: list[dict], worst: int) -> None:
@@ -311,7 +316,7 @@ def _print_offenders(rows: list[dict], worst: int) -> None:
             continue
         for row in ranked[:worst]:
             detail = (f"{len(row['violations'])} violation(s)"
-                      if gate == "complexity" else f"{row['added']} added")
+                      if gate == "complexity" else f"{row['net']:+d} net")
             print(f"  {row['sha'][:8]}  {detail:<18} {row['subject'][:72]}")
             if gate == "complexity":
                 print(qm.format_violations(row["violations"][:6]))

@@ -19,7 +19,7 @@ Most of the machinery exists. Only `pre-tool-dispatcher.py` can refuse a tool ca
 
 - **Rules engine.** `Trigger`, `Precondition` and `EnforcementRule` in `enforcement.py`; four seeded rules; six MCP tools to manage them. Trigger matches one `tool_name` (or `*`) plus an optional `command_match` (`git_subcommand`, `regex`, `contains`).
 - **Precondition types today:** `tool_called_this_turn`, `tool_not_called_this_turn`, `staged_files_coupling`, `tool_input_glob`, `staged_files_forbid`, `staged_content_forbid`.
-- **Git helpers in the hook:** `_get_staged_files`, `_get_staged_paths_not_deleted`, `_get_staged_diff`, `_added_lines`. They read only what a commit adds, so a cleanup commit is never refused.
+- **Git helpers in the hook:** `staged_files`, `staged_paths`, `staged_diff`, `staged_numstat` and `_added_lines`, all on `EvalContext`. The path and content rules read only what a commit adds, so a cleanup commit is never refused by them. The size rule reads both counts, because its question is net growth.
 - **Transcript reader:** `_latest_apology` walks the transcript rather than shared state. The intent gate reuses that approach.
 - **Workflow:** `feature-development` in `bootstrap_data/dev/workflows.yaml` has six steps: research, plan, document, execute, test, review.
 - **Catalogue:** `add_catalogue_item(item_type="decision")` already stores rationale and alternatives.
@@ -38,45 +38,82 @@ Worst offenders: `init_project.main` (CC 59, 344 lines), `pre-tool-dispatcher.ma
 
 ## Enforcement model
 
-Gates fire at three checkpoints: before an edit (size), before a commit (structure and intent), and in CI (the same checks against the merge base). The two highlighted gates do most of the work.
+Gates fire at two checkpoints: before a commit (size, structure and intent), and in CI (the same checks against the merge base). The dashboard reads the size measurement again after the fact, so the same axis the gate holds is also the one you can watch over months.
 
 ```mermaid
 flowchart LR
-  subgraph edit["Before an edit"]
-    E1["edit-diff-budget<br/>300 added lines, 8 files"]
-  end
   subgraph commit["Before a commit"]
-    C1["commit-complexity-ratchet"]
-    C2["commit-requires-why"]
-    C3["new-module-requires-decision"]
-    C4["refactor-commits-keep-tests"]
+    C1["commit-diff-budget<br/>300 net lines, 12 files"]
+    C2["commit-complexity-ratchet"]
+    C3["commit-requires-why"]
+    C4["new-module-requires-decision"]
+    C5["refactor-commits-keep-tests"]
   end
   subgraph ci["In CI"]
     I1["quality_metrics.py --base"]
   end
-  edit --> commit --> ci
+  subgraph panel["After the commit"]
+    P1["/api/code-size<br/>net lines per month"]
+  end
+  commit --> ci --> panel
 ```
+
+Every gate now fires at the commit. The size gate used to fire on each edit,
+and the section below says what that cost.
 
 Read top to bottom as one task's life: edits accumulate under the budget, a commit turns them into reviewed history, and CI catches anything that was bypassed on the way.
 
-## Gate 1: diff budget
+## Gate 1: net diff budget
 
-Rule `edit-diff-budget` refuses an Edit, Write or MultiEdit that would push uncommitted work past 300 added lines or 8 touched files. It fires before the edit lands, which is the only point where a large change is still cheap to split.
+Rule `commit-diff-budget` refuses a commit whose staged source grows by more
+than 300 net lines, or touches more than 12 files. Net means added minus
+removed.
 
-**Precondition type** `diff_budget` with `max_added_lines`, `max_files` and `exclude_globs`.
+**Precondition type** `diff_budget` with `max_net_lines`, `max_files` and
+`exclude_globs`.
 
 **How it counts, with no state file:**
 
-1. Uncommitted work = `git diff --numstat HEAD` plus line counts of untracked files from `git ls-files --others --exclude-standard`.
-2. This call's delta: Edit counts lines in `new_string` minus lines in `old_string`, floored at zero; MultiEdit sums its edits; Write diffs `content` against the file on disk with `difflib`, or counts all lines for a new file.
-3. Touched files = paths in step 1 plus this call's `file_path`.
-4. Paths matching `exclude_globs` are skipped. Default: `tests/**`, `docs/**`, `*.md`, `CHANGELOG.md`, `**/bootstrap_data/**`. Writing tests is never what blows the budget.
+1. `git diff --cached --numstat` gives added and removed per staged path.
+2. Paths matching `exclude_globs` are skipped. The shipped list is `tests/**`,
+   `docs/**`, `*.md`, `**/bootstrap_data/**` and `sbom.cdx.json`. Writing tests
+   is never what blows the budget, and the bill of materials is regenerated
+   rather than written: one refresh is 3,543 added lines.
+3. A binary file has no line count, so numstat prints `-` and the path is
+   skipped.
+4. Net is the sum of added minus the sum of removed, over the paths that are
+   left.
 
-**Deletions are free.** Only added lines count, so a simplification that removes 200 lines never trips the gate it is meant to help.
+**Deletions count in your favour.** A refactor that removes 800 lines and adds
+320 passes a 300 line budget. Counting additions alone refused that commit,
+which is the work the gate exists to encourage.
 
-**The budget resets on commit** because HEAD moves. That makes the exit clear: commit the finished part (Gate 3 applies), then continue.
+**This gate used to fire on every edit, and that was wrong in two ways.**
 
-**Deny reason** prints the current count, the budget and the two exits: commit the coherent part, or split the task. Bypass scope `size`. No git repo, or a git error, allows the call.
+The first was the measurement. It summed the session's own Edit, Write and
+MultiEdit calls and counted additions only, so the budget rose through a
+session and never came down. Once a session passed 300, every later edit was
+over budget for the rest of the session, including the edits that delete code.
+The only exit left was `MGCP_BYPASS:size`, and an operator who has to type that
+once types it every time. The audit log holds that state 14 times with the same
+frozen number, 2,228 added lines against a budget of 300, spread over two days.
+
+The second was the checkpoint. One edit cannot tell you whether a change is too
+large, because the unit a reviewer reads is the commit. A commit is also one
+decision rather than one per edit, it has two real exits, and it cannot strand
+a session.
+
+**Deny reason** prints the net count, the budget, the measured plus and minus,
+and three exits: stage less, say in the message why the growth is the smallest
+way to get the result, or remove the code the change makes redundant. Bypass
+scope `size`. No git repo, or a git error, allows the call.
+
+**The dashboard reads the same measurement.** `/api/code-size` reports net
+lines per commit for every tracked project that is a git repository, with the
+exclude list read from this rule rather than written again. The REM view draws
+it per month. A chart on a different axis from the gate would trend something
+nothing enforces.
+
 
 **Schema change:** `Trigger` gains an optional `tool_names: list[str]`, so one rule covers Edit, Write and MultiEdit instead of three copies of the same rule.
 
@@ -189,21 +226,21 @@ The new seeded rules, as they land in `DEFAULT_RULES`:
 ```json
 [
   {
-    "name": "edit-diff-budget",
+    "name": "commit-diff-budget",
     "mode": "audit",
-    "trigger": {"tool_name": "", "tool_names": ["Edit", "Write", "MultiEdit"]},
+    "trigger": {"tool_name": "Bash", "command_match": {"type": "git_subcommand", "subcommands": ["commit"]}},
     "preconditions": [{
       "type": "diff_budget",
-      "max_added_lines": 300,
-      "max_files": 8,
-      "exclude_globs": ["tests/**", "docs/**", "*.md", "**/bootstrap_data/**"]
+      "max_net_lines": 300,
+      "max_files": 12,
+      "exclude_globs": ["tests/**", "docs/**", "*.md", "**/bootstrap_data/**", "sbom.cdx.json"]
     }],
     "bypass_scope": "size",
-    "deny_reason": "Uncommitted work would exceed the diff budget. Commit the finished part, or split the task."
+    "deny_reason": "This commit grows the source by more than its net budget. Stage less, or say why in the message."
   },
   {
     "name": "commit-complexity-ratchet",
-    "mode": "audit",
+    "mode": "enforce",
     "trigger": {"tool_name": "Bash", "command_match": {"type": "git_subcommand", "subcommands": ["commit"]}},
     "preconditions": [{
       "type": "staged_python_complexity",
@@ -428,31 +465,39 @@ over 1,000 lines still have every function measured.
 
 ## What the history replay found
 
-Run `python tests/history_replay.py` to reproduce. Over the last 200 commits,
-each compared against its first parent:
+Run `python tests/history_replay.py` to reproduce. Over the last 200 commits as
+of 2026-10-09, each compared against its first parent:
 
 | Gate | Eligible | Would refuse | Rate |
 | --- | --- | --- | --- |
-| `commit-complexity-ratchet` | 200 | 72 | 36% |
-| `edit-diff-budget`, over 300 added lines | 200 | 24 | 12% |
-| `commit-requires-why`, over 40 added lines | 81 | 81 | 100% |
+| `commit-complexity-ratchet` | 200 | 69 | 34.5% |
+| `commit-diff-budget`, over 300 net lines | 200 | 21 | 10.5% |
+| `commit-requires-why`, over 40 added lines | 81 | 73 | 90.1% |
 
-A `Why:` paragraph appears in 0 of 200 messages, so that rule refuses every
-eligible commit the moment it leaves audit mode. That is correct for a new
-convention and it is still worth knowing before promoting it.
+A `Why:` paragraph appears in 14 of 200 commit messages, so that rule refuses
+most eligible commits the moment it leaves audit mode. That is correct for a
+new convention and it is still worth knowing before promoting it.
 
-The ratchet's refusals read as real on inspection: CC 24 to 27, CC 31 to 44,
-nesting 6 to 8. So CC 10 stands as the starting limit rather than being relaxed
-to fit. Added lines per commit: median 19, maximum 4,933, against a budget of
-300.
+The ratchet's refusals read as real on inspection: cyclomatic complexity 24 to
+27, 31 to 44, nesting 6 to 8. So 10 stands as the starting limit rather than
+being relaxed to fit.
+
+Net lines per commit: median 2, maximum 4,917, against a budget of 300. The
+median is 2 and not 19 because the measurement is now net. Half of this
+project's commits change the codebase by two lines or fewer in either
+direction, and the earlier figure counted only what they added.
 
 ## State as built
 
-Every gate is implemented, tested and shipped OFF. The suite is at 1,242 tests.
-The change passes its own complexity ratchet, which it did not at first: the
-gate reported 11 violations against its own author, and the dispatcher came down
-from 42 cyclomatic complexity to 8 as a result.
+`commit-complexity-ratchet` is promoted. It ships enabled and enforcing, on the
+evidence of its own audit rows: three findings and no false ones, which were a
+new function at cyclomatic 12 and two broad excepts that discarded the error.
+All three are fixed, so the gate holds a line the code already meets. The gate
+refused its own promotion commit on first run, for a function that went from
+100 lines to 103, and the fix was to split that function.
 
-What remains is the part no code can do: two weeks of `would_deny` rows, read in
-the Enforcement view, then promote or retune each rule against the table in
-Validation.
+The other four gates ship disabled and in audit mode.
+
+What remains is the part no code can do: `would_deny` rows for the four gates
+still in audit, read in the Enforcement view, then promote or retune each rule
+against the table in Validation.

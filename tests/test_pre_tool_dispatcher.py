@@ -1643,69 +1643,74 @@ class TestStructuredCodingGates:
 
     # --- diff_budget ------------------------------------------------------
 
-    def test_diff_budget_refuses_an_edit_over_the_line_budget(self, tmp_path):
-        repo = self._repo(tmp_path, {"src/a.py": "x = 1\n"})
-        decision, reason = self._decide(
-            tmp_path,
-            self._rule({"type": "diff_budget", "max_added_lines": 2},
-                       tool_name="", tool_names=["Edit"]),
-            {"tool_name": "Edit",
-             "tool_input": {"file_path": str(repo / "src/a.py"),
-                            "old_string": "x", "new_string": "a\nb\nc\nd\ne\n"}},
-            repo)
-        assert decision == "deny"
-        assert "added lines" in reason
+    def _stage(self, repo, tmp_path):
+        subprocess.run(["git", "-C", str(repo), "add", "-A"],
+                       env={**self.GIT_ENV, "HOME": str(tmp_path)}, check=True)
 
-    def test_diff_budget_allows_a_small_edit(self, tmp_path):
-        repo = self._repo(tmp_path, {"src/a.py": "x = 1\n"})
-        decision, _ = self._decide(
-            tmp_path,
-            self._rule({"type": "diff_budget", "max_added_lines": 300,
-                        "max_files": 8},
-                       tool_name="", tool_names=["Edit"]),
-            {"tool_name": "Edit",
-             "tool_input": {"file_path": str(repo / "src/a.py"),
-                            "old_string": "x = 1", "new_string": "x = 2"}},
-            repo)
-        assert decision == "allow"
+    def test_diff_budget_refuses_a_commit_over_the_net_budget(self, tmp_path):
+        repo = self._repo(tmp_path, {"src/a.py": "x\n" * 20})
+        decision, reason = self._decide(
+            tmp_path, self._rule({"type": "diff_budget", "max_net_lines": 2}),
+            self._commit(), repo)
+        assert decision == "deny"
+        assert "net lines" in reason
+
+    def test_diff_budget_allows_a_commit_with_nothing_staged(self, tmp_path):
+        """A commit with nothing staged cannot be over budget.
+
+        Paired with the test above: same repository, same file, same budget,
+        and the only difference is whether the change is staged. The budget this
+        replaced summed the session's own Edit and Write calls, so once a session
+        passed it, every later call was over it for the rest of the session,
+        deletions included. The audit log holds that state 14 times with one
+        frozen number, across two days. Nothing carries over now.
+        """
+        repo = self._repo(tmp_path, {"src/a.py": "x\n" * 20}, commit_first=True)
+        decision, reason = self._decide(
+            tmp_path, self._rule({"type": "diff_budget", "max_net_lines": 2}),
+            self._commit(), repo)
+        assert decision == "allow", reason
+
+    def test_diff_budget_counts_removals_in_your_favour(self, tmp_path):
+        """The reason the budget is net: a simplification has to pass it.
+
+        This commit adds 11 lines, over the budget of 5, and still passes
+        because it removes 40. Counting additions alone refused exactly this
+        shape of change, which is the work the gate exists to encourage.
+        """
+        repo = self._repo(tmp_path, {"src/a.py": "x\n" * 40}, commit_first=True)
+        (repo / "src/a.py").write_text("one\n")
+        (repo / "src/b.py").write_text("y\n" * 10)
+        self._stage(repo, tmp_path)
+        decision, reason = self._decide(
+            tmp_path, self._rule({"type": "diff_budget", "max_net_lines": 5}),
+            self._commit(), repo)
+        assert decision == "allow", reason
 
     def test_diff_budget_ignores_excluded_paths(self, tmp_path):
         """Writing tests is never what blows the budget."""
-        repo = self._repo(tmp_path, {})
-        decision, _ = self._decide(
+        repo = self._repo(tmp_path, {"tests/test_x.py": "x\n" * 50})
+        decision, reason = self._decide(
             tmp_path,
-            self._rule({"type": "diff_budget", "max_added_lines": 1,
-                        "exclude_globs": ["tests/**"]},
-                       tool_name="", tool_names=["Write"]),
-            {"tool_name": "Write",
-             "tool_input": {"file_path": str(repo / "tests/test_x.py"),
-                            "content": "\n".join(str(i) for i in range(50))}},
-            repo)
-        assert decision == "allow"
+            self._rule({"type": "diff_budget", "max_net_lines": 1,
+                        "exclude_globs": ["tests/**"]}),
+            self._commit(), repo)
+        assert decision == "allow", reason
 
-    def test_diff_budget_counts_only_additions(self, tmp_path):
-        """A simplification that removes lines must never trip the gate."""
-        repo = self._repo(tmp_path, {"src/a.py": "x = 1\n"})
-        decision, _ = self._decide(
-            tmp_path,
-            self._rule({"type": "diff_budget", "max_added_lines": 1},
-                       tool_name="", tool_names=["Edit"]),
-            {"tool_name": "Edit",
-             "tool_input": {"file_path": str(repo / "src/a.py"),
-                            "old_string": "a\nb\nc\nd\n", "new_string": "a\n"}},
-            repo)
-        assert decision == "allow"
+    def test_diff_budget_refuses_too_many_files(self, tmp_path):
+        repo = self._repo(tmp_path, {f"src/f{i}.py": "x\n" for i in range(4)})
+        decision, reason = self._decide(
+            tmp_path, self._rule({"type": "diff_budget", "max_files": 2}),
+            self._commit(), repo)
+        assert decision == "deny"
+        assert "files touched" in reason
 
     def test_diff_budget_allows_outside_a_repository(self, tmp_path):
         plain = tmp_path / "plain"
         plain.mkdir()
         decision, _ = self._decide(
-            tmp_path,
-            self._rule({"type": "diff_budget", "max_added_lines": 1},
-                       tool_name="", tool_names=["Write"]),
-            {"tool_name": "Write",
-             "tool_input": {"file_path": str(plain / "a.py"), "content": "a\nb\nc\n"}},
-            plain)
+            tmp_path, self._rule({"type": "diff_budget", "max_net_lines": 1}),
+            self._commit(), plain)
         assert decision == "allow"
 
     # --- staged_python_complexity ----------------------------------------
@@ -1963,40 +1968,15 @@ class TestStructuredCodingGates:
 
     def test_tool_names_covers_several_tools_with_one_rule(self, tmp_path):
         repo = self._repo(tmp_path, {})
-        rule = self._rule({"type": "diff_budget", "max_added_lines": 1},
+        rule = self._rule({"type": "tool_input_glob", "field": "file_path",
+                           "deny_globs": ["*/a.py"]},
                           tool_name="", tool_names=["Edit", "Write", "MultiEdit"])
-        for tool, payload in (
-            ("Write", {"file_path": str(repo / "a.py"), "content": "a\nb\nc\n"}),
-            ("Edit", {"file_path": str(repo / "a.py"), "old_string": "",
-                      "new_string": "a\nb\nc\n"}),
-            ("MultiEdit", {"file_path": str(repo / "a.py"),
-                           "edits": [{"old_string": "", "new_string": "a\nb\nc\n"}]}),
-        ):
+        for tool in ("Write", "Edit", "MultiEdit"):
             decision, _ = self._decide(
-                tmp_path, rule, {"tool_name": tool, "tool_input": payload}, repo)
+                tmp_path, rule,
+                {"tool_name": tool,
+                 "tool_input": {"file_path": str(repo / "a.py")}}, repo)
             assert decision == "deny", f"{tool} was not covered by tool_names"
-
-    def test_a_file_outside_the_repository_does_not_count(self, tmp_path):
-        """A repository diff budget counts repository files.
-
-        Found live: an audit row reported 2,570 added lines across 15 files for a
-        session whose repository edits were a fraction of that, because the path
-        normaliser stripped the leading slash off an absolute path instead of
-        rejecting it, so scratch files in a temporary directory read as
-        repository paths.
-        """
-        repo = self._repo(tmp_path, {})
-        outside = tmp_path / "elsewhere"
-        outside.mkdir()
-        decision, _ = self._decide(
-            tmp_path,
-            self._rule({"type": "diff_budget", "max_added_lines": 1, "max_files": 1},
-                       tool_name="", tool_names=["Write"]),
-            {"tool_name": "Write",
-             "tool_input": {"file_path": str(outside / "scratch.py"),
-                            "content": "\n".join(str(i) for i in range(50))}},
-            repo)
-        assert decision == "allow"
 
 
 class TestNoShadowedDefinitions:

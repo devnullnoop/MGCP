@@ -422,8 +422,13 @@ class QdrantVectorStore:
         # Clear existing by recreating collection
         try:
             self.client.delete_collection(self.collection_name)
-        except Exception:
-            pass  # Collection might not exist
+        except Exception as exc:
+            # A missing collection is the normal case on a fresh store, so this
+            # does not raise. It is logged because the other reason it fires is
+            # a store that refused the delete, and a silent pass there rebuilds
+            # on top of the old points instead of replacing them.
+            logger.debug("could not drop %s before rebuild: %s",
+                         self.collection_name, exc)
 
         self._ensure_collection()
 

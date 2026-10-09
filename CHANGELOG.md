@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed: the size gate measures net lines, at the commit
+
+Hook payload 22.
+
+- **`edit-diff-budget` is retired and replaced by `commit-diff-budget`.** The old
+  rule refused an Edit, Write or MultiEdit that pushed the session past 300
+  ADDED lines. It was wrong about what to measure and wrong about when.
+- **Additions alone punish the work the budget exists to encourage.** A refactor
+  that removes 800 lines and adds 320 was over a 300 line budget. The new rule
+  measures net, added minus removed, over `git diff --cached --numstat`. The
+  budget is 300 net lines and 12 files.
+- **A session total latches.** Once a session passed the budget, every later
+  edit was over it for the rest of the session, deletions included, so the only
+  exit was `MGCP_BYPASS:size`, and an operator who types that once types it
+  every time. The audit log holds that state 14 times with one frozen number,
+  2,228 added lines against a budget of 300, across two days.
+- **One edit cannot tell you a change is too large.** The unit a reviewer reads
+  is the commit. A commit is also one decision instead of one per edit, it has
+  real exits, and it cannot strand a session.
+- The exclude list gains `sbom.cdx.json`. The bill of materials is regenerated,
+  not written, and one refresh is 3,543 added lines.
+- `EvalContext.rel` is deleted. Its only caller was the session total, and a
+  staged measurement names repository paths by construction.
+- An older rules file still loads. `save_config` writes every schema field, so
+  every saved precondition carries `max_added_lines`, and `extra="forbid"` would
+  have stopped the file parsing and taken every enforcement tool and the
+  dashboard with it. `RETIRED_RULES` drops the old rule by name and
+  `DROPPED_FIELDS` strips the key on load. The hook holds the same retired-rule
+  list, because it reads the file raw and is the half that refuses.
+
+### Changed: the complexity ratchet is promoted to enforce
+
+- **`commit-complexity-ratchet` ships enabled and enforcing.** Its audit rows
+  held three findings and no false ones: `_rebuild_index_if_empty` at cyclomatic
+  12, and two broad excepts whose bodies discarded the error, in
+  `qdrant_vector_store.rebuild_index` and `server._ensure_vector_stores`.
+- All three are fixed, so the gate holds a line the code already meets. The two
+  excepts now log the error at debug level, which is the difference between a
+  missing collection and a store that refused the delete.
+- **The gate then refused the commit that promoted it.** `_ensure_vector_stores`
+  went from 100 lines to 103 while already over the 80 line limit. The fix was
+  to split it into `_reconcile_index_from_sqlite` and
+  `_raise_vector_store_unavailable`, not to raise the limit.
+- The other four structured gates stay disabled and in audit mode.
+
+### Added: net source growth on the REM view
+
+- **`GET /api/code-size`** reports added, removed and net lines per commit for
+  every tracked project that is a git repository, newest first, merges left out.
+- The excluded paths come from the `commit-diff-budget` rule rather than being
+  written a second time. A chart on a different axis from the gate would trend
+  something nothing enforces.
+- It reports `tracked` beside `measured`. A project with no saved path, a path
+  that is gone, or a directory that is not a repository is absent from the list,
+  and the difference between the two numbers is where it went.
+- The REM view draws net lines per month for one project at a time, with its own
+  selector, and shows the median commit beside the window total. Summing
+  unrelated repositories would mix codebases.
+- `tests/history_replay.py` measures net too, so the calibration and the gate
+  agree. Over the last 200 commits the net budget would refuse 21, which is
+  10.5%. Median net per commit is 2, against 19 when only additions counted.
+
 ### Changed: server mode is the default
 - **`mgcp-init` now installs and starts a local Qdrant server, and points MGCP at
   it.** Embedded Qdrant takes an exclusive lock on its storage directory, one

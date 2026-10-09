@@ -1790,6 +1790,22 @@ def _teardown_to_embedded(qdrant_status) -> None:
     print("      path, so a second session or the dashboard is locked out")
 
 
+def _migration_counts(results) -> tuple[int, dict, list]:
+    """(total indexed, the named counts, the errors) from a migration result.
+
+    bool is a subclass of int, so a plain isinstance(value, int) filter counted
+    `success: True` as one record and printed "indexed 1 records" over a result
+    of all zeros. Read the named counts only.
+    """
+    results = results or {}
+    counts = {
+        key: value for key, value in results.items()
+        if key.endswith("_count") and isinstance(value, int)
+        and not isinstance(value, bool)
+    }
+    return sum(counts.values()), counts, list(results.get("errors") or [])
+
+
 def _rebuild_index_if_empty() -> bool | None:
     """Rebuild the search index from SQLite when the server has none.
 
@@ -1807,20 +1823,11 @@ def _rebuild_index_if_empty() -> bool | None:
         from .migration import migrate
 
         print("    rebuilding the search index from lessons.db, the source of truth")
-        results = asyncio.run(migrate(force=True, dry_run=False))
-        # bool is a subclass of int, so a plain isinstance(v, int) filter counted
-        # `success: True` as one record and printed "indexed 1 records" over a
-        # result of all zeros. Read the named counts only.
-        counts = {
-            key: value for key, value in (results or {}).items()
-            if key.endswith("_count") and isinstance(value, int)
-            and not isinstance(value, bool)
-        }
-        total = sum(counts.values())
+        total, counts, errors = _migration_counts(
+            asyncio.run(migrate(force=True, dry_run=False)))
         # A migration that reported errors is not a migration that worked. The
         # first version of this returned True while the run below it printed
         # "Errors encountered", which is the failure reading as a pass.
-        errors = [e for e in (results or {}).get("errors") or []]
         if errors:
             print(f"    ! indexed {total} records, with {len(errors)} problem(s):")
             for err in errors[:3]:

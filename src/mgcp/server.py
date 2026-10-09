@@ -183,6 +183,67 @@ async def _ensure_initialized() -> tuple[LessonStore, LessonGraph, TelemetryLogg
         return _store, _graph, _telemetry
 
 
+async def _reconcile_index_from_sqlite(store, vectors, catalogue) -> None:
+    """Index anything SQLite holds that the search index does not.
+
+    This is also the repair path for a write made while the store was locked. A
+    lesson, catalogue item or community summary that could not be indexed at
+    write time is indexed here, the next time the store opens.
+    """
+    lessons = await store.get_all_lessons()
+    stored_ids = set(vectors.get_all_ids())
+    missing = [le for le in lessons if le.id not in stored_ids]
+    for lesson in missing:
+        vectors.add_lesson(lesson)
+    if missing:
+        logger.info(f"Indexed {len(missing)} lessons missing from Qdrant")
+
+    contexts = await store.get_all_project_contexts()
+    for ctx in contexts:
+        catalogue.index_catalogue(ctx.project_id, ctx.catalogue)
+    logger.info(f"Indexed catalogues for {len(contexts)} projects")
+
+    summaries = await store.get_all_community_summaries()
+    for cs in summaries:
+        vectors.upsert_community_summary(
+            community_id=cs.community_id,
+            searchable_text=f"Community: {cs.title}. {cs.summary}.",
+            metadata={"title": cs.title, "member_count": cs.member_count},
+        )
+    if summaries:
+        logger.info(f"Indexed {len(summaries)} community summaries")
+
+
+def _raise_vector_store_unavailable(exc: Exception, client) -> None:
+    """Release the storage lock, reset, and raise the error a caller can act on.
+
+    Always raises. Kept out of the open path so that path reads as one sequence.
+    The reset matters as much as the message: without it a later call cannot
+    retry once whatever holds the lock has exited.
+    """
+    global _vector_store, _catalogue_vector, _qdrant_client
+
+    logger.error(f"Vector stores unavailable: {exc}")
+    if client is not None:
+        try:
+            client.close()
+        except Exception as close_exc:
+            # Best effort, but a failed close means the lock is still held, so
+            # the next retry fails for that reason and not the original one.
+            logger.debug("could not close the Qdrant client: %s", close_exc)
+    _vector_store = _catalogue_vector = _qdrant_client = None
+    raise VectorStoreUnavailableError(
+        f"Semantic search is unavailable: {exc}"
+        f"{_describe_lock_holder()} Embedded Qdrant allows one client per "
+        "path, so another MGCP process (an older session's server, or the "
+        "dashboard) can hold it. Run `mgcp-qdrant setup` once to install a "
+        "local Qdrant server and share one store across every session. "
+        "No container, nothing to fetch by hand. Everything backed by "
+        "SQLite still works: project context, the soliloquy journal, "
+        "lesson reads by id, workflows, and REM."
+    ) from exc
+
+
 async def _ensure_vector_stores() -> tuple[QdrantVectorStore, QdrantCatalogueStore]:
     """Open Qdrant on first use by a tool that actually needs it.
 
@@ -226,61 +287,15 @@ async def _ensure_vector_stores() -> tuple[QdrantVectorStore, QdrantCatalogueSto
             _vector_store = QdrantVectorStore(client=client)
             _catalogue_vector = QdrantCatalogueStore(client=client)
 
-            # Reconcile from SQLite. This is also the repair path for anything
-            # written while the store was locked: a lesson, catalogue item or
-            # community summary that could not be indexed at write time is
-            # indexed here, the next time the store opens.
-            lessons = await store.get_all_lessons()
-            stored_ids = set(_vector_store.get_all_ids())
-            missing = [le for le in lessons if le.id not in stored_ids]
-            for lesson in missing:
-                _vector_store.add_lesson(lesson)
-            if missing:
-                logger.info(f"Indexed {len(missing)} lessons missing from Qdrant")
-
-            contexts = await store.get_all_project_contexts()
-            for ctx in contexts:
-                _catalogue_vector.index_catalogue(ctx.project_id, ctx.catalogue)
-            logger.info(f"Indexed catalogues for {len(contexts)} projects")
-
-            community_summaries = await store.get_all_community_summaries()
-            for cs in community_summaries:
-                searchable = f"Community: {cs.title}. {cs.summary}."
-                _vector_store.upsert_community_summary(
-                    community_id=cs.community_id,
-                    searchable_text=searchable,
-                    metadata={
-                        "title": cs.title,
-                        "member_count": cs.member_count,
-                    },
-                )
-            if community_summaries:
-                logger.info(f"Indexed {len(community_summaries)} community summaries")
+            await _reconcile_index_from_sqlite(
+                store, _vector_store, _catalogue_vector)
 
             _qdrant_client = client
             _vectors_initialized = True
             logger.info("Vector stores opened successfully")
 
         except Exception as e:
-            logger.error(f"Vector stores unavailable: {e}")
-            # Release the storage lock and reset, so a later call can retry
-            # once whatever holds it has exited.
-            if client is not None:
-                try:
-                    client.close()
-                except Exception:
-                    pass
-            _vector_store = _catalogue_vector = _qdrant_client = None
-            raise VectorStoreUnavailableError(
-                f"Semantic search is unavailable: {e}"
-                f"{_describe_lock_holder()} Embedded Qdrant allows one client per "
-                "path, so another MGCP process (an older session's server, or the "
-                "dashboard) can hold it. Run `mgcp-qdrant setup` once to install a "
-                "local Qdrant server and share one store across every session. "
-                "No container, nothing to fetch by hand. Everything backed by "
-                "SQLite still works: project context, the soliloquy journal, "
-                "lesson reads by id, workflows, and REM."
-            ) from e
+            _raise_vector_store_unavailable(e, client)
 
         return _vector_store, _catalogue_vector
 

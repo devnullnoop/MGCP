@@ -178,7 +178,7 @@ class TestMergeMissingDefaults:
                                "tool_name": "mcp__mgcp__query_lessons",
                                "couplings": [], "field": "", "deny_globs": [],
                                "patterns": [], "exclude_globs": [],
-                               "max_added_lines": 0, "max_files": 0, "limits": {},
+                               "max_net_lines": 0, "max_files": 0, "limits": {},
                                "banned": [], "file_length_exempt": [],
                                "min_added_lines": 0, "pattern": "",
                                "input_match": {}, "when_staged_added": []}],
@@ -231,13 +231,23 @@ class TestMergeMissingDefaults:
         second = merge_missing_defaults(path)
         assert second["added"] == []
 
-    def test_every_structure_rule_ships_in_audit_mode(self, tmp_path):
-        """A wrong limit must cost a log row, not a blocked session."""
+    def test_a_structure_rule_in_audit_mode_ships_disabled(self, tmp_path):
+        """A wrong limit must cost a log row, not a blocked session.
+
+        A promoted rule is the other case, and it ships enabled and enforcing
+        on the evidence of its own audit rows. Both groups are asserted to be
+        non-empty, so this cannot pass by one of them having no members.
+        """
         from mgcp.enforcement import STRUCTURE_RULES
 
-        for rule in STRUCTURE_RULES:
-            assert rule.mode == "audit", rule.name
+        audit = [r for r in STRUCTURE_RULES if r.mode == "audit"]
+        enforcing = [r for r in STRUCTURE_RULES if r.mode == "enforce"]
+        assert audit, "no structure rule is still in audit mode"
+        assert enforcing, "no structure rule has been promoted"
+        for rule in audit:
             assert rule.enabled is False, rule.name
+        for rule in enforcing:
+            assert rule.enabled is True, rule.name
 
     def test_audit_rules_stay_off_when_the_deployed_hook_is_old(
         self, tmp_path, monkeypatch
@@ -256,10 +266,12 @@ class TestMergeMissingDefaults:
         result = enf.merge_missing_defaults(path)
         assert result["enabled"] == []
         by_name = {r["name"]: r for r in json.loads(path.read_text())["rules"]}
-        # Only the audit-mode structure rules stay off. The four original gates
-        # are established enforcing rules and arrive enabled, which is correct.
+        # Only the audit-mode structure rules stay off. Every established
+        # enforcing rule arrives enabled, which is correct: an old hook that
+        # ignores `mode` enforces, and enforcing is what they ask for.
         for rule in enf.STRUCTURE_RULES:
-            assert by_name[rule.name]["enabled"] is False, rule.name
+            want = rule.mode == "enforce"
+            assert by_name[rule.name]["enabled"] is want, rule.name
         assert "2.17" in result["hook_detail"]
 
     def test_audit_rules_turn_on_when_the_hook_is_current(self, tmp_path, monkeypatch):
@@ -275,10 +287,11 @@ class TestMergeMissingDefaults:
                             lambda: (True, "payload matches"))
         path = self._existing(tmp_path, [self._custom("mine")])
         result = enf.merge_missing_defaults(path)
-        assert set(result["enabled"]) == {r.name for r in enf.STRUCTURE_RULES}
+        audit = [r for r in enf.STRUCTURE_RULES if r.mode == "audit"]
+        assert set(result["enabled"]) == {r.name for r in audit}
 
         by_name = {r["name"]: r for r in json.loads(path.read_text())["rules"]}
-        for rule in enf.STRUCTURE_RULES:
+        for rule in audit:
             assert by_name[rule.name]["enabled"] is True
             assert by_name[rule.name]["mode"] == "audit"
         # The operator's own rule is untouched either way.
@@ -292,3 +305,78 @@ class TestMergeMissingDefaults:
         with pytest.raises(Exception):
             merge_missing_defaults(path)
         assert path.read_text() == "{not json"
+
+
+class TestLoadConfigMigration:
+    """An older saved file still parses.
+
+    `save_config` writes every schema field, so a file saved before a field was
+    removed carries that key on every precondition and `extra="forbid"` rejects
+    it. Dropping a removed key on load is what keeps the file loading, and a
+    file that does not load takes every enforcement tool and the dashboard with
+    it. Retired rules go the same way: `merge_missing_defaults` adds by name and
+    never removes, so nothing else can take one out.
+    """
+
+    def _written(self, tmp_path, rules):
+        path = tmp_path / "enforcement_rules.json"
+        path.write_text(json.dumps({"version": 1, "rules": rules}))
+        return path
+
+    def _budget_rule(self, name, extra_key=True):
+        pre = {"type": "diff_budget", "max_files": 8}
+        if extra_key:
+            pre["max_added_lines"] = 300
+        return {"name": name, "enabled": True, "trigger": {"tool_name": "Bash"},
+                "preconditions": [pre], "bypass_scope": "size",
+                "deny_reason": "too big"}
+
+    def test_a_removed_field_does_not_stop_the_file_loading(self, tmp_path):
+        from mgcp.enforcement import load_config
+
+        path = self._written(tmp_path, [self._budget_rule("mine")])
+        config = load_config(path)
+        assert [r.name for r in config.rules] == ["mine"]
+        assert config.rules[0].preconditions[0].max_files == 8
+
+    def test_a_retired_rule_is_dropped(self, tmp_path):
+        from mgcp.enforcement import RETIRED_RULES, load_config
+
+        assert "edit-diff-budget" in RETIRED_RULES
+        path = self._written(tmp_path, [self._budget_rule("edit-diff-budget"),
+                                        self._budget_rule("mine")])
+        assert [r.name for r in load_config(path).rules] == ["mine"]
+
+    def test_the_next_save_writes_the_cleaned_shape(self, tmp_path):
+        from mgcp.enforcement import load_config, save_config
+
+        path = self._written(tmp_path, [self._budget_rule("edit-diff-budget"),
+                                        self._budget_rule("mine")])
+        save_config(load_config(path), path)
+        raw = json.loads(path.read_text())
+        assert [r["name"] for r in raw["rules"]] == ["mine"]
+        assert "max_added_lines" not in raw["rules"][0]["preconditions"][0]
+        assert "max_net_lines" in raw["rules"][0]["preconditions"][0]
+
+    def test_a_file_that_does_not_parse_still_raises(self, tmp_path):
+        """The migration must not become a second fall-back to the defaults."""
+        from mgcp.enforcement import load_config
+
+        path = tmp_path / "enforcement_rules.json"
+        path.write_text("{not json")
+        with pytest.raises(Exception):
+            load_config(path)
+
+    def test_an_unknown_field_still_raises(self, tmp_path):
+        """Only the named removed keys are dropped. A typo stays loud.
+
+        `extra="forbid"` exists so a one-field typo fails instead of silently
+        deleting enforcement on the next write. A blanket "drop what you do not
+        know" migration would hand that back.
+        """
+        from mgcp.enforcement import load_config
+
+        rule = self._budget_rule("mine", extra_key=False)
+        rule["preconditions"][0]["max_nett_lines"] = 300
+        with pytest.raises(Exception):
+            load_config(self._written(tmp_path, [rule]))

@@ -509,26 +509,6 @@ class EvalContext:
                 self._cache[key] = None
         return self._cache[key]
 
-    def rel(self, path):
-        """A path relative to the repository root, or "" if it is outside.
-
-        An absolute path that is not under the root returns "", so the caller
-        skips it. Stripping its leading slash instead made a file in a temporary
-        directory read as a repository path: a live audit row showed 2,570 added
-        lines across 15 files for a session whose repository edits were a
-        fraction of that, because scratch files counted toward a repository diff
-        budget.
-        """
-        if not path:
-            return ""
-        p = str(path).replace("\\", "/")
-        root = (self.root or "").replace("\\", "/").rstrip("/")
-        if root and p.startswith(root + "/"):
-            return p[len(root) + 1:]
-        if p.startswith("/"):
-            return ""     # absolute, and not under this repository
-        return p          # already relative, so it is this repository's
-
     @property
     def transcript_path(self):
         """The raw transcript path from the payload, "" when absent.
@@ -588,23 +568,36 @@ class EvalContext:
             return out[:4_000_000] if rc == 0 else ""
         return self._cached("staged_diff", build) or ""
 
-    def staged_added_lines(self, exclude):
-        """Added lines across the staged set, skipping excluded paths."""
+    def staged_numstat(self, exclude):
+        """(added, removed, paths) for the staged set, skipping excluded paths.
+
+        One parser for every rule that measures the size of a commit, so the
+        budget and the message threshold can never disagree about how big it is.
+        """
         def build():
             rc, out = self.git(["diff", "--cached", "--numstat"])
             if rc != 0:
-                return 0
-            total = 0
+                return (0, 0, [])
+            added, removed, paths = 0, 0, []
             for line in out.splitlines():
                 parts = line.split("\t")
                 if len(parts) != 3:
                     continue
-                count, _, path = parts
+                plus, minus, path = parts
                 # "-" marks a binary file, which has no line count.
-                if count.isdigit() and not _path_excluded(path, exclude):
-                    total += int(count)
-            return total
-        return self._cached(f"staged_added:{','.join(exclude or [])}", build) or 0
+                if not plus.isdigit() or not minus.isdigit():
+                    continue
+                if _path_excluded(path, exclude):
+                    continue
+                added, removed = added + int(plus), removed + int(minus)
+                paths.append(path)
+            return (added, removed, paths)
+        key = f"numstat:{','.join(exclude or [])}"
+        return self._cached(key, build) or (0, 0, [])
+
+    def staged_added_lines(self, exclude):
+        """Added lines across the staged set, skipping excluded paths."""
+        return self.staged_numstat(exclude)[0]
 
     def blob(self, ref, path):
         """One path's content at a ref, or "" when it is not there."""
@@ -744,73 +737,45 @@ def _path_excluded(path, globs):
     return any(_glob_match(path, g) for g in globs or [])
 
 
-def _added_by_input(name, inp):
-    """Lines one Edit, Write or MultiEdit input adds, floored at zero."""
-    def grew(old, new):
-        return max(0, str(new or "").count("\n") - str(old or "").count("\n"))
-    if name == "Write":
-        return str(inp.get("content") or "").count("\n")
-    if name == "MultiEdit":
-        return sum(grew(e.get("old_string"), e.get("new_string"))
-                   for e in (inp.get("edits") or []) if isinstance(e, dict))
-    return grew(inp.get("old_string"), inp.get("new_string"))
-
-
 def _h_diff_budget(pre, state, ctx):
-    """Refuse an edit that pushes THIS SESSION's additions past the budget.
+    """Refuse a commit whose staged NET growth passes the budget.
 
-    Measured from the session's own recorded edits, not from the whole
-    HEAD-to-worktree delta. Measuring the dirty tree refuses the first edit of
-    any session that resumes mid-feature, follows a soft reset, or runs during
-    a merge, for a reason that has nothing to do with the edit. Git exits 0 in
-    all of those cases, so no fail-open engages and the session is simply
-    stuck. The session's own edits are in the transcript, which is per session
-    and which the agent cannot write.
+    Net, added minus removed, because the complaint this gate answers is a
+    codebase that only grows. Counting additions alone refuses the refactor
+    that removes 800 lines and adds 320, which is the work the budget exists
+    to encourage.
+
+    Measured at the commit, not at the edit. A session total latches: once it
+    passes the budget, every later edit is over it for the rest of the session,
+    including the edits that delete code, so the only exit left is the bypass
+    and the gate dies the first time someone uses it. The audit log recorded
+    that state 14 times with the same frozen number. A commit is one decision
+    with two real exits, stage less or say why, and it cannot strand a session.
     """
     if ctx is None or not ctx.root:
         return True, ""
-    max_lines = int(pre.get("max_added_lines") or 0)
+    max_net = int(pre.get("max_net_lines") or 0)
     max_files = int(pre.get("max_files") or 0)
-    if max_lines <= 0 and max_files <= 0:
+    if max_net <= 0 and max_files <= 0:
         return True, ""
 
-    added, touched = _session_edit_totals(ctx, pre.get("exclude_globs") or [])
-    over = _budget_overruns(added, len(touched), max_lines, max_files)
+    added, removed, paths = ctx.staged_numstat(pre.get("exclude_globs") or [])
+    over = _budget_overruns(added - removed, len(paths), max_net, max_files)
     if not over:
         return True, ""
-    listed = ", ".join(sorted(touched)[:10])
-    return False, ("This session is over budget:\n  " + "\n  ".join(over)
-                   + "\n  files: " + listed)
+    return False, ("This commit is over budget:\n  " + "\n  ".join(over)
+                   + f"\n  measured +{added} -{removed} over {len(paths)} files"
+                   + "\n  files: " + ", ".join(sorted(paths)[:10]))
 
 
-def _budget_overruns(added, files, max_lines, max_files):
-    """Each budget this change exceeds, named with both numbers."""
+def _budget_overruns(net, files, max_net, max_files):
+    """Each budget this commit exceeds, named with both numbers."""
     over = []
-    if max_lines > 0 and added > max_lines:
-        over.append(f"added lines {added}, budget {max_lines}")
+    if max_net > 0 and net > max_net:
+        over.append(f"net lines {net:+d}, budget {max_net}")
     if max_files > 0 and files > max_files:
         over.append(f"files touched {files}, budget {max_files}")
     return over
-
-
-def _session_edit_totals(ctx, exclude):
-    """(added lines, touched paths) for this session, including this call.
-
-    The call being evaluated has not reached the transcript yet, so it is added
-    separately. Both go through the same exclusion and path normalisation, or a
-    file would count in one place and not the other.
-    """
-    added, touched = 0, set()
-    pending = [(ctx.tool_name, ctx.tool_input or {})]
-    for block in ctx.tool_uses(("Edit", "Write", "MultiEdit")):
-        pending.append((block.get("name"), block.get("input") or {}))
-    for name, inp in pending:
-        rel = ctx.rel(inp.get("file_path", ""))
-        if not rel or _path_excluded(rel, exclude):
-            continue
-        touched.add(rel)
-        added += _added_by_input(name, inp)
-    return added, touched
 
 
 def _h_staged_python_complexity(pre, state, ctx):
@@ -1146,6 +1111,16 @@ def _evaluate_precondition(
 # ---------------------------------------------------------------------------
 
 
+# Rules a shipped change replaced, skipped by name on load.
+#
+# The rules file is a copy under ~/.mgcp that only a write tool refreshes, so a
+# retired rule sits there until something rewrites it. edit-diff-budget fired
+# on Edit and read a field this hook no longer has, which would leave its file
+# budget comparing the staged file count at edit time. Skipping it here is what
+# makes a `git pull` safe before the next `mgcp-init`.
+RETIRED_RULES = ("edit-diff-budget",)
+
+
 def _load_rules() -> list:
     """Load enforcement rules. Returns [] on any failure (fail open)."""
     try:
@@ -1154,7 +1129,10 @@ def _load_rules() -> list:
         with open(ENFORCEMENT_CONFIG) as f:
             data = json.load(f)
         rules = data.get("rules") or []
-        return rules if isinstance(rules, list) else []
+        if not isinstance(rules, list):
+            return []
+        return [r for r in rules
+                if not (isinstance(r, dict) and r.get("name") in RETIRED_RULES)]
     except (json.JSONDecodeError, OSError, ValueError):
         return []
 

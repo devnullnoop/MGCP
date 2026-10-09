@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -79,7 +80,7 @@ REST API for managing lessons, projects, and viewing telemetry.
 Read-only views over the three stores, used by the instrument panel:
 `/api/signal`, `/api/retrieval/timeseries`, `/api/retrieval/misses`,
 `/api/effectiveness`, `/api/gate-audit`, `/api/enforcement/rules`,
-`/api/rem/state`, `/api/soliloquies`
+`/api/rem/state`, `/api/soliloquies`, `/api/code-size`
 
 ### UI
 
@@ -1393,6 +1394,129 @@ async def get_soliloquies_api(limit: int = 40) -> list[dict[str, Any]]:
         }
         for entry, project_id in pairs
     ]
+
+
+def _exclude_pathspec(glob: str) -> str:
+    """One exclude glob as a git pathspec.
+
+    `tests/**` left `tests/a.py` in the log when passed through unchanged,
+    because git's own pathspec wildcards already cross a path separator, so the
+    trailing form has to be rewritten. Checked over 40 commits of this
+    repository rather than assumed.
+    """
+    return ":(exclude)" + glob.replace("**/", "*").replace("/**", "/*")
+
+
+def _budget_exclude_globs() -> list[str]:
+    """What the commit budget does not count, read from the live rule.
+
+    The chart and the gate have to measure the same paths, or the trend tracks
+    an axis nothing enforces. The live rules file wins over the shipped
+    default, because it is the one the PreToolUse hook reads.
+    """
+    from .enforcement import default_config, load_config
+
+    try:
+        configs = (load_config(), default_config())
+    except (json.JSONDecodeError, ValueError):
+        configs = (default_config(),)
+    for config in configs:
+        for rule in config.rules:
+            for pre in rule.preconditions:
+                if pre.type == "diff_budget":
+                    return list(pre.exclude_globs)
+    return []
+
+
+def _numstat_totals(body: str) -> tuple[int, int, int]:
+    """(added, removed, files) from the numstat rows under one commit."""
+    added = removed = files = 0
+    for line in body.splitlines():
+        cols = line.split("\t")
+        # "-" in either count marks a binary file, which has no line count.
+        if len(cols) != 3 or not cols[0].isdigit() or not cols[1].isdigit():
+            continue
+        added, removed = added + int(cols[0]), removed + int(cols[1])
+        files += 1
+    return added, removed, files
+
+
+def _commit_sizes(root: Path, exclude: list[str], limit: int) -> list[dict[str, Any]]:
+    """Per-commit added, removed and net source lines for one repository.
+
+    Newest first, as git reports it. Merges are left out because a merge
+    repeats lines the commits under it already carry. A commit that touched
+    only excluded paths changed no source, and git omits it rather than
+    reporting a row of zeros.
+    """
+    args = ["git", "-C", str(root), "log", "--numstat", "--no-merges",
+            f"-n{limit}", "--format=%x00%h%x1f%aI%x1f%s", "--", "."]
+    args += [_exclude_pathspec(g) for g in exclude]
+    try:
+        done = subprocess.run(args, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if done.returncode != 0:
+        return []
+
+    out: list[dict[str, Any]] = []
+    for chunk in done.stdout.split("\0"):
+        if not chunk.strip():
+            continue
+        header, _, body = chunk.partition("\n")
+        parts = header.split("\x1f")
+        if len(parts) != 3:
+            continue
+        added, removed, files = _numstat_totals(body)
+        out.append({"sha": parts[0], "date": parts[1], "subject": parts[2],
+                    "added": added, "removed": removed, "net": added - removed,
+                    "files": files})
+    return out
+
+
+@app.get("/api/code-size")
+async def get_code_size_api(limit: int = 120, project: str = "") -> dict[str, Any]:
+    """Net source growth per commit, for every tracked project that is a repo.
+
+    Net means added minus removed. A codebase that only grows is the thing this
+    answers, and added lines alone cannot answer it: they rank the commit that
+    removes 800 lines and adds 320 as the largest change of the week.
+
+    The excluded paths come from the commit-diff-budget rule, so the chart and
+    the gate measure the same axis.
+
+    `tracked` and `measured` are both reported. A project with no saved path, a
+    path that is gone, or a directory that is not a git repository is absent
+    from `projects`, and the difference between the two numbers is where it
+    went. A count with no denominator cannot say whether it covers everything.
+    """
+    await ensure_initialized()
+    exclude = _budget_exclude_globs()
+    contexts = await store.get_all_project_contexts()
+    wanted = [c for c in contexts
+              if not project or project in (c.project_id, c.project_name)]
+
+    projects = []
+    for ctx in wanted:
+        root = Path(ctx.project_path or "")
+        if not root.is_dir() or not (root / ".git").exists():
+            continue
+        commits = _commit_sizes(root, exclude, max(1, min(limit, 2000)))
+        projects.append({
+            "project": ctx.project_name,
+            "project_id": ctx.project_id,
+            "path": str(root),
+            "commits": commits,
+            "totals": {
+                "commits": len(commits),
+                "added": sum(c["added"] for c in commits),
+                "removed": sum(c["removed"] for c in commits),
+                "net": sum(c["net"] for c in commits),
+            },
+        })
+    projects.sort(key=lambda p: p["totals"]["commits"], reverse=True)
+    return {"excluded": exclude, "tracked": len(wanted),
+            "measured": len(projects), "projects": projects}
 
 
 # Mount static files for other assets

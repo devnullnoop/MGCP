@@ -311,3 +311,109 @@ class TestQueryConcentration:
         assert c["distinct_queries"] == 0
         assert c["top_query_share"] == 0.0
         assert c["top1_median_per_question"] is None
+
+
+class TestCodeSize:
+    """`/api/code-size`: net source growth per commit.
+
+    The git reads are exercised against a repository built here, because the
+    operator's own store is the wrong place to assert a number from. The
+    endpoint test covers the shape and the denominator only.
+    """
+
+    GIT_ENV = {
+        "PATH": "/usr/bin:/bin", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+    }
+
+    def _repo(self, tmp_path):
+        """Three commits: +10 source, then -9/+1 source, then one test file."""
+        import subprocess
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        env = {**self.GIT_ENV, "HOME": str(tmp_path)}
+
+        def run(*args):
+            subprocess.run(["git", "-C", str(repo), *args], env=env, check=True)
+
+        def commit(message):
+            run("add", "-A")
+            run("commit", "-qm", message)
+
+        run("init", "-q")
+        (repo / "src").mkdir()
+        (repo / "src" / "a.py").write_text("x\n" * 10)
+        commit("add ten")
+        (repo / "src" / "a.py").write_text("y\n")
+        commit("cut nine")
+        (repo / "tests").mkdir()
+        (repo / "tests" / "test_a.py").write_text("t\n" * 30)
+        commit("add a test")
+        return repo
+
+    def test_net_is_added_minus_removed_per_commit(self, tmp_path):
+        from mgcp.web_server import _commit_sizes
+
+        rows = _commit_sizes(self._repo(tmp_path), ["tests/**"], 10)
+        by_subject = {r["subject"]: r for r in rows}
+        assert by_subject["add ten"]["net"] == 10
+        # One line replaces ten, so this reads below the line, which counting
+        # additions alone cannot express.
+        assert by_subject["cut nine"]["added"] == 1
+        assert by_subject["cut nine"]["removed"] == 10
+        assert by_subject["cut nine"]["net"] == -9
+
+    def test_an_excluded_only_commit_is_absent(self, tmp_path):
+        """It changed no source, so it is not a row of zeros."""
+        from mgcp.web_server import _commit_sizes
+
+        rows = _commit_sizes(self._repo(tmp_path), ["tests/**"], 10)
+        assert "add a test" not in {r["subject"] for r in rows}
+        assert len(rows) == 2
+
+    def test_without_the_exclusion_that_commit_is_measured(self, tmp_path):
+        """The pair above only means something if the path is otherwise seen."""
+        from mgcp.web_server import _commit_sizes
+
+        rows = _commit_sizes(self._repo(tmp_path), [], 10)
+        by_subject = {r["subject"]: r for r in rows}
+        assert by_subject["add a test"]["net"] == 30
+
+    def test_a_directory_that_is_not_a_repository_measures_nothing(self, tmp_path):
+        from mgcp.web_server import _commit_sizes
+
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        assert _commit_sizes(plain, [], 10) == []
+
+    def test_a_binary_file_has_no_line_count(self, tmp_path):
+        """numstat prints "-" for both counts, which is not zero."""
+        from mgcp.web_server import _numstat_totals
+
+        assert _numstat_totals("-\t-\timage.png\n4\t1\tsrc/a.py") == (4, 1, 1)
+
+    def test_the_exclusions_come_from_the_commit_budget_rule(self):
+        """The chart and the gate have to measure the same paths."""
+        from mgcp.enforcement import default_config
+        from mgcp.web_server import _budget_exclude_globs
+
+        shipped = [p.exclude_globs for r in default_config().rules
+                   for p in r.preconditions if p.type == "diff_budget"]
+        assert shipped, "no shipped rule carries a diff_budget precondition"
+        assert _budget_exclude_globs() in shipped
+
+    def test_the_endpoint_reports_its_denominator(self, client):
+        """`measured` without `tracked` cannot say whether it covers everything."""
+        response = client.get("/api/code-size?limit=5")
+        assert response.status_code == 200
+        body = response.json()
+        assert set(body) == {"excluded", "tracked", "measured", "projects"}
+        assert body["measured"] == len(body["projects"])
+        assert body["measured"] <= body["tracked"]
+        for project in body["projects"]:
+            assert set(project) == {"project", "project_id", "path",
+                                    "commits", "totals"}
+            assert project["totals"]["net"] == (
+                project["totals"]["added"] - project["totals"]["removed"])
+            assert len(project["commits"]) <= 5

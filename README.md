@@ -159,9 +159,13 @@ fired, and every disputed refusal with its triggering sentence and the reasoning
 given.
 ![Enforcement](docs/screenshots/instrument-enforcement.png)
 
-### REM: what maintenance is due?
+### REM: what maintenance is due, and is the code growing?
 Per project and per job, counted in that project's own sessions. Overdue jobs and
-jobs that have never run are labelled in words, not only by colour.
+jobs that have never run are labelled in words, not only by colour. Above the
+schedule, net source lines per month for each tracked project that is a git
+repository. Net means added minus removed, so a month that removed more than it
+wrote sits below the line. It skips the same paths the `commit-diff-budget` rule
+skips, read from that rule, so the chart and the gate measure one axis.
 ![REM](docs/screenshots/instrument-rem.png)
 
 ### Graph: what shape is the knowledge?
@@ -677,16 +681,31 @@ list of private names is never published to find them by.
 Four more arrived with the structured coding gates, described in
 [docs/structured-coding-gates.md](docs/structured-coding-gates.md). They check
 the size of a change, the complexity of the Python it stages, the content of the
-commit message, and whether a decision was recorded in this session. Every one
-of them ships switched off and in audit mode, which records what a rule would
-have refused and refuses nothing. Two numbers say why that matters: over this
-repository's last 200 commits the complexity rule would have refused 36%, and
-the commit-message rule would have refused every eligible commit, because the
-`Why:` paragraph it asks for is a new convention that no past commit follows.
-Run `python tests/history_replay.py` to see those numbers for yourself, read the
-recorded rows in the dashboard's Enforcement view, and turn a rule on with
-`sync_enforcement_rules` and `update_enforcement_rule` when its refusals are
-ones you agree with.
+commit message, and whether a decision was recorded in this session. A new one
+ships switched off and in audit mode, which records what the rule would have
+refused and refuses nothing. One number says why that matters: over this
+repository's last 200 commits the commit-message rule would have refused 73 of
+the 81 it applies to, because the `Why:` paragraph it asks for is a new
+convention that few past commits follow. Run `python tests/history_replay.py` to
+see those numbers for yourself, read the recorded rows in the dashboard's
+Enforcement view, and turn a rule on with `sync_enforcement_rules` and
+`update_enforcement_rule` when its refusals are ones you agree with.
+
+The complexity rule has made that trip. It is promoted, and ships on and
+enforcing, because its recorded rows held three findings and no false ones. It
+then refused the commit that promoted it, over a function that grew from 100
+lines to 103, and the fix was to split the function.
+
+The size rule changed shape on the same evidence. It used to refuse an edit that
+pushed a session past 300 ADDED lines, and it counted the session's own edits,
+so the total only ever rose. Once a session passed the budget, every later edit
+was over it for the rest of the session, including the edits that delete code,
+and the only way out was the bypass. The recorded rows hold that state 14 times
+with one frozen number, across two days. It now measures the staged change at
+the commit, and it measures NET lines, added minus removed. A refactor that
+removes 800 lines and adds 320 passes a 300 line budget, which is the work the
+rule exists to encourage. The dashboard draws the same measurement per month, so
+you can see whether a codebase is growing without asking the gate.
 
 A bypass scope is a short word the user can name in
 `MGCP_BYPASS:<scope>` to switch off that one rule for one message. Plain
@@ -963,6 +982,7 @@ Every release before 3.0, from 1.0 to 2.13, is in [CHANGELOG.md](CHANGELOG.md).
 | `GET /api/lessons` | All lessons |
 | `GET /api/projects` | All projects |
 | `GET /api/graph` | Graph visualization data |
+| `GET /api/code-size` | Net source lines per commit, per tracked git repository |
 | `GET /docs` | OpenAPI documentation |
 
 ## Beyond Software Development

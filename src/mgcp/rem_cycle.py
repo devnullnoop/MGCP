@@ -61,6 +61,18 @@ FALLBACK_AGE_DAYS = 14
 # A proposed link has to clear the same bar the community bridge uses to append
 # a lesson, because both answer "is this related enough to put in front of
 # someone". One number, not two that drift apart.
+# What makes a used lesson worth re-reading. Measured on a live corpus of 322
+# lessons on 2026-10-09: at 10 uses and 180 days the check fired on 93 of them,
+# which is every lesson the bootstrap seeded and not a list anyone reads. The
+# days axis does nothing here, because the whole corpus is younger than 275 days
+# and 83 of those 93 are over 240 days old as well. Uses is the only number that
+# separates them: 7 lessons are over 400, then there is a cliff to 110. At 100
+# uses the check names 7, which is a review list. The cap bounds it whatever the
+# corpus does next, the same way MAX_LINK_FINDINGS does.
+STALE_MIN_USAGE = 100
+STALE_MIN_DAYS = 180
+MAX_STALE_FINDINGS = 10
+
 LINK_MIN_SCORE = 0.55
 LINK_CANDIDATE_POOL = 8
 LINKS_PER_LESSON = 3
@@ -136,6 +148,8 @@ def _duplicate_finding(pair: dict) -> RemFinding:
         # shared words are the evidence for making it.
         recommended=0 if overlap >= 0.9 else 1,
         metadata={"lesson_a": id_a, "lesson_b": id_b,
+                  "usage_a": first.get("usage_count"),
+                  "usage_b": second.get("usage_count"),
                   "trigger_overlap": overlap,
                   "shared_words": pair.get("shared_words") or [],
                   "similarity": pair.get("similarity")},
@@ -442,12 +456,13 @@ class RemEngine:
         """
         ranked = []
         for lesson in lessons:
-            if lesson.usage_count < 10:
+            if lesson.usage_count < STALE_MIN_USAGE:
                 continue
             staleness = (now - lesson.last_refined).days
-            if staleness > 180:
+            if staleness > STALE_MIN_DAYS:
                 ranked.append((lesson.usage_count * staleness, lesson, staleness))
         ranked.sort(key=lambda row: -row[0])
+        ranked = ranked[:MAX_STALE_FINDINGS]
         return [
             RemFinding(
                 operation="staleness_scan",

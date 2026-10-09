@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: a finding you can act on
+
+Hook payload 25.
+
+- **The board held 184 findings and no button.** Yesterday's work made a
+  finding visible and linked each lesson it names into the editor. The
+  operator's answer was that the dashboard is full of recommendations with no
+  way to perform one, which is correct: every row was a sentence asking for
+  hand work in another view.
+- **Apply performs the recommendation, where that is safe.** A
+  `link_suggestions` finding is one edge and nothing else, so Apply writes it
+  through the new `POST /api/lessons/{id}/links`. A `duplicate_detection`
+  finding deletes a lesson, so Apply opens `#/curate?lesson=<keep>&absorb=<drop>`
+  instead: the trigger arrives carrying both sets of words, the other lesson's
+  action is on screen to fold in, and the delete is a separate click. Two
+  lessons can share every trigger word and state two different rules, so a
+  one-click merge would lose one of them. A `staleness_scan` finding needs
+  words a person writes, so it offers Edit and says nothing more.
+- **Dismiss is the other way a row leaves.** `DELETE /api/rem/findings/{id}`.
+  Three of the options a finding offers are decisions to leave things alone,
+  and nothing could record one, so the only thing that ever removed a row was
+  the next cycle finding the same thing again. `delete_lesson` now clears every
+  finding that names the deleted lesson, so a merge done with the MCP tools
+  clears the board too.
+- **A link route was added after yesterday's entry said none was needed.** The
+  reason is that `PUT /api/lessons/{id}` replaces the whole link list, which is
+  right for an editor and wrong for one proposal: a stale list in the browser
+  would drop the rest of a lesson's links. Appending one edge cannot lose
+  another.
+- **The edge is written in one place.** `data_ops.link_pair` holds it, and both
+  the `link_lessons` MCP tool and the dashboard call it. The tool kept its own
+  copy, which also means the dashboard would have had the half that writes
+  SQLite and forgets the graph, where the community bridge reads.
+- **"Heavily used but stale" fired on 93 of 322 lessons**, which is every
+  lesson the bootstrap seeded. `STALE_MIN_USAGE` is 100 rather than 10, and
+  `MAX_STALE_FINDINGS` caps the list at 10. Days separated almost none of them:
+  the whole corpus is younger than 275 days. A test pins the three numbers,
+  because a test written against the constants proves the mechanism and never
+  the calibration.
+- The SessionStart block no longer says nothing applies a finding, and names
+  Dismiss as the second exit.
+
 ### Added: a REM finding now reaches somebody
 
 Hook payload 24. Net +100 source lines, 2.3 added per line removed.

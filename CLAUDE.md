@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **MGCP** (Memory Graph Core Primitives) is a Python MCP server providing persistent, graph-based memory for LLM interactions. The system stores lessons learned during LLM sessions in a graph structure, allowing semantic querying without loading full context histories.
 
-**Status**: Alpha/Research project. Package version 3.0.0 (`pyproject.toml`, `mgcp.__version__`); the deployed hook payload is counted separately in `src/mgcp/hook_templates/VERSION`, which now holds a plain counter and reads **24**. It is not a release number. Its only job is to differ from the marker in `~/.mgcp/hooks/.mgcp-hook-version` so `mgcp-init` re-copies the hooks, and it changes when a hook changes rather than when the package does. It used to be written as `2.17`, which read as a release a major version behind 3.0.0 and caused exactly that confusion. **Increment it in the same commit as any hook change.** `install_global_hooks` re-copies only when the counter differs from the installed marker, so a hook edit that leaves the counter alone does not deploy, and `mgcp-init` reports success while the old hook keeps running. Feature names like v2.11 and v2.16 stay in the documents as historical labels for when something shipped, and v2.2 through v3.0 is released under CHANGELOG `[3.0.0]`. Phases 1-7 complete plus v3 multi-session (Qdrant server mode, compare-and-swap writes, shared embedding daemon). Server mode is the default as of 2026-10-06: `mgcp-init` installs and starts a local Qdrant server, writes `qdrant_url`, and rebuilds the index from SQLite. Embedded takes an EXCLUSIVE lock on its storage directory, one client per path, so the old embedded default failed as soon as a second session or the dashboard wanted the store. Shipping that fix as the opt-in `--multi-session` left the default broken, which is what the lesson `degrade-per-store-not-per-server` had already said: an escape hatch nobody turns on does not stop the lock killing access. `mgcp-init --embedded` opts out, and a failed setup falls back to embedded with the reason printed rather than failing the install. MGCP still needs no container and nothing is fetched by hand. Actively dogfooding. Phase 8's plan of moving lessons out of `query_lessons` into compiled skill prompts was dropped, because it made retrieval less reliable. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
+**Status**: Alpha/Research project. Package version 3.0.0 (`pyproject.toml`, `mgcp.__version__`); the deployed hook payload is counted separately in `src/mgcp/hook_templates/VERSION`, which now holds a plain counter and reads **25**. It is not a release number. Its only job is to differ from the marker in `~/.mgcp/hooks/.mgcp-hook-version` so `mgcp-init` re-copies the hooks, and it changes when a hook changes rather than when the package does. It used to be written as `2.17`, which read as a release a major version behind 3.0.0 and caused exactly that confusion. **Increment it in the same commit as any hook change.** `install_global_hooks` re-copies only when the counter differs from the installed marker, so a hook edit that leaves the counter alone does not deploy, and `mgcp-init` reports success while the old hook keeps running. Feature names like v2.11 and v2.16 stay in the documents as historical labels for when something shipped, and v2.2 through v3.0 is released under CHANGELOG `[3.0.0]`. Phases 1-7 complete plus v3 multi-session (Qdrant server mode, compare-and-swap writes, shared embedding daemon). Server mode is the default as of 2026-10-06: `mgcp-init` installs and starts a local Qdrant server, writes `qdrant_url`, and rebuilds the index from SQLite. Embedded takes an EXCLUSIVE lock on its storage directory, one client per path, so the old embedded default failed as soon as a second session or the dashboard wanted the store. Shipping that fix as the opt-in `--multi-session` left the default broken, which is what the lesson `degrade-per-store-not-per-server` had already said: an escape hatch nobody turns on does not stop the lock killing access. `mgcp-init --embedded` opts out, and a failed setup falls back to embedded with the reason printed rather than failing the install. MGCP still needs no container and nothing is fetched by hand. Actively dogfooding. Phase 8's plan of moving lessons out of `query_lessons` into compiled skill prompts was dropped, because it made retrieval less reliable. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
 
 ## Documentation Preferences
 
@@ -191,7 +191,7 @@ unchanged.
 **Lesson Management (4):**
 - `add_lesson` - Create a new lesson
 - `refine_lesson` - Improve an existing lesson. `new_trigger` replaces the trigger, which is the field retrieval matches on, so a lesson nobody can find can be corrected rather than only added to. `new_tags` replaces the tag list, where omitting it keeps the tags and an empty list removes them all. Both old values are kept in the version history. The call rewrites SQLite, the search index, and the in-memory graph node, which until now kept the pre-refinement copy for the rest of the session.
-- `link_lessons` - Create typed relationships between lessons
+- `link_lessons` - Create typed relationships between lessons. The edge itself is written by `data_ops.link_pair`, which the dashboard's Apply button calls too. Both surfaces act on the same `link_suggestions` finding, and an edge written only to SQLite is invisible to the community bridge, so a second copy is a copy that forgets the graph
 - `delete_lesson` - Remove a lesson from all stores (SQLite, Qdrant, NetworkX)
 
 **Project Context (5):**
@@ -231,6 +231,8 @@ unchanged.
 **The report is capped per operation, worst first.** Every finding used to print in full, so one run was over 600 lines in a single tool response and got skimmed. `FINDINGS_SHOWN_PER_OPERATION` is 5 and the rest say how many are held. The cap is per operation and not overall, so one noisy operation cannot crowd the others out. The total is always stated in full, because capping what is PRINTED must not understate what was found.
 
 **`staleness_scan` counts missed retrieval opportunities, not days.** A lesson search has never matched is a defect on the day it is written, so the test is how many queries ran since it was created and chose something else. `MIN_QUERY_OPPORTUNITIES` is 20, measured against 1,192 queries over 212 sessions, a mean of 5.6 and a median of 3 per session, so 20 is about four to six sessions of use. The old test was "created more than 30 days ago", which hid 30 of 44 never-matched lessons behind a calendar that says nothing about whether anything tried to find them. The count comes from `telemetry.db`, read the way `_gate_audit_review` reads `gate_audit.jsonl`, and an unreadable one falls back to `FALLBACK_AGE_DAYS` rather than treating "cannot measure" as "zero opportunities". It reads `usage_count` and not telemetry, because that counter means "search MATCHED this" and excludes a lesson the community bridge appended, which is the thing a rewritten trigger would fix. Unreachable lessons rank before merely stale ones, and within each group the worst comes first.
+
+The scan's second half, "heavily used but stale", is governed by `STALE_MIN_USAGE` 100, `STALE_MIN_DAYS` 180 and `MAX_STALE_FINDINGS` 10. At 10 uses it fired on 93 of 322 lessons, which is every lesson the bootstrap seeded and not a list anybody reads. Days separated almost none of them, because the whole corpus was younger than 275 days and 83 of the 93 were over 240 days old as well. Uses is the number that separates them: 7 lessons are over 400, then there is a cliff to 110. The cap bounds the list whatever the corpus grows into, the same way `MAX_LINK_FINDINGS` does, because a threshold calibrated today is a threshold that rots. A test pins all three numbers, because a test written against the constants proves the mechanism and never the calibration.
 
 **`link_suggestions` exists because an unlinked lesson is unreachable by both paths.** Search can miss it on wording, and the community bridge cannot reach it at all, since Louvain puts an isolated node in no community. On a live corpus 38 of the 44 never-matched lessons carried no edges, which is why they sat at exactly zero rather than merely low. It proposes the nearest lessons by embedding above `LINK_MIN_SCORE`, which is the bridge's own floor so one number governs both, and the finding carries `proposed_links` ready for `link_lessons`. A lesson with a parent, a child or any typed relationship is not an orphan.
 
@@ -367,14 +369,31 @@ and not mtime, so a `git checkout` that restores a file does not ask for a resta
 nothing, and the banner lives outside `#view` because the failure it explains arrives as a view
 error that replaces `#view`.
 
-**A finding is acted on through the editor that already exists.** A REM finding row links
-each lesson it names to `#/curate?lesson=<id>`, and the Curate editor gained a links field on
-`PUT /api/lessons/{id}`. No merge route, no link route, and no second editing surface: the
-reason is that a finding naming two lesson ids with no way to reach either made you read them,
-remember them, switch view and search by hand. The route carries parameters now
-(`currentRoute` splits the hash on `?`), which is what made the handoff possible. Links are
-edited as `target:type` pairs, so saving one cannot silently downgrade another from
-`prerequisite` to `related`, and omitting the field leaves a lesson's links alone.
+**A finding row performs its own recommendation, or admits it cannot.** Each lesson a
+finding names links to `#/curate?lesson=<id>`, and the route carries parameters
+(`currentRoute` splits the hash on `?`). Links are edited as `target:type` pairs on
+`PUT /api/lessons/{id}`, so saving one cannot silently downgrade another from `prerequisite`
+to `related`, and omitting the field leaves a lesson's links alone.
+
+Three kinds of finding need three different answers, which is why one Apply button would be
+wrong. A `link_suggestions` finding is one edge and nothing else, so Apply does it in place
+through `POST /api/lessons/{id}/links`. That route exists beside the PUT because the PUT
+replaces the whole link list, which is right for an editor and wrong for one proposal: a stale
+list in the browser would drop the rest. Relationships are not part of the embedded text, so
+the route needs no vector store and works while Qdrant is locked. A `duplicate_detection`
+finding DELETES a lesson, and two lessons can share every trigger word while stating two
+different rules, so Apply opens `#/curate?lesson=<keep>&absorb=<drop>`: the trigger arrives
+carrying both sets of words, the other lesson's action is on screen to fold in, and the delete
+is a separate click. The lesson kept is the more used one, named in the button. A
+`staleness_scan` finding needs words a person writes, so it offers Edit and nothing else.
+
+**Dismiss is the other way a finding leaves.** `DELETE /api/rem/findings/{id}` removes one
+row. Three of the options a finding offers are decisions to leave things alone, "Keep both",
+"Leave it isolated" and "Acknowledged", and until now recording one was impossible: the only
+thing that ever removed a row was the next cycle finding the same thing again, so a board of
+184 findings could not go down. `LessonStore.delete_lesson` also clears every finding that
+names the deleted lesson, so a merge done with the MCP tools clears the board too, not only a
+merge done in the dashboard.
 
 **There is no push channel. Views fetch on load.** A `/ws/events` WebSocket route, a
 `ConnectionManager`, and a task that polled telemetry every 500 ms existed until this

@@ -7,7 +7,13 @@ import pytest
 from mgcp.models import Lesson, ProjectContext, ProjectTodo
 from mgcp.persistence import LessonStore
 from mgcp.rem_config import OperationSchedule
-from mgcp.rem_cycle import RemEngine, RemFinding
+from mgcp.rem_cycle import (
+    MAX_STALE_FINDINGS,
+    STALE_MIN_DAYS,
+    STALE_MIN_USAGE,
+    RemEngine,
+    RemFinding,
+)
 
 
 @pytest.fixture
@@ -123,14 +129,14 @@ class TestStalenessScan:
 
     @pytest.mark.asyncio
     async def test_finds_heavily_used_but_stale(self, store, engine, no_query_history):
-        """High-usage lessons not refined in 6+ months should be flagged."""
+        """A lesson given to people hundreds of times, never reworded."""
         stale_lesson = Lesson(
             id="popular-stale",
             trigger="popular trigger",
             action="Popular action",
             tags=["test"],
-            usage_count=15,
-            last_refined=datetime.now(UTC) - timedelta(days=200),
+            usage_count=STALE_MIN_USAGE + 50,
+            last_refined=datetime.now(UTC) - timedelta(days=STALE_MIN_DAYS + 20),
         )
         await store.add_lesson(stale_lesson)
 
@@ -138,6 +144,56 @@ class TestStalenessScan:
         stale = [f for f in report.findings if f.metadata.get("lesson_id") == "popular-stale"]
         assert len(stale) == 1
         assert "has not been refined" in stale[0].description
+
+    @pytest.mark.asyncio
+    async def test_a_modestly_used_lesson_is_not_called_stale(
+        self, store, engine, no_query_history
+    ):
+        """The threshold is what makes this finding a list anyone reads.
+
+        At 10 uses and 180 days it fired on 93 of 322 lessons in a live corpus,
+        which is every lesson the bootstrap seeded. Age separated almost none of
+        them, because the whole corpus was younger than 275 days. Uses is the
+        number that does.
+        """
+        # The numbers the old threshold flagged, written out rather than
+        # derived from the constants, so changing a constant fails this test
+        # instead of moving with it.
+        await store.add_lesson(Lesson(
+            id="mildly-used", trigger="t", action="a", tags=["test"],
+            usage_count=15, last_refined=datetime.now(UTC) - timedelta(days=270),
+        ))
+
+        report = await engine.run(session_number=5, operations=["staleness_scan"])
+        assert not [f for f in report.findings
+                    if f.metadata.get("lesson_id") == "mildly-used"]
+
+    def test_the_shipped_thresholds_are_the_measured_ones(self):
+        """The calibration, pinned. A relative test only proves the mechanism.
+
+        100 uses names 7 lessons in the live 322-lesson corpus, where 10 named
+        93. The cap bounds it whatever the corpus grows into.
+        """
+        assert (STALE_MIN_USAGE, STALE_MIN_DAYS, MAX_STALE_FINDINGS) == (100, 180, 10)
+
+    @pytest.mark.asyncio
+    async def test_the_stale_list_is_capped_at_the_worst(
+        self, store, engine, no_query_history
+    ):
+        """A threshold holds for today's corpus; the cap holds for any corpus."""
+        for i in range(MAX_STALE_FINDINGS + 4):
+            await store.add_lesson(Lesson(
+                id=f"hot-{i}", trigger=f"t{i}", action="a", tags=["test"],
+                usage_count=STALE_MIN_USAGE + i,
+                last_refined=datetime.now(UTC) - timedelta(days=STALE_MIN_DAYS + 10),
+            ))
+
+        report = await engine.run(session_number=5, operations=["staleness_scan"])
+        flagged = [f for f in report.findings
+                   if f.title.startswith("Heavily used but stale")]
+        assert len(flagged) == MAX_STALE_FINDINGS
+        # Worst first, so the one that is capped out is the least used.
+        assert flagged[0].metadata["lesson_id"] == f"hot-{MAX_STALE_FINDINGS + 3}"
 
 
 class TestKnowledgeExtraction:

@@ -117,6 +117,9 @@ body {
   background: none; border: 1px solid var(--border); color: var(--ink-2);
   border-radius: 7px; cursor: pointer; padding: 0.25rem 0.5rem; font: inherit;
 }
+/* An Apply that navigates is a link, not a button, so it reads as one. */
+a.ghost { text-decoration: none; display: inline-block; white-space: nowrap; }
+.ghost[disabled] { opacity: 0.5; cursor: default; }
 
 /* ------------------------------------------------------------------ main -- */
 

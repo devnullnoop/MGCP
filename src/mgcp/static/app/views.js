@@ -595,7 +595,7 @@ async function rem(main) {
                sub: overdue.length ? 'past next_due_session' : 'nothing past due' })}
       ${tile({ label: 'Never run', value: num(rows.filter((r) => r.never_run).length),
                sub: 'no row on this project’s clock' })}
-      ${tile({ label: 'Open findings', value: num(found.total),
+      ${tile({ label: 'Open findings', value: `<span id="found-n">${num(found.total)}</span>`,
                sub: found.total ? 'from the last run of each operation' : 'nothing outstanding' })}
     </div>
 
@@ -620,9 +620,10 @@ async function rem(main) {
          unused lessons recommended a fix for each and then discarded every one. The next run found
          the same 105 again. Each run now replaces its own rows, so this is the state of the corpus
          now and not a log: the same unused lesson found in four cycles is one problem.
-         Nothing applies a finding for you. The Edit column opens each lesson the finding names in
-         the Curate editor, where the trigger and the links are the two fields these findings are
-         about.`,
+         Apply performs the recommendation. A link is one edge and nothing else, so it applies
+         here; a merge deletes a lesson, so it opens both in the editor instead. A trigger needs
+         words a person writes, so it only offers Edit. Dismiss records the judgement that nothing
+         is wrong, which is the only other way a row leaves this table.`,
         '<div id="t-found"></div>')}
     </div>
 
@@ -656,6 +657,25 @@ async function rem(main) {
     return [m.lesson_id, m.lesson_a, m.lesson_b].filter(Boolean);
   };
 
+  /* Which of a duplicate pair a merge keeps: the more used one, because that
+   * is the wording retrieval has been handing people. Both ids are in the
+   * label, so the choice is visible before the click. */
+  const keeper = (m) => ((m.usage_b ?? 0) > (m.usage_a ?? 0)
+    ? [m.lesson_b, m.lesson_a] : [m.lesson_a, m.lesson_b]);
+
+  const applyCell = (r) => {
+    const m = r.metadata || {};
+    if (r.operation === 'duplicate_detection' && m.lesson_a && m.lesson_b) {
+      const [keep, drop] = keeper(m);
+      return `<a class="ghost" href="#/curate?lesson=${encodeURIComponent(keep)}`
+        + `&absorb=${encodeURIComponent(drop)}">Merge into ${esc(keep)}</a>`;
+    }
+    const first = (m.proposed_links || [])[0];
+    return first
+      ? `<button class="ghost" type="button" data-link="${r.id}">Link to ${esc(first.target_id)}</button>`
+      : '—';
+  };
+
   const foundCols = [
     { key: 'operation', label: 'Operation',
       render: (r) => `<span class="pill">${esc(r.operation)}</span>` },
@@ -663,10 +683,13 @@ async function rem(main) {
     { key: 'action', label: 'Recommended',
       render: (r) => (r.recommended
         ? `<span class="id">${esc(r.recommended.label)}</span>` : '—') },
+    { key: 'apply', label: 'Apply', render: applyCell },
     { key: 'open', label: 'Edit',
       render: (r) => (findingLessons(r).map((id) =>
         `<a href="#/curate?lesson=${encodeURIComponent(id)}">${esc(id)}</a>`)
         .join(' · ') || '—') },
+    { key: 'dismiss', label: '',
+      render: (r) => `<button class="ghost" type="button" data-dismiss="${r.id}">Dismiss</button>` },
   ];
 
   const draw = () => {
@@ -683,6 +706,37 @@ async function rem(main) {
   };
   document.getElementById('proj').addEventListener('change', draw);
   document.getElementById('onlyOverdue').addEventListener('change', draw);
+
+  /* Delegated, because sorting repaints the table and would drop handlers
+   * bound to the buttons themselves. */
+  document.getElementById('t-found').addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-link],[data-dismiss]');
+    if (!btn) return;
+    const id = Number(btn.dataset.link || btn.dataset.dismiss);
+    const row = found.findings.find((f) => f.id === id);
+    if (!row) return;
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = 'working…';
+    try {
+      if (btn.dataset.link) {
+        const link = (row.metadata.proposed_links || [])[0];
+        await writeJSON(`/api/lessons/${encodeURIComponent(link.source_id)}/links`, 'POST',
+          { target: link.target_id, type: link.relationship_type || 'related' });
+      }
+      // The row goes only after the act it describes succeeded. A failed link
+      // leaves the finding on the board, which is the honest state.
+      await writeJSON(`/api/rem/findings/${id}`, 'DELETE');
+      found.findings = found.findings.filter((f) => f.id !== id);
+      found.total -= 1;
+      document.getElementById('found-n').textContent = num(found.total);
+      draw();
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = label;
+      window.alert(err.message.slice(0, 300));
+    }
+  });
   draw();
 }
 
@@ -836,15 +890,79 @@ async function curate(main, params = {}) {
       } catch (err) { msg.innerHTML = status('bad', err.message.slice(0, 120)); }
     });
     document.getElementById('f-del').addEventListener('click', async () => {
-      // A lesson deleted here is gone from SQLite, Qdrant and the graph, so it
-      // asks first. Nothing else in this app destroys anything.
-      if (!window.confirm(`Delete ${lesson.id} from all three stores? This cannot be undone.`)) return;
-      msg.textContent = 'deleting…';
-      try {
-        await writeJSON(`/api/lessons/${encodeURIComponent(lesson.id)}`, 'DELETE');
-        msg.innerHTML = status('good', 'deleted');
+      if (await removeLesson(lesson.id, msg)) {
         editor.innerHTML = '<div class="empty">Deleted. Select another lesson.</div>';
-      } catch (err) { msg.innerHTML = status('bad', err.message.slice(0, 120)); }
+      }
+    });
+    if (params.absorb && params.absorb !== lesson.id) await mergePanel(lesson, params.absorb);
+  };
+
+  /* A lesson deleted here is gone from SQLite, Qdrant and the graph, so it asks
+   * first. Nothing else in this app destroys anything. The merge panel deletes
+   * the lesson it folded in, so this is shared rather than written twice. */
+  const removeLesson = async (id, msgEl) => {
+    if (!window.confirm(`Delete ${id} from all three stores? This cannot be undone.`)) return false;
+    msgEl.textContent = 'deleting…';
+    try {
+      await writeJSON(`/api/lessons/${encodeURIComponent(id)}`, 'DELETE');
+      msgEl.innerHTML = status('good', `deleted ${id}`);
+      return true;
+    } catch (err) {
+      msgEl.innerHTML = status('bad', err.message.slice(0, 120));
+      return false;
+    }
+  };
+
+  /* Add the words the other trigger has and this one lacks, keeping the
+   * phrasing of both. A merged trigger has to answer to everything either
+   * lesson answered to, or the merge loses retrieval. */
+  const unionTrigger = (keep, drop) => {
+    const have = keep.toLowerCase();
+    const extra = drop.split(',').map((x) => x.trim())
+      .filter((part) => part && !have.includes(part.toLowerCase()));
+    return extra.length ? `${keep.replace(/,\s*$/, '')}, ${extra.join(', ')}` : keep;
+  };
+
+  /* Both lessons of a duplicate pair, on one screen.
+   *
+   * Applying a REM duplicate_detection finding lands here. The merge is not a
+   * button in the REM view because it deletes a lesson, and two lessons can
+   * share every trigger word while stating two different rules: deleting one
+   * blind loses the rule. So the trigger arrives pre-filled with both, the
+   * other lesson's action is on screen to fold in, and the delete is a
+   * separate click after the save. */
+  const mergePanel = async (keep, dropId) => {
+    const other = await api(`/api/lessons/${encodeURIComponent(dropId)}`, { fresh: true });
+    if (!other) return;
+    const trigger = document.getElementById('f-trigger');
+    trigger.value = unionTrigger(keep.trigger || '', other.trigger || '');
+    editor.insertAdjacentHTML('afterbegin', `
+      <div class="card" style="margin-bottom:0.75rem">
+        <p class="note">Merging <span class="id">${esc(other.id)}</span> into
+          <span class="id">${esc(keep.id)}</span>. The trigger below already carries both
+          sets of words. Fold in anything this action says that the one you keep does not,
+          save, then delete it. Used ${num(other.usage_count ?? 0)} times, v${other.version ?? 1}.</p>
+        <label class="note">Its trigger</label>
+        <textarea rows="2" readonly>${esc(other.trigger || '')}</textarea>
+        <label class="note">Its action</label>
+        <textarea id="m-action" rows="5" readonly>${esc(other.action || '')}</textarea>
+        <div style="display:flex;gap:0.5rem;margin-top:0.5rem;align-items:center">
+          <button class="ghost" id="m-fold" type="button">Append this action below</button>
+          <button class="ghost" id="m-del" type="button">Delete ${esc(other.id)}</button>
+          <span class="note" id="m-msg"></span>
+        </div>
+      </div>`);
+    const mmsg = document.getElementById('m-msg');
+    document.getElementById('m-fold').addEventListener('click', () => {
+      const action = document.getElementById('f-action');
+      action.value = `${action.value.trimEnd()}\n\n${other.action || ''}`.trim();
+      mmsg.innerHTML = status('warn', 'appended, not saved — edit it, then Save');
+    });
+    document.getElementById('m-del').addEventListener('click', async () => {
+      if (await removeLesson(other.id, mmsg)) {
+        document.getElementById('m-fold').disabled = true;
+        document.getElementById('m-del').disabled = true;
+      }
     });
   };
 

@@ -108,9 +108,9 @@ def _read_rem_state():
 
     The findings half exists because detection was never the problem. A cycle
     found 105 unreachable lessons, printed a fix for each, and the list only
-    existed inside that one tool response. Nothing applies a finding, so the
-    one thing that can close the loop is telling the agent they are waiting, at
-    the start of a session, when it can act.
+    existed inside that one tool response. The dashboard can now apply or
+    dismiss one, which is the operator's channel; this block is the agent's,
+    and it is the only one that fires without anybody opening anything.
 
     Stdlib sqlite3 only, opens in read-only URI mode with a 2-second timeout to
     avoid blocking the live MCP server's writer. Fails open on any error:
@@ -260,7 +260,7 @@ if rem["findings"] or rem["overdue"]:
         lines.append(
             f"{total} REM finding(s) are open on this project, worst first. "
             f"They are stored, so they are waiting whether or not a cycle is "
-            f"due, and nothing applies one for you."
+            f"due. The dashboard's REM view applies or dismisses one per row."
         )
         lines.append("")
         for f in rem["findings"]:
@@ -268,11 +268,12 @@ if rem["findings"] or rem["overdue"]:
         lines.append("")
         lines.append(
             "**Act on at least the worst one.** `mcp__mgcp__rem_report` lists "
-            "them, and the dashboard's REM view shows all of them. A trigger "
-            "collision merges with `refine_lesson` to absorb the other "
-            "trigger's words, then `delete_lesson`. A lesson retrieval never "
-            "reaches needs `refine_lesson(new_trigger=...)`. An isolated one "
-            "needs `link_lessons`."
+            "them. A trigger collision merges with `refine_lesson` to absorb "
+            "the other trigger's words, then `delete_lesson`. A lesson "
+            "retrieval never reaches needs `refine_lesson(new_trigger=...)`. "
+            "An isolated one needs `link_lessons`. A finding you judge "
+            "harmless is dismissed in the dashboard, which is the only other "
+            "way the count falls."
         )
     if rem["overdue"]:
         lines.append("")

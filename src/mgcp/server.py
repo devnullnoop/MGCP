@@ -795,84 +795,26 @@ async def link_lessons(
         context: Comma-separated contexts where this applies (e.g., "ui,debugging")
         bidirectional: Whether to create reverse relationship (default True)
     """
-    from .models import Relationship
-
     type_error = _validate_relationship_type(relationship_type)
     if type_error:
         return type_error
 
     store, graph, telemetry = await _ensure_initialized()
 
-    lesson_a = await store.get_lesson(lesson_id_a)
-    lesson_b = await store.get_lesson(lesson_id_b)
-
-    if not lesson_a:
-        return f"Lesson not found: {lesson_id_a}"
-    if not lesson_b:
-        return f"Lesson not found: {lesson_id_b}"
-
     # Parse context string into list
     context_list = [c.strip() for c in context.split(",") if c.strip()] if context else []
 
-    # Create the typed relationship
-    new_rel = Relationship(
-        target=lesson_id_b,
-        type=relationship_type,
-        weight=weight,
-        context=context_list,
-        bidirectional=bidirectional
-    )
+    # The edge is written in data_ops, which the dashboard calls too. Both
+    # surfaces act on the same REM link_suggestions finding, so one of them
+    # having its own copy is one copy that forgets the graph.
+    from .data_ops import link_pair
+    from .models import Relationship
 
-    # Add to lesson_a's relationships (avoid duplicates of the same typed edge;
-    # different types between the same pair are meaningful and allowed)
-    added_any = False
-    existing_edges = {(r.target, r.type) for r in lesson_a.relationships}
-    if (lesson_id_b, relationship_type) not in existing_edges:
-        lesson_a.relationships.append(new_rel)
-        await store.update_lesson(lesson_a)
-        added_any = True
-
-    # Add reverse relationship if bidirectional
-    if bidirectional:
-        # Determine reverse relationship type
-        reverse_type = relationship_type
-        if relationship_type == "prerequisite":
-            reverse_type = "sequence_next"
-        elif relationship_type == "sequence_next":
-            reverse_type = "prerequisite"
-        elif relationship_type == "specializes":
-            reverse_type = "generalizes"
-        elif relationship_type == "generalizes":
-            reverse_type = "specializes"
-
-        reverse_rel = Relationship(
-            target=lesson_id_a,
-            type=reverse_type,
-            weight=weight,
-            context=context_list,
-            bidirectional=bidirectional
-        )
-
-        existing_edges_b = {(r.target, r.type) for r in lesson_b.relationships}
-        if (lesson_id_a, reverse_type) not in existing_edges_b:
-            lesson_b.relationships.append(reverse_rel)
-            await store.update_lesson(lesson_b)
-            added_any = True
-
-    if not added_any:
-        return (
-            f"'{lesson_id_a}' and '{lesson_id_b}' are already linked "
-            f"({relationship_type}). No change made."
-        )
-
-    # Update graph
-    graph.add_lesson(lesson_a)
-    graph.add_lesson(lesson_b)
-
-    # Format output
-    arrow = "↔" if bidirectional else "→"
-    type_str = f" ({relationship_type})" if relationship_type != "related" else ""
-    return f"Linked '{lesson_id_a}' {arrow} '{lesson_id_b}'{type_str}"
+    _changed, message = await link_pair(store, graph, lesson_id_a, Relationship(
+        target=lesson_id_b, type=relationship_type, weight=weight,
+        context=context_list, bidirectional=bidirectional,
+    ))
+    return message
 
 
 @mcp.tool()

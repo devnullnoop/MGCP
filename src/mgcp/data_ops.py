@@ -299,6 +299,66 @@ def trigger_overlap(a: str, b: str) -> tuple[float, list[str]]:
     return len(shared) / len(words_a | words_b), sorted(shared)
 
 
+REVERSE_RELATIONSHIP = {
+    "prerequisite": "sequence_next",
+    "sequence_next": "prerequisite",
+    "specializes": "generalizes",
+    "generalizes": "specializes",
+}
+
+
+def _append_edge(lesson: Lesson, rel) -> bool:
+    """Add one typed edge to a lesson, or report it already had it.
+
+    The same typed edge is never added twice. A different type between the
+    same pair is meaningful, so it is allowed.
+    """
+    if (rel.target, rel.type) in {(r.target, r.type) for r in lesson.relationships}:
+        return False
+    lesson.relationships.append(rel)
+    return True
+
+
+async def link_pair(store: LessonStore, graph, source_id: str, rel) -> tuple[bool, str]:
+    """Link two lessons, in SQLite and in the graph. Returns (changed, message).
+
+    ``rel`` is a models.Relationship carrying the target and the kind of edge,
+    which is what keeps this to four arguments: the five fields of an edge are
+    one object and not five parameters.
+
+    This is the one implementation. The MCP tool and the dashboard both act on
+    a REM ``link_suggestions`` finding, and an unlinked lesson stays invisible
+    to the community bridge until the edge exists in the graph as well as in
+    SQLite, which is the half a second copy forgets.
+    """
+    lessons = {}
+    for lesson_id in (source_id, rel.target):
+        lesson = await store.get_lesson(lesson_id)
+        if not lesson:
+            return False, f"Lesson not found: {lesson_id}"
+        lessons[lesson_id] = lesson
+
+    edges = [(lessons[source_id], rel)]
+    if rel.bidirectional:
+        edges.append((lessons[rel.target], rel.model_copy(update={
+            "target": source_id,
+            "type": REVERSE_RELATIONSHIP.get(rel.type, rel.type),
+        })))
+
+    changed = [lesson for lesson, edge in edges if _append_edge(lesson, edge)]
+    if not changed:
+        return False, (f"'{source_id}' and '{rel.target}' are already linked "
+                       f"({rel.type}). No change made.")
+    for lesson in changed:
+        await store.update_lesson(lesson)
+    for lesson in lessons.values():
+        graph.add_lesson(lesson)
+
+    arrow = "↔" if rel.bidirectional else "→"
+    suffix = f" ({rel.type})" if rel.type != "related" else ""
+    return True, f"Linked '{source_id}' {arrow} '{rel.target}'{suffix}"
+
+
 async def find_duplicates(
     min_overlap: float = DEFAULT_TRIGGER_OVERLAP,
     store: LessonStore | None = None,
@@ -351,8 +411,10 @@ async def find_duplicates(
     for share, _count, first, second in ranked[:max(1, limit)]:
         _share, shared = trigger_overlap(first.trigger, second.trigger)
         out.append({
-            "lesson_1": {"id": first.id, "trigger": first.trigger[:80]},
-            "lesson_2": {"id": second.id, "trigger": second.trigger[:80]},
+            "lesson_1": {"id": first.id, "trigger": first.trigger[:80],
+                         "usage_count": first.usage_count},
+            "lesson_2": {"id": second.id, "trigger": second.trigger[:80],
+                         "usage_count": second.usage_count},
             "trigger_overlap": round(share, 3),
             "shared_words": shared,
             "similarity": _pair_similarity(vector_store, first, second),

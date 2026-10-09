@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 
 from .embedding import daemon_status
 from .graph import LessonGraph
@@ -725,6 +726,38 @@ async def update_lesson(lesson_id: str, data: dict[str, Any]) -> dict[str, Any]:
     get_vector_store().add_lesson(lesson)
 
     return lesson.model_dump(mode="json")
+
+
+@app.post("/api/lessons/{lesson_id}/links")
+async def add_lesson_link(lesson_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Link this lesson to another, in SQLite and in the graph.
+
+    This is what the Apply button on a REM ``link_suggestions`` finding calls.
+    The PUT route replaces the whole link list, which is right for an editor
+    and wrong for one proposal, since a stale list in the browser would drop
+    the rest. Appending one edge cannot lose another.
+
+    Relationships are not part of the embedded text, so this needs no vector
+    store and works while Qdrant is locked by another process.
+    """
+    await ensure_initialized()
+    target = (data.get("target") or "").strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="A target lesson id is required.")
+
+    from .data_ops import link_pair
+    from .models import Relationship
+
+    try:
+        rel = Relationship(target=target, type=data.get("type") or "related",
+                           weight=float(data.get("weight") or 0.5))
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    changed, message = await link_pair(store, graph, lesson_id, rel)
+    if not changed and "not found" in message.lower():
+        raise HTTPException(status_code=404, detail=message)
+    return {"changed": changed, "message": message}
 
 
 @app.delete("/api/lessons/{lesson_id}")
@@ -1447,6 +1480,8 @@ async def get_rem_findings_api(
         "by_operation": by_operation,
         "findings": [
             {
+                # The row id, which is what Apply and Dismiss act on.
+                "id": row["id"],
                 "project": names.get(row["project_id"], row["project_id"]),
                 "project_id": row["project_id"],
                 "operation": row["operation"],
@@ -1464,6 +1499,21 @@ async def get_rem_findings_api(
             for row in rows[:max(1, min(limit, 2000))]
         ],
     }
+
+
+@app.delete("/api/rem/findings/{finding_id}")
+async def resolve_rem_finding(finding_id: int) -> dict[str, Any]:
+    """Clear one stored finding, because it was applied or judged.
+
+    Three of the options a finding offers are decisions to leave things alone:
+    "Keep both", "Leave it isolated", "Acknowledged". Without a way to record
+    one, the only thing that ever removed a row was the next cycle finding the
+    same thing again, so a board of 184 findings could not go down.
+    """
+    await ensure_initialized()
+    if not await store.delete_rem_finding(finding_id):
+        raise HTTPException(status_code=404, detail=f"No finding with id {finding_id}.")
+    return {"resolved": finding_id}
 
 
 @app.get("/api/soliloquies")

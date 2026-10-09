@@ -759,7 +759,9 @@ class LessonStore:
                             (json.dumps(kept), row["id"]),
                         )
                 logger.info(f"Deleted lesson: {lesson_id}")
-            return deleted
+        if deleted:
+            await self.delete_findings_naming(lesson_id)
+        return deleted
 
     async def get_categories(self) -> list[str]:
         """Get unique top-level categories (root lesson IDs)."""
@@ -1174,6 +1176,40 @@ class LessonStore:
                 )
         return len(rows)
 
+    async def delete_rem_finding(self, finding_id: int) -> bool:
+        """Drop one stored finding. Returns True if a row went.
+
+        A finding is resolved when it is applied or judged, and a run only
+        replaces rows for the operation that produced them. Without this, a
+        pair you merged stays on the board until the next cycle, and the
+        SessionStart block keeps asking for work that is already done.
+        """
+        async with self._connection(commit=True) as conn:
+            cursor = await conn.execute(
+                "DELETE FROM rem_findings WHERE id = ?", (finding_id,)
+            )
+            return cursor.rowcount > 0
+
+    async def delete_findings_naming(self, lesson_id: str) -> int:
+        """Drop every finding about one lesson. Returns how many went.
+
+        A finding names its subject in metadata, so a deleted lesson leaves
+        rows that can never be acted on. This runs on delete, which means
+        merging a duplicate pair with the MCP tools clears the finding too,
+        not only merging it in the dashboard.
+        """
+        async with self._connection(commit=True) as conn:
+            cursor = await conn.execute(
+                """
+                DELETE FROM rem_findings WHERE
+                    json_extract(metadata, '$.lesson_id') = ?
+                    OR json_extract(metadata, '$.lesson_a') = ?
+                    OR json_extract(metadata, '$.lesson_b') = ?
+                """,
+                (lesson_id, lesson_id, lesson_id),
+            )
+            return cursor.rowcount
+
     async def get_rem_findings(
         self, project_id: str = "", operation: str = ""
     ) -> list[dict]:
@@ -1195,6 +1231,7 @@ class LessonStore:
             rows = await cursor.fetchall()
         return [
             {
+                "id": row["id"],
                 "project_id": row["project_id"],
                 "operation": row["operation"],
                 "found_at_session": row["found_at_session"],

@@ -632,3 +632,143 @@ class TestLessonLinksAreEditable:
                           json={"trigger": "a new trigger"}).json()
         assert len(body["relationships"]) == 1
         assert body["trigger"] == "a new trigger"
+
+
+class TestActingOnARemFinding:
+    """A recommendation you can perform, not only read.
+
+    The board held 184 findings, every one of them a sentence telling the
+    operator what to do by hand. A link is one edge and nothing else, so it
+    applies in place; a merge deletes a lesson, so it goes through the editor
+    with both on screen. Either way the row has to leave the table, or the
+    count never falls and the SessionStart block keeps asking for work that is
+    already done.
+    """
+
+    @pytest.fixture
+    def seeded(self, client):
+        """One link proposal and one duplicate pair, with the lessons they name."""
+        import asyncio
+
+        from mgcp import web_server
+        from mgcp.models import Lesson
+        from mgcp.rem_cycle import RemFinding
+
+        client.get("/api/health")      # forces ensure_initialized
+        store = web_server.store
+        ids = ("apply-a", "apply-b")
+
+        async def make():
+            for lesson_id in ids:
+                if not await store.get_lesson(lesson_id):
+                    await store.add_lesson(Lesson(
+                        id=lesson_id, trigger=f"{lesson_id} trigger",
+                        action="Act", tags=["t"]))
+            await store.replace_rem_findings("apply-test", "link_suggestions", 1, [
+                RemFinding(
+                    operation="link_suggestions", title="No links at all: apply-a",
+                    description="d",
+                    options=[{"label": "Link to the nearest", "description": "do it"}],
+                    metadata={"lesson_id": "apply-a", "proposed_links": [
+                        {"source_id": "apply-a", "target_id": "apply-b",
+                         "relationship_type": "related", "score": 0.9}]},
+                ),
+            ])
+            await store.replace_rem_findings("apply-test", "duplicate_detection", 1, [
+                RemFinding(
+                    operation="duplicate_detection", title="Same retrieval (100%)",
+                    description="d",
+                    options=[{"label": "Merge into one", "description": "do it"}],
+                    metadata={"lesson_a": "apply-a", "lesson_b": "apply-b",
+                              "usage_a": 3, "usage_b": 40},
+                ),
+            ])
+
+        async def drop():
+            for operation in ("link_suggestions", "duplicate_detection"):
+                await store.replace_rem_findings("apply-test", operation, 1, [])
+            for lesson_id in ids:
+                await store.delete_lesson(lesson_id)
+
+        asyncio.get_event_loop_policy().new_event_loop().run_until_complete(make())
+        yield
+        asyncio.get_event_loop_policy().new_event_loop().run_until_complete(drop())
+
+    def rows(self, client):
+        return client.get("/api/rem/findings?project=apply-test").json()["findings"]
+
+    def test_every_finding_carries_the_id_an_action_needs(self, client, seeded):
+        """Without the row id there is nothing to resolve, so no button works."""
+        ids = [f["id"] for f in self.rows(client)]
+        assert all(isinstance(i, int) for i in ids)
+        assert len(set(ids)) == len(ids)
+
+    def test_dismissing_a_finding_takes_it_off_the_board(self, client, seeded):
+        before = client.get("/api/rem/findings?project=apply-test").json()
+        target = before["findings"][0]["id"]
+        assert client.delete(f"/api/rem/findings/{target}").status_code == 200
+        after = client.get("/api/rem/findings?project=apply-test").json()
+        assert after["total"] == before["total"] - 1
+        assert target not in [f["id"] for f in after["findings"]]
+
+    def test_dismissing_a_finding_that_is_gone_is_not_a_silent_success(self, client):
+        assert client.delete("/api/rem/findings/987654321").status_code == 404
+
+    def test_applying_a_proposed_link_writes_both_directions(self, client, seeded):
+        link = next(f for f in self.rows(client)
+                    if f["operation"] == "link_suggestions")["metadata"]["proposed_links"][0]
+        body = client.post(f"/api/lessons/{link['source_id']}/links",
+                           json={"target": link["target_id"], "type": "related"}).json()
+        assert body["changed"] is True
+        forward = client.get("/api/lessons/apply-a").json()["relationships"]
+        back = client.get("/api/lessons/apply-b").json()["relationships"]
+        assert [r["target"] for r in forward] == ["apply-b"]
+        assert [r["target"] for r in back] == ["apply-a"]
+
+    def test_the_edge_reaches_the_graph_and_not_only_sqlite(self, client, seeded):
+        """The community bridge walks the graph. An edge only in SQLite is
+        invisible to it, which is the half of linking a caller forgets."""
+        from mgcp import web_server
+
+        client.post("/api/lessons/apply-a/links", json={"target": "apply-b"})
+        assert web_server.graph.graph.has_edge("apply-a", "apply-b")
+
+    def test_a_reverse_type_is_not_the_forward_type(self, client, seeded):
+        """B is not a prerequisite of A because A is a prerequisite of B."""
+        client.post("/api/lessons/apply-a/links",
+                    json={"target": "apply-b", "type": "prerequisite"})
+        back = client.get("/api/lessons/apply-b").json()["relationships"]
+        assert [r["type"] for r in back] == ["sequence_next"]
+
+    def test_applying_the_same_link_twice_changes_nothing(self, client, seeded):
+        client.post("/api/lessons/apply-a/links", json={"target": "apply-b"})
+        again = client.post("/api/lessons/apply-a/links",
+                            json={"target": "apply-b"}).json()
+        assert again["changed"] is False
+        assert len(client.get("/api/lessons/apply-a").json()["relationships"]) == 1
+
+    def test_a_link_needs_a_target(self, client, seeded):
+        assert client.post("/api/lessons/apply-a/links", json={}).status_code == 400
+
+    def test_a_link_to_a_lesson_that_does_not_exist_says_so(self, client, seeded):
+        response = client.post("/api/lessons/apply-a/links",
+                               json={"target": "no-such-lesson"})
+        assert response.status_code == 404
+
+    def test_deleting_a_lesson_clears_the_findings_about_it(self, client, seeded):
+        """A merge done with the MCP tools has to clear the board too.
+
+        Both surfaces end in a delete, so the cleanup belongs in the store
+        rather than in whichever surface the operator happened to use. A
+        finding about a lesson that no longer exists can never be acted on.
+
+        It clears findings that NAME the lesson, which the duplicate pair does
+        in both slots. The link proposal here is about the lesson that remains,
+        so it survives with a target that has gone; the next cycle re-derives
+        it, and Dismiss removes it meanwhile.
+        """
+        assert len(self.rows(client)) == 2
+        client.delete("/api/lessons/apply-b")
+        left = self.rows(client)
+        assert [f["operation"] for f in left] == ["link_suggestions"]
+        assert left[0]["lesson_id"] == "apply-a"

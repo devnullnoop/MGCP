@@ -82,32 +82,53 @@ def _find_stale_hook_refs():
     return stale
 
 
-def _find_overdue_rem_operations():
-    """Return overdue REM operations for the current project.
+# The worst finding per operation, with how many that operation holds. Ordered
+# by id, which is insertion order, which is the rank the operation assigned.
+_FINDINGS_SQL = """
+SELECT operation, COUNT(*) AS n,
+       (SELECT title FROM rem_findings inner_f
+        WHERE inner_f.project_id = f.project_id
+          AND inner_f.operation = f.operation
+        ORDER BY inner_f.id LIMIT 1) AS worst
+FROM rem_findings f WHERE f.project_id = ?
+GROUP BY operation ORDER BY n DESC
+"""
 
-    Reads ``~/.mgcp/lessons.db`` (override with ``MGCP_DATA_DIR``). For each
-    rem_state row *belonging to this project*, an operation is overdue when
-    ``project_contexts.session_count >= rem_state.next_due_session``. Rows are
-    scoped by project_id: another project's schedule says nothing about this
-    one's, and reading them unscoped reported whichever project ran REM last.
 
-    Stdlib sqlite3 only, opens in read-only URI mode with a 2-second
-    timeout to avoid blocking the live MCP server's writer. Fails open
-    (returns ``[]``) on any error: missing DB, missing table, missing
-    project row, malformed schema. Enforcement is a safety net, not a
-    tripwire.
+def _read_rem_state():
+    """Overdue REM operations, and the findings the last runs left behind.
 
-    Returns a list of dicts: ``{operation, last_run_session,
-    next_due_session, session_count}``.
+    One read for both, because both answer the same question: is knowledge
+    maintenance keeping up. Reads ``~/.mgcp/lessons.db`` (override with
+    ``MGCP_DATA_DIR``). An operation is overdue when
+    ``project_contexts.session_count >= rem_state.next_due_session``. Rows of
+    both kinds are scoped by project_id: another project's schedule and
+    findings say nothing about this one's, and reading them unscoped reported
+    whichever project ran REM last.
+
+    The findings half exists because detection was never the problem. A cycle
+    found 105 unreachable lessons, printed a fix for each, and the list only
+    existed inside that one tool response. Nothing applies a finding, so the
+    one thing that can close the loop is telling the agent they are waiting, at
+    the start of a session, when it can act.
+
+    Stdlib sqlite3 only, opens in read-only URI mode with a 2-second timeout to
+    avoid blocking the live MCP server's writer. Fails open on any error:
+    missing DB, missing table, missing project row, malformed schema.
+    Enforcement is a safety net, not a tripwire.
+
+    Returns ``{"overdue": [...], "findings": [...]}``, where a finding is
+    ``{operation, count, worst}``.
     """
+    empty = {"overdue": [], "findings": []}
     base = os.environ.get("MGCP_DATA_DIR", str(Path.home() / ".mgcp"))
     db_path = Path(base) / "lessons.db"
     if not db_path.exists():
-        return []
+        return empty
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2.0)
     except sqlite3.Error:
-        return []
+        return empty
     conn.row_factory = sqlite3.Row
     try:
         try:
@@ -117,36 +138,52 @@ def _find_overdue_rem_operations():
                 (project_path,),
             ).fetchone()
         except sqlite3.Error:
-            return []
+            return empty
         if ctx_row is None:
-            return []
+            return empty
         session_count = ctx_row["session_count"] or 0
+        project_id = ctx_row["project_id"]
         try:
             rows = conn.execute(
                 "SELECT operation, last_run_session, next_due_session "
                 "FROM rem_state WHERE project_id = ?",
-                (ctx_row["project_id"],),
+                (project_id,),
             ).fetchall()
         except sqlite3.Error:
             # Includes a pre-migration rem_state with no project_id column:
             # fail open rather than report another project's schedule as ours.
-            return []
+            return empty
+        try:
+            found = conn.execute(_FINDINGS_SQL, (project_id,)).fetchall()
+        except sqlite3.Error:
+            # A store written before findings were kept has no such table.
+            found = []
     finally:
         conn.close()
 
-    overdue = []
-    for r in rows:
-        nxt = r["next_due_session"]
-        if nxt is None:
-            continue
-        if session_count >= nxt:
-            overdue.append({
-                "operation": r["operation"],
-                "last_run_session": r["last_run_session"] or 0,
-                "next_due_session": nxt,
-                "session_count": session_count,
-            })
-    return overdue
+    return {
+        "overdue": _overdue_rows(rows, session_count),
+        "findings": [
+            {"operation": r["operation"], "count": r["n"],
+             "worst": r["worst"] or ""}
+            for r in found
+        ],
+    }
+
+
+def _overdue_rows(rows, session_count):
+    """The schedule rows this project has already passed."""
+    return [
+        {
+            "operation": r["operation"],
+            "last_run_session": r["last_run_session"] or 0,
+            "next_due_session": r["next_due_session"],
+            "session_count": session_count,
+        }
+        for r in rows
+        if r["next_due_session"] is not None
+        and session_count >= r["next_due_session"]
+    ]
 
 
 warning_blocks = []
@@ -215,32 +252,48 @@ if _contests >= 3 and _contests * 2 >= max(_fires, 1):
         "flagged sentence next to the recorded reasoning."
     )
 
-overdue = _find_overdue_rem_operations()
-if overdue:
-    lines = ["## ⚠️ REM Operations Overdue", ""]
-    lines.append(
-        "The following REM cycle operations are past their next_due_session "
-        "for this project. REM has no auto-trigger; without manual invocation "
-        "the schedule drifts unboundedly."
-    )
-    lines.append("")
-    for op in overdue:
-        gap = op["session_count"] - op["next_due_session"]
+rem = _read_rem_state()
+if rem["findings"] or rem["overdue"]:
+    lines = ["## ⚠️ Knowledge maintenance", ""]
+    if rem["findings"]:
+        total = sum(f["count"] for f in rem["findings"])
         lines.append(
-            f"- `{op['operation']}` — last run session "
-            f"{op['last_run_session']}, due at session "
-            f"{op['next_due_session']} (current session "
-            f"{op['session_count']}, {gap} session{'s' if gap != 1 else ''} overdue)"
+            f"{total} REM finding(s) are open on this project, worst first. "
+            f"They are stored, so they are waiting whether or not a cycle is "
+            f"due, and nothing applies one for you."
         )
-    lines.append("")
-    lines.append(
-        "**Action:** call `mcp__mgcp__rem_run` with no arguments to run every "
-        "due operation now, READ the findings, and act on the high-signal "
-        "ones (intent_calibration suggestions, duplicate merges, staleness "
-        "warnings). If commit-time enforcement of REM execution would help, "
-        "enable the seeded-but-default-off `rem-required-before-commit` rule "
-        "via `mcp__mgcp__toggle_enforcement_rule`."
-    )
+        lines.append("")
+        for f in rem["findings"]:
+            lines.append(f"- `{f['operation']}`: {f['count']}, worst is {f['worst']}")
+        lines.append("")
+        lines.append(
+            "**Act on at least the worst one.** `mcp__mgcp__rem_report` lists "
+            "them, and the dashboard's REM view shows all of them. A trigger "
+            "collision merges with `refine_lesson` to absorb the other "
+            "trigger's words, then `delete_lesson`. A lesson retrieval never "
+            "reaches needs `refine_lesson(new_trigger=...)`. An isolated one "
+            "needs `link_lessons`."
+        )
+    if rem["overdue"]:
+        lines.append("")
+        lines.append(
+            "Operations past their next_due_session for this project. REM has "
+            "no auto-trigger, so the schedule drifts until something calls it:"
+        )
+        lines.append("")
+        for op in rem["overdue"]:
+            gap = op["session_count"] - op["next_due_session"]
+            lines.append(
+                f"- `{op['operation']}` last ran at session "
+                f"{op['last_run_session']}, due at {op['next_due_session']}, "
+                f"now at {op['session_count']}, {gap} "
+                f"session{'s' if gap != 1 else ''} overdue"
+            )
+        lines.append("")
+        lines.append(
+            "Call `mcp__mgcp__rem_run` with no arguments to run every due "
+            "operation now, and READ what it returns."
+        )
     warning_blocks.append("\n".join(lines))
 
 warning = ("\n\n".join(warning_blocks) + "\n\n") if warning_blocks else ""

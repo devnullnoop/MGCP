@@ -167,11 +167,14 @@ def test_relative_path_references_ignored(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _seed_rem_db(home: Path, project_path: str, session_count: int, rows: list[dict]):
-    """Create ~/.mgcp/lessons.db with project_contexts + rem_state rows.
+def _seed_rem_db(home: Path, project_path: str, session_count: int,
+                 rows: list[dict], findings: list[dict] | None = None):
+    """Create ~/.mgcp/lessons.db with project_contexts, rem_state and findings.
 
-    rows: list of dicts with keys: operation, last_run_session,
-    next_due_session.
+    rows: dicts with keys operation, last_run_session, next_due_session.
+    findings: dicts with keys operation, title, in the order the operation
+    ranked them. None leaves the table out entirely, which is what a store
+    written before findings were kept looks like.
     """
     db_dir = home / ".mgcp"
     db_dir.mkdir(parents=True, exist_ok=True)
@@ -228,6 +231,30 @@ def _seed_rem_db(home: Path, project_path: str, session_count: int, rows: list[d
                     r.get("next_due_session"),
                 ),
             )
+        if findings is not None:
+            conn.execute(
+                """
+                CREATE TABLE rem_findings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    found_at_session INTEGER NOT NULL DEFAULT 0,
+                    found_at TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    options JSON,
+                    recommended INTEGER,
+                    metadata JSON
+                )
+                """
+            )
+            for f in findings:
+                conn.execute(
+                    "INSERT INTO rem_findings (project_id, operation, found_at, "
+                    " title, description) VALUES (?, ?, ?, ?, ?)",
+                    (f.get("project_id", "test-id"), f["operation"],
+                     "2026-01-01T00:00:00Z", f["title"], "d"),
+                )
         conn.commit()
     finally:
         conn.close()
@@ -242,7 +269,7 @@ def test_no_rem_warning_when_db_absent(tmp_path):
 
     output = _run_hook(home, project)
     ctx = output["hookSpecificOutput"]["additionalContext"]
-    assert "REM Operations Overdue" not in ctx
+    assert "Knowledge maintenance" not in ctx
     assert "Session Startup" in ctx
 
 
@@ -264,7 +291,7 @@ def test_no_rem_warning_when_no_overdue(tmp_path):
 
     output = _run_hook(home, project)
     ctx = output["hookSpecificOutput"]["additionalContext"]
-    assert "REM Operations Overdue" not in ctx
+    assert "Knowledge maintenance" not in ctx
 
 
 def test_rem_warning_when_operation_overdue(tmp_path):
@@ -284,7 +311,7 @@ def test_rem_warning_when_operation_overdue(tmp_path):
 
     output = _run_hook(home, project)
     ctx = output["hookSpecificOutput"]["additionalContext"]
-    assert "REM Operations Overdue" in ctx
+    assert "Knowledge maintenance" in ctx
     assert "intent_calibration" in ctx
     assert "rem_run" in ctx
 
@@ -308,7 +335,7 @@ def test_rem_warning_lists_all_overdue(tmp_path):
 
     output = _run_hook(home, project)
     ctx = output["hookSpecificOutput"]["additionalContext"]
-    assert "REM Operations Overdue" in ctx
+    assert "Knowledge maintenance" in ctx
     assert "staleness_scan" in ctx
     assert "duplicate_detection" in ctx
     assert "context_summary" not in ctx
@@ -340,7 +367,7 @@ def test_no_rem_warning_from_another_projects_schedule(tmp_path):
 
     output = _run_hook(home, project)
     ctx = output["hookSpecificOutput"]["additionalContext"]
-    assert "REM Operations Overdue" not in ctx
+    assert "Knowledge maintenance" not in ctx
     assert "staleness_scan" not in ctx
 
 
@@ -361,7 +388,7 @@ def test_no_rem_warning_when_project_not_in_db(tmp_path):
 
     output = _run_hook(home, project)
     ctx = output["hookSpecificOutput"]["additionalContext"]
-    assert "REM Operations Overdue" not in ctx
+    assert "Knowledge maintenance" not in ctx
 
 
 def test_malformed_db_fails_open(tmp_path):
@@ -375,27 +402,116 @@ def test_malformed_db_fails_open(tmp_path):
 
     output = _run_hook(home, project)
     ctx = output["hookSpecificOutput"]["additionalContext"]
-    assert "REM Operations Overdue" not in ctx
+    assert "Knowledge maintenance" not in ctx
     assert "Session Startup" in ctx
 
 
-def test_rem_warning_message_includes_toggle_hint(tmp_path):
-    """The action footer should mention toggle_enforcement_rule for opt-in."""
+def test_the_block_names_the_open_findings(tmp_path):
+    """Detection was never the problem. Nothing told the agent they exist.
+
+    A cycle found 105 unreachable lessons and printed a fix for each, and the
+    list lived only inside that one tool response. This block is the channel
+    that reaches a session at the moment it can act.
+    """
     home = tmp_path / "home"
     home.mkdir()
     project = tmp_path / "proj"
     project.mkdir()
     _seed_rem_db(
-        home,
-        str(project),
-        session_count=20,
-        rows=[{"operation": "intent_calibration", "last_run_session": 10, "next_due_session": 16}],
+        home, str(project), session_count=5,
+        rows=[{"operation": "staleness_scan", "last_run_session": 5,
+               "next_due_session": 99}],
+        findings=[
+            {"operation": "duplicate_detection", "title": "Same retrieval (100%): a / b"},
+            {"operation": "duplicate_detection", "title": "Same retrieval (67%): c / d"},
+            {"operation": "staleness_scan", "title": "Retrieval never reaches: lonely"},
+        ],
     )
 
-    output = _run_hook(home, project)
-    ctx = output["hookSpecificOutput"]["additionalContext"]
-    assert "toggle_enforcement_rule" in ctx
-    assert "rem-required-before-commit" in ctx
+    ctx = _run_hook(home, project)["hookSpecificOutput"]["additionalContext"]
+    assert "Knowledge maintenance" in ctx
+    assert "3 REM finding(s) are open" in ctx
+    assert "`duplicate_detection`: 2" in ctx
+    assert "Same retrieval (100%): a / b" in ctx, "the worst one must be named"
+    assert "Same retrieval (67%)" not in ctx, "only the worst per operation"
+
+
+def test_findings_are_reported_even_when_nothing_is_due(tmp_path):
+    """They are stored, so they wait whether or not a cycle is due.
+
+    The old block fired only on an overdue schedule, so a corpus with 105 open
+    findings and a current schedule said nothing at all.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    project = tmp_path / "proj"
+    project.mkdir()
+    _seed_rem_db(
+        home, str(project), session_count=5,
+        rows=[{"operation": "staleness_scan", "last_run_session": 5,
+               "next_due_session": 99}],
+        findings=[{"operation": "staleness_scan", "title": "Retrieval never reaches: x"}],
+    )
+
+    ctx = _run_hook(home, project)["hookSpecificOutput"]["additionalContext"]
+    assert "1 REM finding(s) are open" in ctx
+    assert "next_due_session" not in ctx, "nothing is overdue, so say nothing about it"
+
+
+def test_the_block_names_the_tool_for_each_finding_kind(tmp_path):
+    """A finding with no call to make is an observation, not a prompt."""
+    home = tmp_path / "home"
+    home.mkdir()
+    project = tmp_path / "proj"
+    project.mkdir()
+    _seed_rem_db(
+        home, str(project), session_count=5,
+        rows=[{"operation": "staleness_scan", "last_run_session": 5,
+               "next_due_session": 99}],
+        findings=[{"operation": "staleness_scan", "title": "Retrieval never reaches: x"}],
+    )
+
+    ctx = _run_hook(home, project)["hookSpecificOutput"]["additionalContext"]
+    for call in ("refine_lesson", "delete_lesson", "link_lessons", "rem_report"):
+        assert call in ctx, f"{call} is the remedy for one kind and is not named"
+
+
+def test_a_store_without_the_findings_table_still_reports_overdue(tmp_path):
+    """A store written before findings were kept must not fail the whole block."""
+    home = tmp_path / "home"
+    home.mkdir()
+    project = tmp_path / "proj"
+    project.mkdir()
+    _seed_rem_db(
+        home, str(project), session_count=20,
+        rows=[{"operation": "intent_calibration", "last_run_session": 10,
+               "next_due_session": 16}],
+        findings=None,
+    )
+
+    ctx = _run_hook(home, project)["hookSpecificOutput"]["additionalContext"]
+    assert "Knowledge maintenance" in ctx
+    assert "4 sessions overdue" in ctx
+    assert "REM finding(s) are open" not in ctx
+
+
+def test_another_projects_findings_are_not_reported_here(tmp_path):
+    """Findings are scoped by project_id, like the schedule beside them."""
+    home = tmp_path / "home"
+    home.mkdir()
+    project = tmp_path / "proj"
+    project.mkdir()
+    _seed_rem_db(
+        home, str(project), session_count=5,
+        rows=[{"operation": "staleness_scan", "last_run_session": 5,
+               "next_due_session": 99}],
+        findings=[{"operation": "staleness_scan", "title": "someone else's problem",
+                   "project_id": "a-different-project"}],
+    )
+
+    ctx = _run_hook(home, project)["hookSpecificOutput"]["additionalContext"]
+    assert "someone else's problem" not in ctx
+    assert "REM finding(s) are open" not in ctx
 
 
 class TestGateContestFlag:

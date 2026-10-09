@@ -691,15 +691,24 @@ async def update_lesson(lesson_id: str, data: dict[str, Any]) -> dict[str, Any]:
     if not lesson:
         return {"error": "Lesson not found"}
 
-    # Update allowed fields
-    if "trigger" in data:
-        lesson.trigger = data["trigger"]
-    if "action" in data:
-        lesson.action = data["action"]
+    # A chain of one `if "x" in data` per field is a dispatch table written
+    # long, and it grew a branch per field until the complexity gate refused it.
+    for field in ("trigger", "action", "tags"):
+        if field in data:
+            setattr(lesson, field, data[field])
     if "rationale" in data:
+        # "" means the lesson has no rationale, not an empty one.
         lesson.rationale = data["rationale"] or None
-    if "tags" in data:
-        lesson.tags = data["tags"]
+    if "relationships" in data:
+        # Pairs of target and type, so editing one link cannot silently
+        # downgrade another from prerequisite to related. A REM link_suggestions
+        # finding is actioned through this field rather than through a route of
+        # its own, which also gives every lesson link editing.
+        from .models import Relationship
+
+        lesson.relationships = [
+            Relationship(**item) for item in data["relationships"] or []
+        ]
 
     # Increment version on edit; the pre-edit value is the CAS token.
     expected_version = lesson.version

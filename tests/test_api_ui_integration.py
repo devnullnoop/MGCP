@@ -564,3 +564,71 @@ class TestRemFindingsEndpoint:
         """A finding with no action to take is just an observation."""
         body = client.get("/api/rem/findings?operation=link_suggestions").json()
         assert body["findings"][0]["recommended"]["label"] == "Fix"
+
+
+class TestLessonLinksAreEditable:
+    """A REM link_suggestions finding is actioned through the lesson editor.
+
+    An isolated lesson is invisible to the community bridge, and the dashboard
+    had no way to link one. Rather than a route of its own, the field joins the
+    endpoint that already edits a lesson, which gives every lesson link editing.
+    """
+
+    @pytest.fixture
+    def pair(self, client):
+        import asyncio
+
+        from mgcp import web_server
+        from mgcp.models import Lesson
+
+        client.get("/api/health")      # forces ensure_initialized
+        store = web_server.store
+
+        async def make():
+            for lesson_id in ("link-edit-a", "link-edit-b"):
+                if not await store.get_lesson(lesson_id):
+                    await store.add_lesson(Lesson(
+                        id=lesson_id, trigger=f"{lesson_id} trigger",
+                        action="Act", tags=["t"]))
+
+        async def drop():
+            for lesson_id in ("link-edit-a", "link-edit-b"):
+                await store.delete_lesson(lesson_id)
+
+        asyncio.get_event_loop_policy().new_event_loop().run_until_complete(make())
+        yield
+        asyncio.get_event_loop_policy().new_event_loop().run_until_complete(drop())
+
+    def test_a_link_can_be_added(self, client, pair):
+        body = client.put("/api/lessons/link-edit-a", json={
+            "relationships": [{"target": "link-edit-b", "type": "related"}],
+        }).json()
+        assert "error" not in body
+        assert [(r["target"], r["type"]) for r in body["relationships"]] == [
+            ("link-edit-b", "related")]
+
+    def test_the_type_survives_the_round_trip(self, client, pair):
+        """A bare target would downgrade every link to related on the next save."""
+        client.put("/api/lessons/link-edit-a", json={
+            "relationships": [{"target": "link-edit-b", "type": "prerequisite"}],
+        })
+        again = client.get("/api/lessons/link-edit-a").json()
+        assert again["relationships"][0]["type"] == "prerequisite"
+
+    def test_an_empty_list_removes_every_link(self, client, pair):
+        client.put("/api/lessons/link-edit-a", json={
+            "relationships": [{"target": "link-edit-b", "type": "related"}],
+        })
+        body = client.put("/api/lessons/link-edit-a",
+                          json={"relationships": []}).json()
+        assert body["relationships"] == []
+
+    def test_omitting_the_field_leaves_links_alone(self, client, pair):
+        """Editing a trigger must not silently drop the lesson's links."""
+        client.put("/api/lessons/link-edit-a", json={
+            "relationships": [{"target": "link-edit-b", "type": "related"}],
+        })
+        body = client.put("/api/lessons/link-edit-a",
+                          json={"trigger": "a new trigger"}).json()
+        assert len(body["relationships"]) == 1
+        assert body["trigger"] == "a new trigger"

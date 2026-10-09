@@ -114,15 +114,22 @@ export function wireSort(root, rows, columns, mount, opts = {}) {
 
 // ---------------------------------------------------------------- router ----
 
+/* `#/curate?lesson=foo` routes to curate and hands it {lesson: 'foo'}.
+ * One view used to mean one hash, so a finding in the REM view could name a
+ * lesson and had no way to open it anywhere. */
 function currentRoute() {
-  const id = (location.hash || '').replace(/^#\/?/, '') || VIEWS[0].id;
-  return VIEWS.find((v) => v.id === id) || VIEWS[0];
+  const raw = (location.hash || '').replace(/^#\/?/, '');
+  const [id, query] = raw.split('?');
+  return {
+    view: VIEWS.find((v) => v.id === (id || VIEWS[0].id)) || VIEWS[0],
+    params: Object.fromEntries(new URLSearchParams(query || '')),
+  };
 }
 
 let teardown = null;
 
 async function render() {
-  const view = currentRoute();
+  const { view, params } = currentRoute();
   const main = document.getElementById('view');
 
   document.querySelectorAll('#nav button').forEach((b) => {
@@ -135,7 +142,7 @@ async function render() {
   main.style.opacity = '0.55';
 
   try {
-    teardown = await view.render(main) || null;
+    teardown = await view.render(main, params) || null;
   } catch (err) {
     main.innerHTML = `<div class="callout"><b>${esc(view.title)} could not load.</b><br>
       ${esc(err.message)}<br><br>

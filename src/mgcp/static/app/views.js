@@ -619,7 +619,10 @@ async function rem(main) {
         `Worst first. A run used to keep only how many findings it had, so a cycle that found 105
          unused lessons recommended a fix for each and then discarded every one. The next run found
          the same 105 again. Each run now replaces its own rows, so this is the state of the corpus
-         now and not a log: the same unused lesson found in four cycles is one problem.`,
+         now and not a log: the same unused lesson found in four cycles is one problem.
+         Nothing applies a finding for you. The Edit column opens each lesson the finding names in
+         the Curate editor, where the trigger and the links are the two fields these findings are
+         about.`,
         '<div id="t-found"></div>')}
     </div>
 
@@ -645,6 +648,14 @@ async function rem(main) {
         : r.never_run ? status('warn', 'never run') : status('good', 'current')) },
   ];
 
+  /* Every lesson a finding names, so the row can open it.
+   * A finding used to name two ids and give no way to reach either: you read
+   * them here, remembered them, switched to Curate and searched by hand. */
+  const findingLessons = (f) => {
+    const m = f.metadata || {};
+    return [m.lesson_id, m.lesson_a, m.lesson_b].filter(Boolean);
+  };
+
   const foundCols = [
     { key: 'operation', label: 'Operation',
       render: (r) => `<span class="pill">${esc(r.operation)}</span>` },
@@ -652,7 +663,10 @@ async function rem(main) {
     { key: 'action', label: 'Recommended',
       render: (r) => (r.recommended
         ? `<span class="id">${esc(r.recommended.label)}</span>` : '—') },
-    { key: 'session', label: 'Session', num: true },
+    { key: 'open', label: 'Edit',
+      render: (r) => (findingLessons(r).map((id) =>
+        `<a href="#/curate?lesson=${encodeURIComponent(id)}">${esc(id)}</a>`)
+        .join(' · ') || '—') },
   ];
 
   const draw = () => {
@@ -726,7 +740,7 @@ async function writeJSON(path, method, body) {
   return text ? JSON.parse(text) : {};
 }
 
-async function curate(main) {
+async function curate(main, params = {}) {
   const [effect, intents] = await Promise.all([
     api('/api/effectiveness', { fresh: true }),
     api('/api/intent-config', { fresh: true }).catch(() => ({ intents: [] })),
@@ -738,7 +752,8 @@ async function curate(main) {
       <code>lessons.db</code> and <code>intent_config.json</code> — the same files the MCP tools
       and the hooks read, so a change lands on the next query, not the next restart.`)}
     <div class="filters">
-      <label>Find lesson <input id="cq" type="search" placeholder="id, trigger or tag"></label>
+      <label>Find lesson <input id="cq" type="search" placeholder="id, trigger or tag"
+        value="${esc(params.lesson || '')}"></label>
       <span class="spacer"></span><span class="note" id="ccount"></span>
     </div>
     <div class="grid cols-2">
@@ -753,6 +768,14 @@ async function curate(main) {
   const list = document.getElementById('c-list');
   const editor = document.getElementById('c-edit');
   const search = document.getElementById('cq');
+
+  /* `target:type` pairs, so saving one link cannot silently downgrade another
+   * from prerequisite to related. A bare id means related. */
+  const parseLinks = (text) => text.split(',').map((x) => x.trim()).filter(Boolean)
+    .map((pair) => {
+      const [target, type] = pair.split(':').map((x) => x.trim());
+      return { target, type: type || 'related' };
+    }).filter((r) => r.target);
 
   const paintList = () => {
     const n = search.value.trim().toLowerCase();
@@ -788,6 +811,11 @@ async function curate(main) {
       <textarea id="f-rationale" rows="3">${esc(lesson.rationale || '')}</textarea>
       <label class="note">Tags — comma separated</label>
       <input id="f-tags" type="text" value="${esc((lesson.tags || []).join(', '))}">
+      <label class="note">Links — <code>target:type</code>, comma separated. A lesson with no
+        links is invisible to the community bridge, which is what a REM
+        <code>link_suggestions</code> finding means.</label>
+      <input id="f-links" type="text" value="${esc((lesson.relationships || [])
+        .map((r) => `${r.target}:${r.type || 'related'}`).join(', '))}">
       <div style="display:flex;gap:0.5rem;margin-top:0.75rem;align-items:center">
         <button class="ghost" id="f-save" type="button">Save</button>
         <button class="ghost" id="f-del" type="button">Delete</button>
@@ -802,6 +830,7 @@ async function curate(main) {
           action: document.getElementById('f-action').value,
           rationale: document.getElementById('f-rationale').value,
           tags: document.getElementById('f-tags').value.split(',').map((x) => x.trim()).filter(Boolean),
+          relationships: parseLinks(document.getElementById('f-links').value),
         });
         msg.innerHTML = status('good', 'saved');
       } catch (err) { msg.innerHTML = status('bad', err.message.slice(0, 120)); }
@@ -818,6 +847,8 @@ async function curate(main) {
       } catch (err) { msg.innerHTML = status('bad', err.message.slice(0, 120)); }
     });
   };
+
+  if (params.lesson) load(params.lesson);
 
   document.getElementById('c-intents').innerHTML = table(intentList, [
     { key: 'name', label: 'Intent', render: (r) => `<span class="id">${esc(r.name)}</span>` },

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: a REM finding now reaches somebody
+
+Hook payload 24. Net +100 source lines, 2.3 added per line removed.
+
+- **Nothing applies a finding, and nothing told you one existed.** Detection,
+  ranking and storage all landed earlier today, and the only way to see a
+  finding was to call `rem_run` while the operation happened to be due. The
+  dashboard listed them read-only and the Curate editor knew nothing about them.
+- **SessionStart names them.** `_read_rem_state` replaces
+  `_find_overdue_rem_operations` and makes ONE database read, because overdue
+  operations and stored findings answer the same question. The block reports the
+  count per operation, the worst one by name, and the call that acts on each
+  kind. It fires whether or not a cycle is due, so a corpus with 105 open
+  findings and a current schedule is no longer silent.
+- The stale advice to enable `rem-required-before-commit` is gone, along with
+  the test that pinned it. That rule has been enabled and enforcing since this
+  morning.
+- **A finding row opens its lessons.** Each lesson a finding names links to
+  `#/curate?lesson=<id>`. Routes carry parameters now: `currentRoute` splits the
+  hash on `?`. Before this a finding could name two lesson ids and give no way
+  to reach either, so you read them, remembered them, switched view and searched
+  by hand.
+- **`PUT /api/lessons/{id}` edits relationships**, and the Curate editor has the
+  field. No merge route and no link route were added: a merge is the trigger
+  field plus the delete button that were already there, and a link is now a
+  field on the endpoint that already edits a lesson. That gives every lesson
+  link editing rather than only the ones REM mentions.
+- Links are `target:type` pairs, so saving one cannot silently downgrade another
+  from `prerequisite` to `related`. Omitting the field leaves links alone, so
+  editing a trigger does not drop them.
+- Two if-chains became loops after the complexity gate refused them:
+  `update_lesson` had one branch per editable field, and `_read_rem_state` kept
+  its row shaping inline.
+
 ### Changed: duplicate detection ranks trigger overlap, not similarity
 
 - **Two copies of one rule sat in the store for nine months.**

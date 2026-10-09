@@ -165,7 +165,8 @@ jobs that have never run are labelled in words, not only by colour. Beside them,
 what the last run of each job actually found, worst first, with the action it
 recommends. A run used to keep only how many findings it had, so a job that
 found 105 unreachable notes recommended a fix for each and then threw the list
-away, and the next run found the same 105 again. Above the
+away, and the next run found the same 105 again. Each row links the notes it
+names into the Curate editor, because nothing applies a finding for you. Above the
 schedule, net source lines per month for each tracked project that is a git
 repository. Net means added minus removed, so a month that removed more than it
 wrote sits below the line. It skips the same paths the `commit-diff-budget` rule

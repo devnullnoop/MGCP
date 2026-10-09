@@ -179,6 +179,33 @@ CREATE TABLE IF NOT EXISTS rem_state (
     PRIMARY KEY (project_id, operation)
 );
 
+-- The findings themselves, not just how many there were.
+--
+-- rem_state keeps one row per (project, operation) holding the count. For a
+-- long time that was all a cycle left behind, so a run that found 105 unused
+-- lessons recommended a fix for each and then discarded every one of them. The
+-- next run rediscovered the same 105 and discarded them again. Nothing between
+-- runs could show the list, including the dashboard.
+--
+-- A run REPLACES its own rows for that project and operation. These are a
+-- snapshot of what is true now, not an event log: the same unused lesson found
+-- in four cycles is one problem, not four.
+CREATE TABLE IF NOT EXISTS rem_findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    found_at_session INTEGER NOT NULL DEFAULT 0,
+    found_at TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    options JSON,
+    recommended INTEGER,
+    metadata JSON
+);
+
+CREATE INDEX IF NOT EXISTS idx_rem_findings_scope
+    ON rem_findings(project_id, operation);
+
 CREATE TABLE IF NOT EXISTS soliloquies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TEXT NOT NULL,
@@ -1103,6 +1130,83 @@ class LessonStore:
                     next_due,
                 ),
             )
+
+    async def replace_rem_findings(
+        self,
+        project_id: str,
+        operation: str,
+        session_number: int,
+        findings: list,
+    ) -> int:
+        """Store this run's findings for one operation, replacing the last run's.
+
+        Replace and not append. The same unused lesson found in four cycles is
+        one problem, not four, and an append would turn a corpus that is not
+        improving into a growing table that looks like activity.
+
+        Returns how many rows were written.
+        """
+        now = datetime.now(UTC).isoformat()
+        rows = [
+            (
+                project_id, operation, session_number, now,
+                getattr(f, "title", ""), getattr(f, "description", ""),
+                json.dumps(getattr(f, "options", None) or []),
+                getattr(f, "recommended", None),
+                json.dumps(getattr(f, "metadata", None) or {}),
+            )
+            for f in findings
+        ]
+        async with self._connection(commit=True) as conn:
+            await conn.execute(
+                "DELETE FROM rem_findings WHERE project_id = ? AND operation = ?",
+                (project_id, operation),
+            )
+            if rows:
+                await conn.executemany(
+                    """
+                    INSERT INTO rem_findings
+                        (project_id, operation, found_at_session, found_at,
+                         title, description, options, recommended, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+        return len(rows)
+
+    async def get_rem_findings(
+        self, project_id: str = "", operation: str = ""
+    ) -> list[dict]:
+        """Stored findings, newest run first. Empty filters mean every row."""
+        where, params = [], []
+        if project_id:
+            where.append("project_id = ?")
+            params.append(project_id)
+        if operation:
+            where.append("operation = ?")
+            params.append(operation)
+        sql = "SELECT * FROM rem_findings"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY found_at DESC, id ASC"
+
+        async with self._connection() as conn:
+            cursor = await conn.execute(sql, params)
+            rows = await cursor.fetchall()
+        return [
+            {
+                "project_id": row["project_id"],
+                "operation": row["operation"],
+                "found_at_session": row["found_at_session"],
+                "found_at": row["found_at"],
+                "title": row["title"],
+                "description": row["description"],
+                "options": json.loads(row["options"] or "[]"),
+                "recommended": row["recommended"],
+                "metadata": json.loads(row["metadata"] or "{}"),
+            }
+            for row in rows
+        ]
 
     # =========================================================================
     # Workflow Methods

@@ -80,7 +80,7 @@ REST API for managing lessons, projects, and viewing telemetry.
 Read-only views over the three stores, used by the instrument panel:
 `/api/signal`, `/api/retrieval/timeseries`, `/api/retrieval/misses`,
 `/api/effectiveness`, `/api/gate-audit`, `/api/enforcement/rules`,
-`/api/rem/state`, `/api/soliloquies`, `/api/code-size`
+`/api/rem/state`, `/api/rem/findings`, `/api/soliloquies`, `/api/code-size`
 
 ### UI
 
@@ -1402,6 +1402,59 @@ async def get_rem_state_api() -> list[dict[str, Any]]:
                 "never_run": state is None,
             })
     return out
+
+
+@app.get("/api/rem/findings")
+async def get_rem_findings_api(
+    project: str = "", operation: str = "", limit: int = 400
+) -> dict[str, Any]:
+    """What the last REM cycle found, per project and operation, worst first.
+
+    These used to exist only inside one tool response. A run that found 105
+    unused lessons recommended a fix for each and then discarded every one,
+    because only `{"finding_count": N}` was kept. The next run found the same
+    105 and discarded them again, so no surface could show the list and no
+    progress was measurable between cycles.
+
+    Each run REPLACES its own rows, so this is the current state of the corpus
+    and not an event log. The same unused lesson found in four cycles is one
+    problem, not four.
+    """
+    await ensure_initialized()
+    names = {p.project_id: p.project_name
+             for p in await store.get_all_project_contexts()}
+    wanted = ""
+    if project:
+        wanted = next((pid for pid, name in names.items()
+                       if project in (pid, name)), project)
+
+    rows = await store.get_rem_findings(wanted, operation)
+    by_operation: dict[str, int] = {}
+    for row in rows:
+        by_operation[row["operation"]] = by_operation.get(row["operation"], 0) + 1
+
+    return {
+        "total": len(rows),
+        "by_operation": by_operation,
+        "findings": [
+            {
+                "project": names.get(row["project_id"], row["project_id"]),
+                "project_id": row["project_id"],
+                "operation": row["operation"],
+                "session": row["found_at_session"],
+                "found_at": row["found_at"],
+                "title": row["title"],
+                "description": row["description"],
+                "recommended": (
+                    (row["options"] or [{}])[row["recommended"] or 0]
+                    if row["options"] else None
+                ),
+                "lesson_id": (row["metadata"] or {}).get("lesson_id"),
+                "metadata": row["metadata"],
+            }
+            for row in rows[:max(1, min(limit, 2000))]
+        ],
+    }
 
 
 @app.get("/api/soliloquies")

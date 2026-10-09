@@ -110,4 +110,7 @@ DEFAULT_SCHEDULES: dict[str, OperationSchedule] = {
     ),
     "intent_calibration": OperationSchedule(strategy="linear", interval=10),
     "gate_audit_review": OperationSchedule(strategy="linear", interval=10),
+    # An unlinked lesson is unreachable by both retrieval paths, so this is
+    # worth running as often as the staleness scan that finds the same lessons.
+    "link_suggestions": OperationSchedule(strategy="linear", interval=5),
 }

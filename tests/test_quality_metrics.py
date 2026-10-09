@@ -898,3 +898,79 @@ def test_the_declared_exemptions_are_the_ones_we_chose():
         "src/mgcp/init_project.py:main",
     ], sorted(exempt)
     assert all(len(reason) > 20 for reason in exempt.values())
+
+
+SWALLOWED = (
+    "def f():\n"
+    "    try:\n"
+    "        return 1\n"
+    "    except Exception:\n"
+    "        pass\n"
+)
+
+
+def _repo_with(tmp_path, body):
+    """A repository whose committed keep.py holds `body`."""
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    (tmp_path / "keep.py").write_text(body)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
+    _commit(tmp_path, "base")
+
+
+def test_a_pre_existing_banned_pattern_does_not_block_an_unrelated_change(
+    tmp_path, capsys
+):
+    """The ratchet's own rule, which this check used to break.
+
+    Every hit in the whole file was reported, so an `except: pass` that predated
+    the gate refused any commit that touched its file. In this project an atexit
+    handler with two of them blocked a change to a table definition 800 lines
+    away. A gate that refuses work the author did not do is a gate that gets
+    bypassed, and the first bypass is permanent.
+    """
+    _repo_with(tmp_path, SWALLOWED)
+    (tmp_path / "keep.py").write_text(SWALLOWED + "\nUNRELATED = 2\n")
+
+    assert qm.main(["--base", "HEAD", "--cwd", str(tmp_path)]) == 0
+    assert "no violations" in capsys.readouterr().out
+
+
+def test_adding_one_more_of_the_same_pattern_is_still_refused(tmp_path, capsys):
+    """The pair to the test above. Held at its count, not forgiven."""
+    _repo_with(tmp_path, SWALLOWED)
+    (tmp_path / "keep.py").write_text(SWALLOWED + SWALLOWED.replace("def f", "def g"))
+
+    assert qm.main(["--base", "HEAD", "--cwd", str(tmp_path)]) == 1
+    out = capsys.readouterr().out
+    assert "swallowed_error" in out
+    assert "1 -> 2" in out, "the report has to say it went up, not just that it is there"
+    # Counts alone do not say WHERE, and the anchor line is the first hit.
+    assert "every hit is at line 4, 9" in out
+
+
+def test_removing_a_banned_pattern_is_not_a_violation(tmp_path, capsys):
+    _repo_with(tmp_path, SWALLOWED + SWALLOWED.replace("def f", "def g"))
+    (tmp_path / "keep.py").write_text(SWALLOWED)
+
+    assert qm.main(["--base", "HEAD", "--cwd", str(tmp_path)]) == 0
+
+
+def test_a_new_file_has_every_pattern_counted(tmp_path, capsys):
+    """A file with no base version has nothing to be held at."""
+    _repo_with(tmp_path, "x = 1\n")
+    (tmp_path / "fresh.py").write_text(SWALLOWED)
+
+    assert qm.main(["--base", "HEAD", "--cwd", str(tmp_path)]) == 1
+    assert "swallowed_error" in capsys.readouterr().out
+
+
+def test_moving_a_banned_pattern_down_the_file_is_not_an_addition(tmp_path, capsys):
+    """Why the comparison counts per pattern instead of matching line numbers.
+
+    Any edit above a hit moves its line number, so a line-keyed comparison
+    would read an untouched `except: pass` as new on every commit.
+    """
+    _repo_with(tmp_path, SWALLOWED)
+    (tmp_path / "keep.py").write_text("HEADER = 1\n" * 30 + SWALLOWED)
+
+    assert qm.main(["--base", "HEAD", "--cwd", str(tmp_path)]) == 0

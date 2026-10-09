@@ -159,9 +159,13 @@ fired, and every disputed refusal with its triggering sentence and the reasoning
 given.
 ![Enforcement](docs/screenshots/instrument-enforcement.png)
 
-### REM: what maintenance is due, and is the code growing?
+### REM: what maintenance is due, what it found, and is the code growing?
 Per project and per job, counted in that project's own sessions. Overdue jobs and
-jobs that have never run are labelled in words, not only by colour. Above the
+jobs that have never run are labelled in words, not only by colour. Beside them,
+what the last run of each job actually found, worst first, with the action it
+recommends. A run used to keep only how many findings it had, so a job that
+found 105 unreachable notes recommended a fix for each and then threw the list
+away, and the next run found the same 105 again. Above the
 schedule, net source lines per month for each tracked project that is a git
 repository. Net means added minus removed, so a month that removed more than it
 wrote sits below the line. It skips the same paths the `commit-diff-budget` rule
@@ -987,6 +991,7 @@ Every release before 3.0, from 1.0 to 2.13, is in [CHANGELOG.md](CHANGELOG.md).
 | `GET /api/projects` | All projects |
 | `GET /api/graph` | Graph visualization data |
 | `GET /api/code-size` | Net source lines per commit, per tracked git repository |
+| `GET /api/rem/findings` | What the last maintenance run found, worst first |
 | `GET /docs` | OpenAPI documentation |
 
 ## Beyond Software Development

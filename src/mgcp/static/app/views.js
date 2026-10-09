@@ -577,7 +577,9 @@ function drawCodeSize(size) {
 }
 
 async function rem(main) {
-  const [rows, size] = await Promise.all([api('/api/rem/state'), api('/api/code-size')]);
+  const [rows, size, found] = await Promise.all([
+    api('/api/rem/state'), api('/api/code-size'), api('/api/rem/findings'),
+  ]);
   const overdue = rows.filter((r) => r.overdue);
   const projects = [...new Set(rows.map((r) => r.project))];
 
@@ -593,7 +595,8 @@ async function rem(main) {
                sub: overdue.length ? 'past next_due_session' : 'nothing past due' })}
       ${tile({ label: 'Never run', value: num(rows.filter((r) => r.never_run).length),
                sub: 'no row on this project’s clock' })}
-      ${tile({ label: 'Operations', value: num(new Set(rows.map((r) => r.operation)).size) })}
+      ${tile({ label: 'Open findings', value: num(found.total),
+               sub: found.total ? 'from the last run of each operation' : 'nothing outstanding' })}
     </div>
 
     <div class="filters" style="margin-top:1rem">
@@ -609,6 +612,15 @@ async function rem(main) {
     <div class="grid" style="margin-top:1rem">
       ${size.projects.length ? codeSize(size)
         : card('Net source growth', '', '<div class="empty">No tracked project on this machine is a git repository.</div>')}
+    </div>
+
+    <div class="grid" style="margin-top:1rem">
+      ${card('What the last cycle found',
+        `Worst first. A run used to keep only how many findings it had, so a cycle that found 105
+         unused lessons recommended a fix for each and then discarded every one. The next run found
+         the same 105 again. Each run now replaces its own rows, so this is the state of the corpus
+         now and not a log: the same unused lesson found in four cycles is one problem.`,
+        '<div id="t-found"></div>')}
     </div>
 
     <div class="grid">${card('Schedule', '', '<div id="t-rem"></div>')}</div>`;
@@ -633,12 +645,27 @@ async function rem(main) {
         : r.never_run ? status('warn', 'never run') : status('good', 'current')) },
   ];
 
+  const foundCols = [
+    { key: 'operation', label: 'Operation',
+      render: (r) => `<span class="pill">${esc(r.operation)}</span>` },
+    { key: 'title', label: 'Finding' },
+    { key: 'action', label: 'Recommended',
+      render: (r) => (r.recommended
+        ? `<span class="id">${esc(r.recommended.label)}</span>` : '—') },
+    { key: 'session', label: 'Session', num: true },
+  ];
+
   const draw = () => {
     const p = document.getElementById('proj').value;
     const only = document.getElementById('onlyOverdue').checked;
     const filtered = rows.filter((r) => (!p || r.project === p) && (!only || r.overdue));
     wireSort(null, filtered, cols, document.getElementById('t-rem'),
       { sortBy: 'overdue', desc: true });
+
+    // Findings keep the order the operation ranked them in, so this table is
+    // deliberately not sorted by default: worst first is the whole point.
+    const mine = found.findings.filter((f) => !p || f.project === p);
+    wireSort(null, mine, foundCols, document.getElementById('t-found'), { max: 40 });
   };
   document.getElementById('proj').addEventListener('change', draw);
   document.getElementById('onlyOverdue').addEventListener('change', draw);

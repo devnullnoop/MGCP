@@ -481,3 +481,86 @@ class TestStaleServerDetection:
         """
         page = client.get("/").text
         assert page.index('id="stale"') < page.index('id="view"')
+
+
+class TestRemFindingsEndpoint:
+    """The findings a cycle produced, readable without re-running it.
+
+    They used to exist only inside one tool response, so no surface could show
+    them and no progress was measurable between cycles.
+    """
+
+    def test_the_shape_the_rem_view_reads(self, client):
+        response = client.get("/api/rem/findings")
+        assert response.status_code == 200
+        body = response.json()
+        assert set(body) == {"total", "by_operation", "findings"}
+        assert sum(body["by_operation"].values()) == body["total"]
+        for finding in body["findings"]:
+            assert {"project", "operation", "title", "description",
+                    "recommended", "lesson_id"} <= set(finding)
+
+    @pytest.fixture
+    def seeded(self, client):
+        """Two operations' findings in the store the app is serving.
+
+        Seeded rather than skipped. The sandboxed test store holds no findings,
+        so a test that skips when there are none is a test that never runs, and
+        the filter below is exactly the part worth checking.
+        """
+        import asyncio
+
+        from mgcp import web_server
+        from mgcp.rem_cycle import RemFinding
+
+        client.get("/api/rem/findings")      # forces ensure_initialized
+        store = web_server.store
+
+        def rows(operation, count):
+            return [
+                RemFinding(operation=operation, title=f"{operation} {i}",
+                           description="d", metadata={"lesson_id": f"l{i}"},
+                           options=[{"label": "Fix", "description": "do it"}])
+                for i in range(count)
+            ]
+
+        async def write():
+            await store.replace_rem_findings("api-test", "staleness_scan", 1,
+                                             rows("staleness_scan", 3))
+            await store.replace_rem_findings("api-test", "link_suggestions", 1,
+                                             rows("link_suggestions", 2))
+
+        async def clear():
+            await store.replace_rem_findings("api-test", "staleness_scan", 1, [])
+            await store.replace_rem_findings("api-test", "link_suggestions", 1, [])
+
+        asyncio.get_event_loop_policy().new_event_loop().run_until_complete(write())
+        yield
+        asyncio.get_event_loop_policy().new_event_loop().run_until_complete(clear())
+
+    def test_filtering_by_operation_narrows_the_set(self, client, seeded):
+        everything = client.get("/api/rem/findings").json()
+        assert everything["by_operation"]["staleness_scan"] >= 3
+        only = client.get("/api/rem/findings?operation=staleness_scan").json()
+        assert only["total"] == everything["by_operation"]["staleness_scan"]
+        assert {f["operation"] for f in only["findings"]} == {"staleness_scan"}
+
+    def test_an_unknown_operation_returns_nothing_rather_than_everything(
+        self, client, seeded
+    ):
+        body = client.get("/api/rem/findings?operation=no-such-op").json()
+        assert body["total"] == 0
+        assert body["findings"] == []
+
+    def test_the_limit_caps_the_payload_not_the_total(self, client, seeded):
+        """A capped page must not misreport how many findings exist."""
+        everything = client.get("/api/rem/findings").json()
+        assert everything["total"] >= 5
+        capped = client.get("/api/rem/findings?limit=1").json()
+        assert len(capped["findings"]) == 1
+        assert capped["total"] == everything["total"]
+
+    def test_the_recommended_action_reaches_the_view(self, client, seeded):
+        """A finding with no action to take is just an observation."""
+        body = client.get("/api/rem/findings?operation=link_suggestions").json()
+        assert body["findings"][0]["recommended"]["label"] == "Fix"

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import collections
 import fnmatch
 import json
 import subprocess
@@ -610,11 +611,52 @@ def _violations_for_path(path, base, cwd, limits, checks, length_exempt):
                     excluded(path, length_exempt or []))
     for v in found:
         v["path"] = path
-    for b in banned_patterns(after_src, checks):
-        b.update(path=path, name="", metric=b["pattern"], before=None,
-                 after=b["detail"], limit="banned", reason="banned pattern")
-        found.append(b)
+    found += new_banned_patterns(
+        before_src if rc_b == 0 else "", after_src, checks, path)
     return found
+
+
+def new_banned_patterns(before_src, after_src, checks, path):
+    """Only the banned patterns this change ADDED.
+
+    Counted per pattern, not matched per line, because any edit above a hit
+    moves its line number and a line-keyed comparison would read every one as
+    new.
+
+    This is the ratchet's own rule, and the banned-pattern check used to break
+    it: every hit in the whole file was a violation, so a `except: pass` that
+    predated the gate refused any commit that touched its file. An atexit
+    handler with two of them blocked a change to a table definition 800 lines
+    away. A gate that refuses work for something the author did not do is a
+    gate that gets bypassed, and the first bypass is permanent.
+
+    PUBLIC because the PreToolUse hook calls it too. The hook had its own copy
+    of this loop, so fixing the CLI left the gate refusing commits on the old
+    rule, and the two callers of one module disagreed about the same question.
+    """
+    before_counts = collections.Counter(
+        b["pattern"] for b in banned_patterns(before_src, checks))
+    after_hits = banned_patterns(after_src, checks)
+    after_counts = collections.Counter(b["pattern"] for b in after_hits)
+
+    out = []
+    for pattern, now in sorted(after_counts.items()):
+        was = before_counts.get(pattern, 0)
+        if now <= was:
+            continue
+        lines = ", ".join(str(b["lineno"]) for b in after_hits
+                          if b["pattern"] == pattern)
+        # The line list goes in `reason`, which is the only field the formatter
+        # prints. Counts alone say a pattern was added and not where, and the
+        # anchor line is the FIRST hit, which is rarely the new one.
+        out.append({
+            "path": path, "name": "", "metric": pattern,
+            "before": was, "after": now, "limit": "banned",
+            "lineno": next(b["lineno"] for b in after_hits
+                           if b["pattern"] == pattern),
+            "reason": f"banned pattern added. every hit is at line {lines}",
+        })
+    return out
 
 
 def _ratchet_against_base(base: str, cwd: str, limits: dict,

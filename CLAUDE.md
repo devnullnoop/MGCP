@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **MGCP** (Memory Graph Core Primitives) is a Python MCP server providing persistent, graph-based memory for LLM interactions. The system stores lessons learned during LLM sessions in a graph structure, allowing semantic querying without loading full context histories.
 
-**Status**: Alpha/Research project. Package version 3.0.0 (`pyproject.toml`, `mgcp.__version__`); the deployed hook payload is counted separately in `src/mgcp/hook_templates/VERSION`, which now holds a plain counter and reads **22**. It is not a release number. Its only job is to differ from the marker in `~/.mgcp/hooks/.mgcp-hook-version` so `mgcp-init` re-copies the hooks, and it changes when a hook changes rather than when the package does. It used to be written as `2.17`, which read as a release a major version behind 3.0.0 and caused exactly that confusion. **Increment it in the same commit as any hook change.** `install_global_hooks` re-copies only when the counter differs from the installed marker, so a hook edit that leaves the counter alone does not deploy, and `mgcp-init` reports success while the old hook keeps running. Feature names like v2.11 and v2.16 stay in the documents as historical labels for when something shipped, and v2.2 through v3.0 is released under CHANGELOG `[3.0.0]`. Phases 1-7 complete plus v3 multi-session (Qdrant server mode, compare-and-swap writes, shared embedding daemon). Server mode is the default as of 2026-10-06: `mgcp-init` installs and starts a local Qdrant server, writes `qdrant_url`, and rebuilds the index from SQLite. Embedded takes an EXCLUSIVE lock on its storage directory, one client per path, so the old embedded default failed as soon as a second session or the dashboard wanted the store. Shipping that fix as the opt-in `--multi-session` left the default broken, which is what the lesson `degrade-per-store-not-per-server` had already said: an escape hatch nobody turns on does not stop the lock killing access. `mgcp-init --embedded` opts out, and a failed setup falls back to embedded with the reason printed rather than failing the install. MGCP still needs no container and nothing is fetched by hand. Actively dogfooding. Phase 8's plan of moving lessons out of `query_lessons` into compiled skill prompts was dropped, because it made retrieval less reliable. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
+**Status**: Alpha/Research project. Package version 3.0.0 (`pyproject.toml`, `mgcp.__version__`); the deployed hook payload is counted separately in `src/mgcp/hook_templates/VERSION`, which now holds a plain counter and reads **23**. It is not a release number. Its only job is to differ from the marker in `~/.mgcp/hooks/.mgcp-hook-version` so `mgcp-init` re-copies the hooks, and it changes when a hook changes rather than when the package does. It used to be written as `2.17`, which read as a release a major version behind 3.0.0 and caused exactly that confusion. **Increment it in the same commit as any hook change.** `install_global_hooks` re-copies only when the counter differs from the installed marker, so a hook edit that leaves the counter alone does not deploy, and `mgcp-init` reports success while the old hook keeps running. Feature names like v2.11 and v2.16 stay in the documents as historical labels for when something shipped, and v2.2 through v3.0 is released under CHANGELOG `[3.0.0]`. Phases 1-7 complete plus v3 multi-session (Qdrant server mode, compare-and-swap writes, shared embedding daemon). Server mode is the default as of 2026-10-06: `mgcp-init` installs and starts a local Qdrant server, writes `qdrant_url`, and rebuilds the index from SQLite. Embedded takes an EXCLUSIVE lock on its storage directory, one client per path, so the old embedded default failed as soon as a second session or the dashboard wanted the store. Shipping that fix as the opt-in `--multi-session` left the default broken, which is what the lesson `degrade-per-store-not-per-server` had already said: an escape hatch nobody turns on does not stop the lock killing access. `mgcp-init --embedded` opts out, and a failed setup falls back to embedded with the reason printed rather than failing the install. MGCP still needs no container and nothing is fetched by hand. Actively dogfooding. Phase 8's plan of moving lessons out of `query_lessons` into compiled skill prompts was dropped, because it made retrieval less reliable. Skill compilation itself ships (v2.3): it emits a SKILL.md file and never writes to the knowledge store.
 
 ## Documentation Preferences
 
@@ -105,7 +105,7 @@ All source files are in `src/mgcp/`:
 - `qdrant_catalogue_store.py` - Qdrant integration for project catalogue search
 - `persistence.py` - SQLite/JSON storage for lessons, project contexts, and community summaries
 - `telemetry.py` - Usage tracking and analytics
-- `web_server.py` - FastAPI API + the instrument panel (9 analytics endpoints, one served app)
+- `web_server.py` - FastAPI API + the instrument panel (10 analytics endpoints, one served app)
 - `launcher.py` - Unified CLI launcher
 - `bootstrap.py` - Initial lesson seeding
 - `migration.py` - Rebuilds the Qdrant index from SQLite
@@ -222,11 +222,21 @@ unchanged.
 - `save_community_summary` - Persist LLM-generated summary for a community
 - `search_communities` - Semantic search across community summaries
 
-**REM opens the vector store only when it needs one.** Six of the seven operations need no vectors. `rem_run` hands the engine a factory rather than an open store, and `_duplicate_detection` awaits it. Opening one up front took the Qdrant lock on every cycle, including the cycles `rem-required-before-commit` forces when nothing is due, so a session that never searched anything held the lock for the rest of its life and blocked the dashboard and any second session. A failed open leaves the other six operations running.
+**REM opens the vector store only when it needs one.** Five of the seven operations need no vectors. `rem_run` hands the engine a factory rather than an open store, and `_duplicate_detection` and `_link_suggestions` await it. Opening one up front took the Qdrant lock on every cycle, including the cycles `rem-required-before-commit` forces when nothing is due, so a session that never searched anything held the lock for the rest of its life and blocked the dashboard and any second session. A failed open leaves the other five operations running.
 
-**REM Cycle (3):** All three take an optional `project_path` (empty = `CLAUDE_PROJECT_DIR`, else cwd) and report an error rather than a guess when that project has no saved context.
+**A cycle keeps what it found, not only how many things it found.** `rem_findings` is keyed by project and operation, and a run REPLACES its own rows, because the same unused lesson found in four cycles is one problem and not four. Only `{"finding_count": N}` used to survive a run: a cycle found 105 unused lessons, printed the recommended fix for each, and discarded every one. The next run found the same 105 and discarded them again, and nothing between runs could show the list. `/api/rem/findings` and the REM view read the table, and `rem_report` names the worst three per operation.
+
+**The report is capped per operation, worst first.** Every finding used to print in full, so one run was over 600 lines in a single tool response and got skimmed. `FINDINGS_SHOWN_PER_OPERATION` is 5 and the rest say how many are held. The cap is per operation and not overall, so one noisy operation cannot crowd the others out. The total is always stated in full, because capping what is PRINTED must not understate what was found.
+
+**`staleness_scan` counts missed retrieval opportunities, not days.** A lesson search has never matched is a defect on the day it is written, so the test is how many queries ran since it was created and chose something else. `MIN_QUERY_OPPORTUNITIES` is 20, measured against 1,192 queries over 212 sessions, a mean of 5.6 and a median of 3 per session, so 20 is about four to six sessions of use. The old test was "created more than 30 days ago", which hid 30 of 44 never-matched lessons behind a calendar that says nothing about whether anything tried to find them. The count comes from `telemetry.db`, read the way `_gate_audit_review` reads `gate_audit.jsonl`, and an unreadable one falls back to `FALLBACK_AGE_DAYS` rather than treating "cannot measure" as "zero opportunities". It reads `usage_count` and not telemetry, because that counter means "search MATCHED this" and excludes a lesson the community bridge appended, which is the thing a rewritten trigger would fix. Unreachable lessons rank before merely stale ones, and within each group the worst comes first.
+
+**`link_suggestions` exists because an unlinked lesson is unreachable by both paths.** Search can miss it on wording, and the community bridge cannot reach it at all, since Louvain puts an isolated node in no community. On a live corpus 38 of the 44 never-matched lessons carried no edges, which is why they sat at exactly zero rather than merely low. It proposes the nearest lessons by embedding above `LINK_MIN_SCORE`, which is the bridge's own floor so one number governs both, and the finding carries `proposed_links` ready for `link_lessons`. A lesson with a parent, a child or any typed relationship is not an orphan.
+
+**The operation dispatch is a table, not an if/elif chain.** Python reads each `elif` as an `If` nested in the previous one's `else`, so a flat seven-way dispatch measured as nesting depth 7 and the eighth operation would have been refused by this project's own complexity gate. A test asserts every name in `DEFAULT_SCHEDULES` dispatches, because a scheduled name with no handler used to write a `rem_state` row and report health.
+
+**REM Cycle (3):** Three tools over seven operations. All three take an optional `project_path` (empty = `CLAUDE_PROJECT_DIR`, else cwd) and report an error rather than a guess when that project has no saved context.
 - `rem_run` - Run consolidation operations (staleness, duplicates, communities)
-- `rem_report` - Per-operation last run, next due and finding count for this project. Findings themselves are not persisted. Only `{"finding_count": N}` reaches `rem_state`
+- `rem_report` - Per-operation last run, next due and the worst three stored findings for this project. A run that predates stored findings shows only its count, labelled as such
 - `rem_status` - Show schedule state and what's due for this project
 
 **The REM cadence is per project; the corpus is global.** A cycle triggered from
@@ -314,13 +324,13 @@ stored" and covered none of enforcement, REM, the gate audit or the journal.
 | Effectiveness | Which lessons earn their place: matched count against mean score when matched |
 | Enforcement | What the gates did: denials, capture rate, per-rule fires, every contested fire |
 | Graph | Lessons, categories, workflows and steps, and which lessons carry no edges |
-| REM | What maintenance is due, per project, on that project's own clock, and net source lines per month |
+| REM | What maintenance is due, what the last cycle found, and net source lines per month |
 | Journal | The soliloquy record. No other view shows it |
 | Curate | Edit and delete lessons, compile intents to skills |
 
-Backed by nine read-only analytics endpoints in `web_server.py` (`/api/signal`,
+Backed by ten read-only analytics endpoints in `web_server.py` (`/api/signal`,
 `/api/retrieval/*`, `/api/effectiveness`, `/api/gate-audit`, `/api/enforcement/rules`,
-`/api/rem/state`, `/api/soliloquies`, `/api/code-size`). The views follow three rules, and all three change what you
+`/api/rem/state`, `/api/rem/findings`, `/api/soliloquies`, `/api/code-size`). The views follow three rules, and all three change what you
 see: a slot logged with score `0.0` was **appended by the community bridge, not matched**,
 and averaging the two together is what made a good lesson read as 2% relevant; status is shown
 as a glyph plus a word, never hue alone, because `good` and `critical` measure a CVD ΔE of 4.1;
@@ -425,6 +435,8 @@ The dispatcher falls back to a minimal hard-coded intent set if the JSON file is
   ]
 }
 ```
+
+**A banned pattern is ratcheted, not forbidden outright.** `_new_banned_patterns` compares the count of each pattern against the base ref, so only an increase is a violation. Every hit in the whole file used to be reported, which meant an `except: pass` predating the gate refused any commit touching its file: two of them in an atexit handler blocked a change to a table definition 800 lines away. The comparison counts per pattern instead of matching line numbers, because any edit above a hit moves its line. A gate that refuses work the author did not do is a gate that gets bypassed, and the first bypass is permanent.
 
 Trigger `command_match.type` ∈ {`git_subcommand`, `regex`, `contains`}. `Trigger.tool_names` lets one rule cover several tools, and a hook that predates the field sees `tool_name` `""`, which matches nothing, so such a rule is inert rather than universal on an older install. Precondition `type` ∈ {`tool_called_this_turn`, `tool_not_called_this_turn`, `staged_files_coupling`, `tool_input_glob`, `staged_files_forbid`, `staged_content_forbid`, `diff_budget`, `staged_python_complexity`, `commit_message_requires`, `transcript_tool_called`}.
 

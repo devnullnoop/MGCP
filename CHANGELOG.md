@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed: REM keeps what it finds, and finds it sooner
+
+Hook payload 23.
+
+- **A run now stores its findings, not just how many there were.** Only
+  `{"finding_count": N}` reached `rem_state` before. A cycle found 105 unused
+  lessons, printed the recommended fix for each, and discarded every one. The
+  next run found the same 105 and discarded them again, and no surface could
+  show the list. The new `rem_findings` table is keyed by project and operation,
+  and a run REPLACES its own rows: the same unused lesson found in four cycles
+  is one problem, not four.
+- **The report is capped per operation, worst first.** Every finding used to
+  print in full, which made one run over 600 lines in a single tool response. It
+  got skimmed. Five print per operation and the rest say how many are held. The
+  cap is per operation so one noisy operation cannot crowd the others out, and
+  the total is always stated in full, because capping what is printed must not
+  understate what was found.
+- **`staleness_scan` counts missed retrieval chances instead of days.** A lesson
+  search has never matched is a defect on the day it is written. The test is now
+  how many queries ran since the lesson was created and chose something else,
+  with a threshold of 20. Measured against 1,192 queries over 212 sessions, a
+  mean of 5.6 and a median of 3, so 20 is about four to six sessions of use. The
+  old test was "created more than 30 days ago", which hid 30 of 44 never-matched
+  lessons. The count comes from `telemetry.db`, and an unreadable one falls back
+  to age rather than treating "cannot measure" as "zero chances".
+- Unreachable lessons rank above merely stale ones, and the worst comes first in
+  each group. On this corpus the top entry had 1,158 queries run since it was
+  written and matched none of them.
+- **New operation `link_suggestions`.** An unlinked lesson is unreachable by
+  both retrieval paths: search can miss it on wording, and the community bridge
+  cannot reach it at all, because Louvain puts an isolated node in no community.
+  38 of the 44 never-matched lessons carried no edges. It proposes the nearest
+  lessons by meaning above the bridge's own score floor, and the finding carries
+  `proposed_links` ready for `link_lessons`.
+- **`GET /api/rem/findings`** and a table on the REM view read the stored
+  findings. `rem_report` names the worst three per operation.
+- The operation dispatch is a table instead of an if/elif chain. Python reads
+  each `elif` as an `If` nested in the previous one's `else`, so a flat
+  seven-way dispatch measured as nesting depth 7 and the eighth operation would
+  have been refused by this project's own complexity gate. A test asserts every
+  scheduled name dispatches.
+
+### Fixed: a banned pattern is ratcheted, not forbidden outright
+
+- **A pattern that predated the gate no longer refuses an unrelated change.**
+  Every hit in the whole file was reported, so an `except: pass` written before
+  the gate existed refused any commit that touched its file. Two of them in an
+  atexit handler blocked a change to a table definition 800 lines away. That
+  broke the ratchet's own rule, which is that legacy code does not block work
+  and only stops getting worse.
+- The count of each pattern is compared against the base ref, so only an
+  increase is a violation. Counting per pattern rather than matching line
+  numbers is deliberate: any edit above a hit moves its line, and a line-keyed
+  comparison reads every untouched hit as new.
+- The report names every line the pattern appears on, because counts alone say a
+  pattern was added and not where.
+
 ### Added: the panel says when its server is older than its page
 
 - **`/api/health` returns `assets_stale`.** The server hashes every file under

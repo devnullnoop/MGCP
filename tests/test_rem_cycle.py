@@ -83,8 +83,13 @@ class TestStalenessScan:
     """Test the staleness scan operation."""
 
     @pytest.mark.asyncio
-    async def test_finds_unused_old_lessons(self, store, engine):
-        """Lessons created 30+ days ago with 0 retrievals should be flagged."""
+    async def test_finds_unused_old_lessons(self, store, engine, no_query_history):
+        """With no query history to read, age is the only signal left.
+
+        The sandbox has no telemetry.db, so the scan cannot count missed
+        opportunities and falls back to age. That fallback is the subject here;
+        the opportunity path has its own tests below.
+        """
         old_lesson = Lesson(
             id="unused-old",
             trigger="some old trigger",
@@ -98,11 +103,11 @@ class TestStalenessScan:
         report = await engine.run(session_number=5, operations=["staleness_scan"])
         stale = [f for f in report.findings if f.metadata.get("lesson_id") == "unused-old"]
         assert len(stale) == 1
-        assert "never been retrieved" in stale[0].description
+        assert "has never matched" in stale[0].description
 
     @pytest.mark.asyncio
-    async def test_ignores_recently_created(self, store, engine):
-        """Lessons created recently should not be flagged even with 0 usage."""
+    async def test_ignores_recently_created(self, store, engine, no_query_history):
+        """Nothing has had a chance to retrieve it yet, so it is not a defect."""
         new_lesson = Lesson(
             id="unused-new",
             trigger="new trigger",
@@ -117,7 +122,7 @@ class TestStalenessScan:
         assert len(stale) == 0
 
     @pytest.mark.asyncio
-    async def test_finds_heavily_used_but_stale(self, store, engine):
+    async def test_finds_heavily_used_but_stale(self, store, engine, no_query_history):
         """High-usage lessons not refined in 6+ months should be flagged."""
         stale_lesson = Lesson(
             id="popular-stale",
@@ -132,7 +137,7 @@ class TestStalenessScan:
         report = await engine.run(session_number=5, operations=["staleness_scan"])
         stale = [f for f in report.findings if f.metadata.get("lesson_id") == "popular-stale"]
         assert len(stale) == 1
-        assert "hasn't been refined" in stale[0].description
+        assert "has not been refined" in stale[0].description
 
 
 class TestKnowledgeExtraction:
@@ -313,3 +318,421 @@ class TestGateAuditReview:
         monkeypatch.setenv("MGCP_DATA_DIR", str(tmp_path))
         engine = RemEngine(store=store, schedules={}, project_id=PROJECT)
         assert await engine._gate_audit_review() == []
+
+
+def _telemetry_path():
+    import os
+    from pathlib import Path
+
+    return Path(os.environ["MGCP_DATA_DIR"]) / "telemetry.db"
+
+
+def _seed_query_history(moments: list[datetime]) -> None:
+    """REPLACE the sandbox query history with exactly these query times.
+
+    The scan counts retrieval OPPORTUNITIES, which means queries that ran while
+    a lesson already existed. That cannot be faked with a lesson's age, so these
+    tests write real rows.
+
+    It replaces rather than appends on purpose. The sandbox data directory is
+    shared for the whole test session, so an appending helper made each test
+    inherit the rows of the one before it and the suite passed or failed on
+    collection order.
+    """
+    import sqlite3
+
+    path = _telemetry_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("DROP TABLE IF EXISTS events")
+        conn.execute(
+            "CREATE TABLE events (id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, "
+            "session_id TEXT NOT NULL, event_type TEXT NOT NULL, payload JSON)"
+        )
+        conn.executemany(
+            "INSERT INTO events VALUES (?, ?, 's', 'query', '{}')",
+            [(f"q{i}", moment.isoformat()) for i, moment in enumerate(moments)],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _queries_spread(count: int, start: datetime, end: datetime) -> list[datetime]:
+    """`count` query times spaced evenly between two moments."""
+    span = (end - start) / max(1, count)
+    return [start + span * (i + 1) for i in range(count)]
+
+
+@pytest.fixture
+def no_query_history():
+    """No telemetry before or after, so one test cannot seed another.
+
+    Without this the file survives the test that wrote it, and every later
+    lesson in the session inherits its query count.
+    """
+    _telemetry_path().unlink(missing_ok=True)
+    yield
+    _telemetry_path().unlink(missing_ok=True)
+
+
+class TestUnreachableLessonsAreRankedByMissedChances:
+    """A lesson search never matches is a defect from the day it is written.
+
+    The test this replaces was "created more than 30 days ago", which hid 30 of
+    44 never-matched lessons on a live corpus behind a calendar that says
+    nothing about whether anything tried to find them. What matters is how many
+    queries ran while the lesson existed and chose something else.
+    """
+
+    async def _lesson(self, store, lesson_id, age_days, usage=0):
+        lesson = Lesson(
+            id=lesson_id, trigger=f"{lesson_id} trigger", action="Do the thing",
+            tags=["test"], usage_count=usage,
+            created_at=datetime.now(UTC) - timedelta(days=age_days),
+        )
+        await store.add_lesson(lesson)
+        return lesson
+
+    @pytest.mark.asyncio
+    async def test_a_young_lesson_with_many_missed_chances_is_flagged(
+        self, store, engine, no_query_history
+    ):
+        """Age would have skipped this one. Opportunity catches it."""
+        created = datetime.now(UTC) - timedelta(days=1)
+        await self._lesson(store, "young-and-unreachable", age_days=1)
+        _seed_query_history(_queries_spread(40, created, datetime.now(UTC)))
+
+        report = await engine.run(session_number=5, operations=["staleness_scan"])
+        hit = [f for f in report.findings
+               if f.metadata.get("lesson_id") == "young-and-unreachable"]
+        assert len(hit) == 1, "a one-day-old lesson with 40 missed queries was skipped"
+        assert hit[0].metadata["missed_opportunities"] >= 20
+        assert "40 queries have run" in hit[0].description
+
+    @pytest.mark.asyncio
+    async def test_too_few_chances_is_not_flagged(
+        self, store, engine, no_query_history
+    ):
+        """Under the threshold nothing is proven, so nothing is claimed."""
+        created = datetime.now(UTC) - timedelta(days=1)
+        await self._lesson(store, "barely-asked", age_days=1)
+        _seed_query_history(_queries_spread(5, created, datetime.now(UTC)))
+
+        report = await engine.run(session_number=5, operations=["staleness_scan"])
+        assert not [f for f in report.findings
+                    if f.metadata.get("lesson_id") == "barely-asked"]
+
+    @pytest.mark.asyncio
+    async def test_most_missed_chances_comes_first(
+        self, store, engine, no_query_history
+    ):
+        """Worst first. One run on a live corpus produced 133 findings.
+
+        60 queries spread over ten days, so the ten-day-old lesson missed all
+        60 and the five-day-old one missed about half. Both clear the threshold,
+        which is what makes this a test of ORDER and not of the threshold.
+        """
+        now = datetime.now(UTC)
+        # Inserted newest FIRST on purpose. get_all_lessons orders by
+        # usage_count, which is 0 for both, so the store hands them back in
+        # insertion order. Adding the older one first made this test pass with
+        # the sort deleted, which is a test of nothing.
+        await self._lesson(store, "newer-so-fewer-missed", age_days=5)
+        await self._lesson(store, "older-so-more-missed", age_days=10)
+        _seed_query_history(_queries_spread(60, now - timedelta(days=10), now))
+
+        report = await engine.run(session_number=5, operations=["staleness_scan"])
+        order = [f.metadata.get("lesson_id") for f in report.findings]
+        assert order.index("older-so-more-missed") < order.index("newer-so-fewer-missed")
+
+    @pytest.mark.asyncio
+    async def test_unreachable_outrank_merely_stale(
+        self, store, engine, no_query_history
+    ):
+        """A lesson nobody can reach beats one that only needs rewording."""
+        created = datetime.now(UTC) - timedelta(days=40)
+        await self._lesson(store, "cannot-be-reached", age_days=40)
+        popular = Lesson(
+            id="reached-often-but-old", trigger="popular", action="Act",
+            tags=["test"], usage_count=500,
+            last_refined=datetime.now(UTC) - timedelta(days=300),
+        )
+        await store.add_lesson(popular)
+        _seed_query_history(_queries_spread(40, created, datetime.now(UTC)))
+
+        report = await engine.run(session_number=5, operations=["staleness_scan"])
+        order = [f.metadata.get("lesson_id") for f in report.findings]
+        assert order.index("cannot-be-reached") < order.index("reached-often-but-old")
+
+    @pytest.mark.asyncio
+    async def test_a_matched_lesson_is_never_called_unreachable(
+        self, store, engine, no_query_history
+    ):
+        """usage_count counts a MATCH, which is what a rewritten trigger fixes."""
+        now = datetime.now(UTC)
+        await self._lesson(store, "matched-once", age_days=90, usage=1)
+        _seed_query_history(_queries_spread(60, now - timedelta(days=90), now))
+
+        report = await engine.run(session_number=5, operations=["staleness_scan"])
+        titles = [f.title for f in report.findings
+                  if f.metadata.get("lesson_id") == "matched-once"]
+        assert not [t for t in titles if "never reaches" in t]
+
+
+class TestFindingsSurviveTheRun:
+    """A run keeps what it found, not only how many things it found.
+
+    Before this, only `{"finding_count": N}` reached rem_state. A cycle that
+    found 105 unused lessons recommended a fix for each and then discarded every
+    one, and the next run found the same 105 and discarded them again.
+    """
+
+    @pytest.mark.asyncio
+    async def test_findings_are_readable_after_the_run(self, store, engine):
+        lesson = Lesson(
+            id="kept-finding", trigger="t", action="a", tags=["test"],
+            usage_count=0, created_at=datetime.now(UTC) - timedelta(days=60),
+        )
+        await store.add_lesson(lesson)
+
+        report = await engine.run(session_number=5, operations=["staleness_scan"])
+        assert report.findings
+
+        stored = await store.get_rem_findings(PROJECT, "staleness_scan")
+        assert len(stored) == len(report.findings)
+        assert stored[0]["title"] == report.findings[0].title
+        assert stored[0]["metadata"]["lesson_id"] == report.findings[0].metadata["lesson_id"]
+        assert stored[0]["options"], "the recommended action has to survive too"
+
+    @pytest.mark.asyncio
+    async def test_a_second_run_replaces_rather_than_appends(self, store, engine):
+        """The same unused lesson found twice is one problem, not two."""
+        lesson = Lesson(
+            id="still-unused", trigger="t", action="a", tags=["test"],
+            usage_count=0, created_at=datetime.now(UTC) - timedelta(days=60),
+        )
+        await store.add_lesson(lesson)
+
+        await engine.run(session_number=5, operations=["staleness_scan"])
+        first = await store.get_rem_findings(PROJECT, "staleness_scan")
+        await engine.run(session_number=9, operations=["staleness_scan"])
+        second = await store.get_rem_findings(PROJECT, "staleness_scan")
+
+        assert first and len(second) == len(first)
+
+    @pytest.mark.asyncio
+    async def test_a_run_that_finds_nothing_clears_the_old_rows(self, store, engine):
+        """Otherwise a fixed corpus keeps showing the problems it fixed."""
+        lesson = Lesson(
+            id="to-be-fixed", trigger="t", action="a", tags=["test"],
+            usage_count=0, created_at=datetime.now(UTC) - timedelta(days=60),
+        )
+        await store.add_lesson(lesson)
+        await engine.run(session_number=5, operations=["staleness_scan"])
+        assert await store.get_rem_findings(PROJECT, "staleness_scan")
+
+        await store.delete_lesson("to-be-fixed")
+        await engine.run(session_number=9, operations=["staleness_scan"])
+        assert await store.get_rem_findings(PROJECT, "staleness_scan") == []
+
+    @pytest.mark.asyncio
+    async def test_one_operation_does_not_clear_another(self, store, engine):
+        await store.replace_rem_findings(
+            PROJECT, "link_suggestions", 1,
+            [RemFinding(operation="link_suggestions", title="kept", description="d")],
+        )
+        lesson = Lesson(
+            id="unused-here", trigger="t", action="a", tags=["test"],
+            usage_count=0, created_at=datetime.now(UTC) - timedelta(days=60),
+        )
+        await store.add_lesson(lesson)
+        await engine.run(session_number=5, operations=["staleness_scan"])
+
+        assert len(await store.get_rem_findings(PROJECT, "link_suggestions")) == 1
+
+
+class TestLinkSuggestions:
+    """An unlinked lesson is unreachable by BOTH retrieval paths.
+
+    Search can miss it on wording, and the community bridge cannot reach it at
+    all, because Louvain puts an isolated node in no community. On a live corpus
+    38 of the 44 never-matched lessons carried no edges.
+    """
+
+    class _Store:
+        """A vector store that answers with a fixed ranking."""
+
+        def __init__(self, hits):
+            self.hits = hits
+            self.queries = []
+
+        def search(self, query, limit=5, min_score=0.0, tags=None):
+            self.queries.append(query)
+            return self.hits
+
+    async def _orphan(self, store, lesson_id):
+        await store.add_lesson(Lesson(
+            id=lesson_id, trigger=f"{lesson_id} trigger", action="Act",
+            tags=["test"],
+        ))
+
+    @pytest.mark.asyncio
+    async def test_an_isolated_lesson_gets_a_proposal(self, store):
+        await self._orphan(store, "alone")
+        await self._orphan(store, "neighbour")
+        vectors = self._Store([("neighbour", 0.81), ("alone", 0.99)])
+        engine = RemEngine(store, project_id=PROJECT, vector_store=vectors)
+
+        findings = await engine._link_suggestions()
+        mine = [f for f in findings if f.metadata.get("lesson_id") == "alone"]
+        assert len(mine) == 1
+        links = mine[0].metadata["proposed_links"]
+        assert links[0]["target_id"] == "neighbour"
+        assert links[0]["relationship_type"] == "related"
+        assert "alone" not in [link["target_id"] for link in links], \
+            "a lesson must never be proposed as its own neighbour"
+
+    @pytest.mark.asyncio
+    async def test_a_lesson_that_already_has_a_link_is_left_alone(self, store):
+        from mgcp.models import Relationship
+
+        await self._orphan(store, "neighbour")
+        await store.add_lesson(Lesson(
+            id="connected", trigger="t", action="a", tags=["test"],
+            relationships=[Relationship(target="neighbour", type="related")],
+        ))
+        vectors = self._Store([("neighbour", 0.81)])
+        engine = RemEngine(store, project_id=PROJECT, vector_store=vectors)
+
+        findings = await engine._link_suggestions()
+        assert not [f for f in findings
+                    if f.metadata.get("lesson_id") == "connected"]
+
+    @pytest.mark.asyncio
+    async def test_a_parent_is_not_an_orphan(self, store):
+        """It has an edge, so the bridge can already reach it."""
+        await store.add_lesson(Lesson(
+            id="the-parent", trigger="t", action="a", tags=["test"]))
+        await store.add_lesson(Lesson(
+            id="the-child", trigger="t", action="a", tags=["test"],
+            parent_id="the-parent"))
+        vectors = self._Store([("whatever", 0.9)])
+        engine = RemEngine(store, project_id=PROJECT, vector_store=vectors)
+
+        flagged = {f.metadata.get("lesson_id")
+                   for f in await engine._link_suggestions()}
+        assert "the-parent" not in flagged
+        assert "the-child" not in flagged
+
+    @pytest.mark.asyncio
+    async def test_no_vector_store_means_no_findings_not_a_crash(self, store):
+        await self._orphan(store, "alone")
+        engine = RemEngine(store, project_id=PROJECT)
+        assert await engine._link_suggestions() == []
+
+    @pytest.mark.asyncio
+    async def test_a_weak_match_is_not_proposed(self, store):
+        """The floor is the bridge's own, so one number governs both."""
+        await self._orphan(store, "alone")
+        vectors = self._Store([])     # nothing cleared min_score
+        engine = RemEngine(store, project_id=PROJECT, vector_store=vectors)
+        assert await engine._link_suggestions() == []
+
+    @pytest.mark.asyncio
+    async def test_the_batch_is_capped_and_says_how_many_are_left(self, store):
+        from mgcp.rem_cycle import MAX_LINK_FINDINGS
+
+        for i in range(MAX_LINK_FINDINGS + 4):
+            await self._orphan(store, f"alone-{i}")
+        vectors = self._Store([("alone-0", 0.7), ("alone-1", 0.7)])
+        engine = RemEngine(store, project_id=PROJECT, vector_store=vectors)
+
+        findings = await engine._link_suggestions()
+        overflow = [f for f in findings if "more unlinked" in f.title]
+        assert len(overflow) == 1
+        assert overflow[0].metadata["unlinked_total"] == MAX_LINK_FINDINGS + 4
+        assert len(findings) == MAX_LINK_FINDINGS + 1
+
+
+class TestEveryScheduledOperationHasAHandler:
+    """A scheduled name with no handler raises instead of reporting health.
+
+    This is the wiring test. 48 workflow references to lessons were once
+    validated by nothing, so one pointing at a lesson that shipped nowhere
+    looked right in the source and arrived empty on every fresh install.
+    """
+
+    @pytest.mark.asyncio
+    async def test_all_shipped_operations_dispatch(self, store):
+        from mgcp.rem_config import DEFAULT_SCHEDULES
+
+        engine = RemEngine(store, project_id=PROJECT)
+        for operation in DEFAULT_SCHEDULES:
+            # A missing handler raises ValueError before anything is written.
+            await engine._run_operation(operation, session_number=1)
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_operation_still_raises(self, store):
+        engine = RemEngine(store, project_id=PROJECT)
+        with pytest.raises(ValueError, match="unknown REM operation"):
+            await engine._run_operation("no-such-operation", session_number=1)
+
+
+class TestTheReportIsReadable:
+    """A report nobody reads enforces nothing.
+
+    Every finding used to print in full. One run produced 109, each with a
+    title, a description and three options, which is over 600 lines in a single
+    tool response. It was skimmed, and the recommended fix for all 109 was lost.
+    """
+
+    def _findings(self, operation, count):
+        return [
+            RemFinding(
+                operation=operation,
+                title=f"{operation} finding {i}",
+                description="d",
+                options=[{"label": "Fix", "description": "do it"}],
+            )
+            for i in range(count)
+        ]
+
+    def test_each_operation_is_capped(self):
+        from mgcp.server import FINDINGS_SHOWN_PER_OPERATION, _render_findings
+
+        text = "\n".join(_render_findings(self._findings("staleness_scan", 40)))
+        shown = text.count("staleness_scan finding")
+        assert shown == FINDINGS_SHOWN_PER_OPERATION
+        assert "35 more from staleness_scan" in text
+
+    def test_the_total_is_still_stated(self):
+        """Capping what is PRINTED must not understate what was found."""
+        from mgcp.server import _render_findings
+
+        text = "\n".join(_render_findings(self._findings("staleness_scan", 40)))
+        assert "40 Finding(s)" in text
+
+    def test_one_noisy_operation_cannot_crowd_out_another(self):
+        """This is why the cap is per operation and not overall."""
+        from mgcp.server import _render_findings
+
+        findings = (self._findings("staleness_scan", 100)
+                    + self._findings("link_suggestions", 2))
+        text = "\n".join(_render_findings(findings))
+        assert "link_suggestions finding 0" in text
+        assert "link_suggestions finding 1" in text
+
+    def test_a_short_list_says_nothing_about_more(self):
+        from mgcp.server import _render_findings
+
+        text = "\n".join(_render_findings(self._findings("staleness_scan", 2)))
+        assert "more from" not in text
+        assert text.count("staleness_scan finding") == 2
+
+    def test_the_recommended_option_is_marked(self):
+        from mgcp.server import _render_findings
+
+        text = "\n".join(_render_findings(self._findings("staleness_scan", 1)))
+        assert "(Recommended)" in text

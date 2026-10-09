@@ -1966,6 +1966,49 @@ class TestStructuredCodingGates:
             state={"turn_tools_called": [], "turn_bypass_scopes": ["x"]})
         assert decision == "allow"
 
+    SWALLOWED = (
+        "def f():\n"
+        "    try:\n"
+        "        return 1\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+
+    def test_a_pre_existing_banned_pattern_does_not_refuse_the_commit(self, tmp_path):
+        """The gate and the CLI must apply the same ratchet.
+
+        The hook held its own copy of this loop and reported every hit in the
+        file, so an `except: pass` written before the gate existed refused any
+        commit that touched its file. Two of them in an atexit handler blocked a
+        change to a table definition 800 lines away. Fixing only the CLI left
+        the gate, which is the half that actually refuses, on the old rule.
+        """
+        repo = self._repo(tmp_path, {"src/a.py": self.SWALLOWED},
+                          commit_first=True)
+        (repo / "src/a.py").write_text(self.SWALLOWED + "\nUNRELATED = 2\n")
+        self._stage(repo, tmp_path)
+        decision, reason = self._decide(
+            tmp_path,
+            self._rule({"type": "staged_python_complexity",
+                        "banned": ["swallowed_error"]}),
+            self._commit(), repo)
+        assert decision == "allow", reason
+
+    def test_adding_a_banned_pattern_is_still_refused(self, tmp_path):
+        """The pair to the test above. Held at its count, not forgiven."""
+        repo = self._repo(tmp_path, {"src/a.py": self.SWALLOWED},
+                          commit_first=True)
+        (repo / "src/a.py").write_text(
+            self.SWALLOWED + self.SWALLOWED.replace("def f", "def g"))
+        self._stage(repo, tmp_path)
+        decision, reason = self._decide(
+            tmp_path,
+            self._rule({"type": "staged_python_complexity",
+                        "banned": ["swallowed_error"]}),
+            self._commit(), repo)
+        assert decision == "deny"
+        assert "swallowed_error" in reason
+
     def test_tool_names_covers_several_tools_with_one_rule(self, tmp_path):
         repo = self._repo(tmp_path, {})
         rule = self._rule({"type": "tool_input_glob", "field": "file_path",

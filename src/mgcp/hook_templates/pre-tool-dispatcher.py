@@ -861,12 +861,13 @@ def _file_violations(qm, ctx, path, limits, checks, skip_file_length=False):
     head_src = ctx.blob("HEAD", path)
     before = qm.measure_source(head_src, path) if head_src else {}
     out = list(qm.compare(before, after, limits, skip_file_length))
-    for b in qm.banned_patterns(staged_src, checks):
-        out.append({
-            "name": f"{path}:{b['lineno']}", "metric": b["pattern"],
-            "before": None, "after": b["detail"], "limit": "banned",
-            "lineno": b["lineno"], "reason": b["detail"],
-        })
+    # One implementation, called from here and from the CLI. This used to hold
+    # its own copy of the loop, which reported EVERY hit in the file. So a
+    # pattern that predated the gate refused any commit touching its file, and
+    # fixing the CLI left the gate enforcing the old rule.
+    for row in qm.new_banned_patterns(head_src, staged_src, checks, path):
+        row["name"] = f"{path}:{row['lineno']}"
+        out.append(row)
     return out
 
 

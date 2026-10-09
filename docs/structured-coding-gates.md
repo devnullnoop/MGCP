@@ -187,6 +187,17 @@ The `feature-development` workflow gains two steps, `fit` and `simplify`, so the
 
 ## Banned patterns
 
+A banned pattern is ratcheted like every metric, so only an increase refuses the
+commit. The count of each pattern is compared against the base ref. Every hit in
+the whole file used to be reported, which broke the gate's own rule: an
+`except: pass` that predated the gate refused any commit that touched its file,
+and two of them in an atexit handler blocked a change to a table definition 800
+lines away. The comparison counts per pattern rather than matching line numbers,
+because any edit above a hit moves its line and a line-keyed comparison reads
+every untouched hit as new. A new file has no base version, so every hit in it
+counts.
+
+
 Two of the seven are mechanically detectable and go in the Gate 2 pass; the other five are caught by the simplifier prompt and by lessons that the existing git gate already forces into view.
 
 | Pattern | Example | Caught by |

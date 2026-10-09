@@ -2424,9 +2424,12 @@ async def rem_run(
 ) -> str:
     """Trigger a REM (Recalibrate Everything in Memory) cycle.
 
-    Runs periodic consolidation operations: staleness scan, duplicate detection,
-    community detection, knowledge extraction. Each finding is returned for
-    interactive review.
+    Runs periodic consolidation operations: staleness_scan, duplicate_detection,
+    community_detection, knowledge_extraction, intent_calibration,
+    gate_audit_review and link_suggestions. Each operation ranks its findings
+    worst first, and five print per operation with a count of the rest. Every
+    finding is stored, so rem_report and the dashboard's REM view can read them
+    without re-running anything.
 
     The cadence is per project — it follows THIS project's session count — but
     the corpus is global: a cycle triggered here maintains the whole shared
@@ -2514,9 +2517,38 @@ async def rem_run(
                 + "."
             )
     else:
-        lines.append(f"### {len(report.findings)} Finding(s)\n")
-        for i, finding in enumerate(report.findings, 1):
-            lines.append(f"**{i}. [{finding.operation}] {finding.title}**")
+        lines.extend(_render_findings(report.findings))
+
+    return "\n".join(lines)
+
+
+# How many findings one operation prints per cycle.
+#
+# Every finding used to print in full. One run produced 105, each with a title,
+# a description and three options, which is over 600 lines in a single tool
+# response. It was skimmed, and the recommended fix for all 105 was lost. The
+# operations rank worst first, so the top of each list is the part worth
+# reading, and the rest are on the record in the REM view either way.
+FINDINGS_SHOWN_PER_OPERATION = 5
+
+
+def _render_findings(findings: list) -> list[str]:
+    """The findings, grouped by operation and capped, worst first.
+
+    Capped per operation rather than overall, so one noisy operation cannot
+    crowd the others out of the report entirely.
+    """
+    by_operation: dict[str, list] = {}
+    for finding in findings:
+        by_operation.setdefault(finding.operation, []).append(finding)
+
+    lines = [f"### {len(findings)} Finding(s)\n"]
+    for operation, group in by_operation.items():
+        shown = group[:FINDINGS_SHOWN_PER_OPERATION]
+        held = len(group) - len(shown)
+        lines.append(f"#### {operation}: {len(group)} finding(s)\n")
+        for i, finding in enumerate(shown, 1):
+            lines.append(f"**{i}. {finding.title}**")
             lines.append(finding.description)
             if finding.options:
                 lines.append("\nOptions:")
@@ -2524,18 +2556,56 @@ async def rem_run(
                     rec = " (Recommended)" if j == finding.recommended else ""
                     lines.append(f"  {j + 1}. {opt['label']}{rec} - {opt['description']}")
             lines.append("")
+        if held:
+            lines.append(
+                f"_{held} more from {operation}, ranked below these and stored. "
+                f"Read them in the dashboard's REM view, or call "
+                f"`rem_report` for the count._\n"
+            )
+    return lines
 
-    return "\n".join(lines)
+
+def _rem_state_lines(state: dict, rows: list[dict]) -> list[str]:
+    """One operation's schedule, and the worst of what it last found."""
+    lines = [
+        f"**{state['operation']}**",
+        f"  Last run: session {state['last_run_session']} "
+        f"({state['last_run_timestamp'][:19]})",
+    ]
+    if state.get("next_due_session"):
+        lines.append(f"  Next due: session {state['next_due_session']}")
+    if rows:
+        lines.append(f"  Open findings: {len(rows)}, worst first")
+        lines += [f"    - {row['title']}" for row in rows[:3]]
+        if len(rows) > 3:
+            lines.append(f"    - and {len(rows) - 3} more")
+    else:
+        # A run from before findings were kept has only its count.
+        lines += _legacy_count_line(state)
+    lines.append("")
+    return lines
+
+
+def _legacy_count_line(state: dict) -> list[str]:
+    """The stored count from a run that predates kept findings, if any."""
+    raw = state.get("last_run_result")
+    if not raw:
+        return []
+    try:
+        return [f"  Result: {json.loads(raw)} (from before findings were kept)"]
+    except (json.JSONDecodeError, TypeError):
+        return []
 
 
 @mcp.tool()
 async def rem_report(project_path: str = "") -> str:
-    """Show each REM operation's last run, next due session and finding count.
+    """Show each REM operation's last run, next due session and findings.
 
-    Not the findings themselves: only `{"finding_count": N}` is persisted to
-    `rem_state`, so a past cycle's findings cannot be re-read here. Re-run the
-    operation to see them. Scoped to THIS project's schedule; another
-    project's cycles are not reported here.
+    The findings a run produced are kept, so they can be re-read here and in
+    the dashboard without re-running the operation. Each run REPLACES its own
+    stored findings, because the same unused lesson found in four cycles is one
+    problem and not four. Scoped to THIS project's schedule; another project's
+    cycles are not reported here.
 
     Args:
         project_path: Project root whose schedule to report.
@@ -2559,19 +2629,14 @@ async def rem_report(project_path: str = "") -> str:
             "Use rem_run to trigger one."
         )
 
+    stored = await store.get_rem_findings(project.project_id)
+    held: dict[str, list] = {}
+    for row in stored:
+        held.setdefault(row["operation"], []).append(row)
+
     lines = [f"## REM Cycle Status ({project.project_name})\n"]
     for state in states:
-        lines.append(f"**{state['operation']}**")
-        lines.append(f"  Last run: session {state['last_run_session']} ({state['last_run_timestamp'][:19]})")
-        if state.get("next_due_session"):
-            lines.append(f"  Next due: session {state['next_due_session']}")
-        if state.get("last_run_result"):
-            try:
-                result = json.loads(state["last_run_result"])
-                lines.append(f"  Result: {result}")
-            except (json.JSONDecodeError, TypeError):
-                pass
-        lines.append("")
+        lines += _rem_state_lines(state, held.get(state["operation"]) or [])
 
     return "\n".join(lines)
 

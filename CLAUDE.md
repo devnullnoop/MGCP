@@ -342,6 +342,19 @@ evidence the system generated for itself, and no single number shows it.
 Buildless: Tailwind-free CSS, d3 from a CDN, no npm and no build step. Assets live in
 `src/mgcp/static/app/`.
 
+**The panel says when its server is older than the page it serves.** `_asset_digest()`
+hashes every file under `static/app` and `_STARTUP_ASSET_DIGEST` holds that value from import,
+which is process start. `/api/health` returns `assets_stale` by comparing the two, and `app.js`
+turns a true into a banner naming the restart command. `StaticFiles` reads the assets from disk
+on every request while the Python is read once, so a dashboard left running for days serves
+today's JavaScript against its own week-old API. On 2026-10-09 a process started eight days
+earlier served a `views.js` that reads `concentration.most_repeated`, which `/api/signal` began
+returning the day after that process started, and the panel reported it as "Signal could not
+load". The symptom names a field and reads as a defect in the view. The digest compares CONTENT
+and not mtime, so a `git checkout` that restores a file does not ask for a restart that changes
+nothing, and the banner lives outside `#view` because the failure it explains arrives as a view
+error that replaces `#view`.
+
 **There is no push channel. Views fetch on load.** A `/ws/events` WebSocket route, a
 `ConnectionManager`, and a task that polled telemetry every 500 ms existed until this
 cleanup, and no client ever connected to any of them: the panel does not open a socket, and

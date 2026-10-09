@@ -176,10 +176,30 @@ function waitForD3() {
   });
 }
 
+/* Say when the server is older than the files it serves.
+ *
+ * The assets are read from disk per request and the Python once per process, so
+ * a dashboard left running serves new JavaScript against its own old API. The
+ * first symptom is a view failing on a field that API does not return, which
+ * reads as a defect in the view. This sits outside #view, so it survives the
+ * view error it explains. */
+async function warnIfServerIsStale() {
+  const box = document.getElementById('stale');
+  if (!box) return;
+  let health;
+  try { health = await api('/api/health'); } catch { return; }
+  if (!health || !health.assets_stale) return;
+  box.innerHTML = `<div class="callout"><b>This server is older than the page it is
+    serving.</b><br>The assets on disk have changed since this process started, so a view may
+    ask for an API field it does not have. Restart it:
+    <code>python -m mgcp.web_server</code></div>`;
+}
+
 window.addEventListener('hashchange', render);
 window.addEventListener('DOMContentLoaded', async () => {
   buildNav();
   wireTheme();
+  warnIfServerIsStale();
   await waitForD3();
   render();
 });

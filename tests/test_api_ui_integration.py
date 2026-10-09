@@ -417,3 +417,67 @@ class TestCodeSize:
             assert project["totals"]["net"] == (
                 project["totals"]["added"] - project["totals"]["removed"])
             assert len(project["commits"]) <= 5
+
+
+class TestStaleServerDetection:
+    """The panel says when its server is older than the files it serves.
+
+    StaticFiles reads the assets from disk on every request and the Python is
+    read once, so a dashboard left running for days serves today's JavaScript
+    against its own week-old API. That happened: a process started eight days
+    earlier served a `views.js` that reads `concentration.most_repeated`, which
+    `/api/signal` only began returning the day after, and the panel reported it
+    as "Signal could not load".
+    """
+
+    def test_a_fresh_server_is_not_stale(self, client):
+        assert client.get("/api/health").json()["assets_stale"] is False
+
+    def test_an_asset_changed_after_startup_reads_as_stale(self, client, tmp_path):
+        """The digest compares content, so this has to write real bytes."""
+        from mgcp import web_server
+
+        target = web_server.STATIC_DIR / "app" / "app.css"
+        original = target.read_bytes()
+        try:
+            target.write_bytes(original + b"\n/* changed after startup */\n")
+            assert client.get("/api/health").json()["assets_stale"] is True
+        finally:
+            target.write_bytes(original)
+        assert client.get("/api/health").json()["assets_stale"] is False
+
+    def test_identical_content_is_not_stale(self, monkeypatch, client):
+        """A `git checkout` that restores a file must not ask for a restart.
+
+        mtime changes and content does not, which is the reason the baseline is
+        a content digest rather than a timestamp.
+        """
+        from mgcp import web_server
+
+        target = web_server.STATIC_DIR / "app" / "app.css"
+        body = target.read_bytes()
+        target.write_bytes(body)
+        assert client.get("/api/health").json()["assets_stale"] is False
+
+    def test_no_assets_means_no_claim_either_way(self, monkeypatch, tmp_path):
+        """An install with no static directory reports not stale, not a crash.
+
+        With no baseline there is nothing to compare, and "unknown" must not
+        print a restart instruction nobody needs.
+        """
+        from mgcp import web_server
+
+        monkeypatch.setattr(web_server, "STATIC_DIR", tmp_path / "gone")
+        assert web_server._asset_digest() == ""
+        monkeypatch.setattr(web_server, "_STARTUP_ASSET_DIGEST", "")
+        with TestClient(web_server.app) as c:
+            assert c.get("/api/health").json()["assets_stale"] is False
+
+    def test_the_banner_lives_outside_the_view_container(self, client):
+        """A view error replaces #view, so a notice inside it would vanish.
+
+        The failure this explains arrives AS a view error, so the two cannot
+        share an element.
+        """
+        page = client.get("/").text
+        assert page.index('id="stale"') < page.index('id="view"')

@@ -122,6 +122,11 @@ body {
 
 main { padding: 1.5rem; max-width: 1560px; margin: 0 auto; }
 main:focus { outline: none; }
+/* The stale-server notice sits outside #view so it survives the view error it
+   explains, which means it has to borrow main's gutter and width. :empty
+   removes the padding when there is nothing to say. */
+#stale { max-width: 1560px; margin: 0 auto; padding: 1.5rem 1.5rem 0; }
+#stale:empty { display: none; }
 .loading { color: var(--ink-muted); padding: 4rem 0; text-align: center; }
 
 .view-head { margin: 0 0 1.25rem; }

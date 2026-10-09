@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: the panel says when its server is older than its page
+
+- **`/api/health` returns `assets_stale`.** The server hashes every file under
+  `static/app` at import, which is process start, and compares that against the
+  files on each health call. `app.js` turns a true into a banner naming the
+  restart command.
+- **Why this can happen at all.** `StaticFiles` reads the assets from disk on
+  every request and the Python is read once per process. A dashboard left
+  running for days therefore serves today's JavaScript against its own week-old
+  API.
+- **What it looked like.** A process started eight days earlier served a
+  `views.js` that reads `concentration.most_repeated`. `/api/signal` began
+  returning that block the day after the process started, so the panel said
+  "Signal could not load. Cannot read properties of undefined". The symptom
+  names an API field and reads as a defect in the view.
+- The digest compares content, not mtime, so a `git checkout` that restores a
+  file does not ask for a restart that changes nothing.
+- The banner sits outside `#view`, because a view error replaces `#view` and the
+  failure being explained arrives as a view error.
+- An install with no static directory has no baseline, so it reports not stale
+  rather than printing a restart instruction nobody needs.
+
 ### Changed: the size gate measures net lines, at the commit
 
 Hook payload 22.

@@ -176,6 +176,11 @@ async def health_check() -> dict[str, Any]:
         # otherwise.
         "embedding": daemon_status(),
         "telemetry": "enabled" if telemetry else "disabled",
+        # True when the served files have changed since this process started.
+        # The panel reads this and says so, rather than letting a view fail on
+        # a field the running API does not have.
+        "assets_stale": bool(_STARTUP_ASSET_DIGEST)
+        and _asset_digest() != _STARTUP_ASSET_DIGEST,
     }
 
 
@@ -737,6 +742,32 @@ async def delete_lesson_endpoint(lesson_id: str) -> dict[str, Any]:
 
 # Get the static directory path (web assets)
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _asset_digest() -> str:
+    """sha256 over every served app file, or "" when there are none."""
+    app_dir = STATIC_DIR / "app"
+    if not app_dir.is_dir():
+        return ""
+    digest = hashlib.sha256()
+    for path in sorted(app_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        digest.update(path.relative_to(app_dir).as_posix().encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+# The baseline, taken at import, which is process start.
+#
+# StaticFiles reads the assets from disk on every request and the Python is read
+# once, so a dashboard left running for days serves today's JavaScript against
+# its own week-old API. The first symptom is a view failing on an API field that
+# does not exist yet, which reads as a defect in the view. A digest taken here
+# and compared per request is what turns that into a sentence. It compares
+# CONTENT and not mtime, so restoring a file with `git checkout` does not ask
+# for a restart that changes nothing.
+_STARTUP_ASSET_DIGEST = _asset_digest()
 
 
 @app.get("/")

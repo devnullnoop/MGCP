@@ -421,7 +421,11 @@ Two more things.
 
 A `mgcp-dashboard` process started before the pull keeps serving the code it
 loaded at start, so new API fields are absent while the files on disk have them.
-Stop it and start it again after updating.
+Stop it and start it again after updating. The panel now tells you when this has
+happened, with a banner naming the restart command, because this paragraph was
+already here and a dashboard still ran for eight days past its own assets. The
+symptom without the banner is a view failing on a field name, which reads as a
+defect in the view.
 
 If this machine is still on embedded Qdrant, `mgcp-init` moves it to server mode
 and rebuilds the search index from `lessons.db`, which is the source of truth
@@ -978,7 +982,7 @@ Every release before 3.0, from 1.0 to 2.13, is in [CHANGELOG.md](CHANGELOG.md).
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/health` | Health check |
+| `GET /api/health` | Health check, including `assets_stale` when the server predates its own page |
 | `GET /api/lessons` | All lessons |
 | `GET /api/projects` | All projects |
 | `GET /api/graph` | Graph visualization data |
